@@ -1,0 +1,30 @@
+# Build context MUST be the repo root (workspace Cargo.lock lives there).
+FROM rust:1-bookworm AS builder
+
+# System deps required by the Sui SDK git dependencies.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config libssl-dev cmake clang libclang-dev \
+    protobuf-compiler git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY apps ./apps
+
+# Build only the API binary from the workspace.
+RUN cargo build --release -p dugong-api --bin dugong-api
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /app/target/release/dugong-api /usr/local/bin/dugong-api
+# Migrations are embedded via sqlx::migrate!("./migrations") at compile time,
+# so no runtime files are needed.
+
+# Railway injects $PORT; config.rs reads it. Default kept for local runs.
+ENV PORT=43001
+EXPOSE 43001
+CMD ["dugong-api"]

@@ -1,0 +1,12 @@
+target/
+**/target/
+**/node_modules/
+apps/web/dist/
+.git/
+.claude/
+.opencode/
+**/.env
+**/.env.*
+!**/.env.example
+openspec/
+*.md

@@ -1,0 +1,47 @@
+# Build context: apps/web (this directory).
+FROM node:22-bookworm-slim AS builder
+WORKDIR /app
+
+# Vite inlines VITE_* at build time. Railway passes service variables as
+# Docker build args automatically; declare them so the build can read them.
+ARG VITE_API_BASE_URL
+ARG VITE_ENCLAVE_URL
+ARG VITE_SUI_NETWORK
+ARG VITE_DUGONG_PACKAGE_ID
+ARG VITE_DUGONG_ACCOUNT_ADDRESS
+ARG VITE_DUGONG_TRANSFER_ADDRESS
+ARG VITE_DUGONG_ENCLAVE_ADDRESS
+ARG VITE_ENCLAVE_CONFIG_ADDRESS
+ARG VITE_TWITTER_CLIENT_ID
+ARG VITE_TWITTER_REDIRECT_URI
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL \
+    VITE_ENCLAVE_URL=$VITE_ENCLAVE_URL \
+    VITE_SUI_NETWORK=$VITE_SUI_NETWORK \
+    VITE_DUGONG_PACKAGE_ID=$VITE_DUGONG_PACKAGE_ID \
+    VITE_DUGONG_ACCOUNT_ADDRESS=$VITE_DUGONG_ACCOUNT_ADDRESS \
+    VITE_DUGONG_TRANSFER_ADDRESS=$VITE_DUGONG_TRANSFER_ADDRESS \
+    VITE_DUGONG_ENCLAVE_ADDRESS=$VITE_DUGONG_ENCLAVE_ADDRESS \
+    VITE_ENCLAVE_CONFIG_ADDRESS=$VITE_ENCLAVE_CONFIG_ADDRESS \
+    VITE_TWITTER_CLIENT_ID=$VITE_TWITTER_CLIENT_ID \
+    VITE_TWITTER_REDIRECT_URI=$VITE_TWITTER_REDIRECT_URI
+
+COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && pnpm install --frozen-lockfile
+COPY . .
+RUN pnpm build
+
+FROM nginx:1.27-alpine AS runtime
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# SPA fallback + listen on Railway's $PORT (defaults to 8080 locally).
+RUN printf '%s\n' \
+  'server {' \
+  '  listen       ${PORT};' \
+  '  server_name  _;' \
+  '  root   /usr/share/nginx/html;' \
+  '  index  index.html;' \
+  '  location / { try_files $uri $uri/ /index.html; }' \
+  '}' > /etc/nginx/templates/default.conf.template
+
+ENV PORT=8080
+EXPOSE 8080

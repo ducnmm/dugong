@@ -1,0 +1,23 @@
+# Build context MUST be the repo root (workspace Cargo.lock lives there).
+FROM rust:1-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config libssl-dev git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY apps ./apps
+
+RUN cargo build --release -p dugong-worker --bin dugong-worker
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /app/target/release/dugong-worker /usr/local/bin/dugong-worker
+
+# Background poller: no HTTP port exposed.
+CMD ["dugong-worker"]
