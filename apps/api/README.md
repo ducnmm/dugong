@@ -93,7 +93,7 @@ By default the HTTP server can spawn the Sui indexer inside the same process, bu
    ```bash
    # Ensure the API does not spawn the indexer
    export ENABLE_INDEXER=false   # or add to your .env
-   
+
    cd backend
    cargo run
    ```

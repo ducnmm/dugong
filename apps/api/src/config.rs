@@ -121,6 +121,26 @@ impl Config {
                 .unwrap_or(false), // Default: disabled in API server
         })
     }
+
+    /// Ensure the credentials required to post reply tweets are present.
+    ///
+    /// The processor worker replies to every tweet it handles, so missing
+    /// reply credentials is an operator error that must fail loudly at
+    /// startup rather than silently dropping replies at runtime. Call this
+    /// from binaries that run the processor; the indexer binary does not
+    /// post replies and should not call it.
+    pub fn ensure_reply_capable(&self) -> Result<()> {
+        if self.twitterapi_io_login_cookies.is_none() {
+            anyhow::bail!(
+                "TWITTERAPI_IO_LOGIN_COOKIES must be set to post reply tweets \
+                 (set ENABLE_INDEXER and run the indexer binary if this process should not reply)"
+            );
+        }
+        if self.twitterapi_io_proxy.is_none() {
+            anyhow::bail!("TWITTERAPI_IO_PROXY must be set to post reply tweets");
+        }
+        Ok(())
+    }
 }
 
 fn optional_env(name: &str) -> Option<String> {
