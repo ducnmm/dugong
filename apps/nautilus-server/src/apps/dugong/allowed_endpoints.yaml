@@ -1,0 +1,4 @@
+# External endpoints that the enclave is allowed to access. 
+endpoints:
+  - api.twitterapi.io
+  - api.twitter.com

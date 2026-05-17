@@ -1,0 +1,270 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Default to dark mode for web3 aesthetic */
+  :root {
+    color-scheme: dark;
+  }
+
+  :root.light {
+    color-scheme: light;
+  }
+
+  /* Dark mode body (default) */
+  body {
+    @apply min-h-screen antialiased;
+    @apply text-gray-100;
+    background-color: #030712;
+    background-image:
+      radial-gradient(ellipse 80% 80% at 50% -20%, rgba(77, 162, 255, 0.15), transparent),
+      radial-gradient(ellipse 60% 60% at 100% 100%, rgba(0, 209, 255, 0.1), transparent);
+    background-attachment: fixed;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  /* Light mode body - softer, warmer tones */
+  .light body {
+    @apply text-gray-800;
+    background-color: #f5f5f4; /* stone-100 - warmer, easier on eyes */
+    background-image:
+      radial-gradient(ellipse 80% 80% at 50% -20%, rgba(77, 162, 255, 0.04), transparent),
+      radial-gradient(ellipse 60% 60% at 100% 100%, rgba(0, 209, 255, 0.02), transparent);
+  }
+
+  /* Custom scrollbar for dark mode */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-dark-800;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-sui-500/50 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-sui-500/70;
+  }
+
+  /* Light mode scrollbar */
+  .light ::-webkit-scrollbar-track {
+    @apply bg-gray-200;
+  }
+
+  .light ::-webkit-scrollbar-thumb {
+    @apply bg-sui-500/60 rounded-full;
+  }
+}
+
+@layer components {
+  /* Glass card component - Dark mode */
+  .glass {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10 shadow-lg;
+  }
+
+  .glass-strong {
+    @apply bg-white/10 backdrop-blur-2xl border border-white/20 shadow-xl;
+  }
+
+  .glass-subtle {
+    @apply bg-white/[0.03] backdrop-blur-lg border border-white/[0.05];
+  }
+
+  /* Glass card - Light mode (softer, more opaque) */
+  .light .glass {
+    @apply bg-white backdrop-blur-none border border-stone-200/80;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03);
+  }
+
+  .light .glass-strong {
+    @apply bg-white backdrop-blur-none border border-stone-300/80;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.04), 0 2px 4px rgba(0, 0, 0, 0.03);
+  }
+
+  .light .glass-subtle {
+    @apply bg-stone-50 backdrop-blur-none border border-stone-200/50;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  }
+
+  /* Glass card hover effect */
+  .glass-hover {
+    @apply transition-all duration-300;
+  }
+
+  .glass-hover:hover {
+    @apply bg-white/10 border-white/20 shadow-glow-sm;
+  }
+
+  .light .glass-hover:hover {
+    @apply bg-white border-sui-400/50;
+    box-shadow: 0 4px 12px rgba(77, 162, 255, 0.1), 0 2px 4px rgba(0, 0, 0, 0.04);
+  }
+
+  /* Gradient text */
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-sui-gradient;
+  }
+
+  .text-gradient-cyber {
+    @apply bg-clip-text text-transparent bg-cyber-gradient;
+  }
+
+  /* Sui-themed button */
+  .btn-sui {
+    @apply px-5 py-2.5 bg-sui-gradient text-white font-medium rounded-xl;
+    @apply hover:shadow-glow-md hover:scale-[1.02] active:scale-[0.98];
+    @apply transition-all duration-200;
+  }
+
+  .btn-glass {
+    @apply px-5 py-2.5 glass text-white font-medium rounded-xl;
+    @apply hover:bg-white/15 hover:border-white/25;
+    @apply transition-all duration-200;
+  }
+
+  .light .btn-glass {
+    @apply text-gray-700 hover:bg-white/90 hover:border-sui-300;
+  }
+
+  /* Input field styling - Dark mode */
+  .input-glass {
+    @apply w-full px-4 py-3 glass rounded-xl text-white placeholder-gray-400;
+    @apply focus:outline-none focus:ring-2 focus:ring-sui-500/50 focus:border-sui-500/50;
+    @apply transition-all duration-200;
+  }
+
+  /* Input field - Light mode */
+  .light .input-glass {
+    @apply text-gray-900 placeholder-gray-500;
+    @apply focus:ring-sui-500/30 focus:border-sui-400;
+  }
+
+  /* Glow effect on focus */
+  .focus-glow:focus {
+    @apply ring-2 ring-sui-500/50 shadow-glow-sm;
+  }
+
+  /* Animated border gradient */
+  .border-gradient {
+    position: relative;
+    background: linear-gradient(var(--dark-800), var(--dark-800)) padding-box,
+                linear-gradient(135deg, #4DA2FF, #A855F7) border-box;
+    border: 1px solid transparent;
+  }
+
+  /* Card with glow on hover */
+  .card-glow {
+    @apply relative overflow-hidden;
+  }
+
+  .card-glow::before {
+    content: '';
+    @apply absolute inset-0 opacity-0 transition-opacity duration-300;
+    background: radial-gradient(
+      600px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+      rgba(77, 162, 255, 0.1),
+      transparent 40%
+    );
+  }
+
+  .card-glow:hover::before {
+    @apply opacity-100;
+  }
+}
+
+/* Light mode color overrides - softer tones, easier on eyes */
+@layer base {
+  .light .text-white {
+    color: #292524 !important; /* stone-800 - softer than pure black */
+  }
+
+  .light .text-gray-100 {
+    color: #44403c !important; /* stone-700 */
+  }
+
+  .light .text-gray-300 {
+    color: #57534e !important; /* stone-600 */
+  }
+
+  .light .text-gray-400 {
+    color: #78716c !important; /* stone-500 */
+  }
+
+  .light .text-gray-500 {
+    color: #a8a29e !important; /* stone-400 */
+  }
+
+  .light .border-white\/5 {
+    border-color: rgba(120, 113, 108, 0.1) !important; /* stone-500 with opacity */
+  }
+
+  .light .border-white\/10 {
+    border-color: rgba(120, 113, 108, 0.15) !important;
+  }
+
+  .light .border-white\/20 {
+    border-color: rgba(120, 113, 108, 0.2) !important;
+  }
+
+  .light .bg-dark-800 {
+    background-color: #fafaf9 !important; /* stone-50 */
+  }
+
+  .light .bg-dark-800\/95 {
+    background-color: rgba(250, 250, 249, 0.98) !important;
+  }
+
+  .light .bg-dark-700 {
+    background-color: #f5f5f4 !important; /* stone-100 */
+  }
+
+  /* Softer shadows for light mode - no glows */
+  .light .shadow-glow-sm,
+  .light .shadow-glow-md,
+  .light .shadow-glow-lg {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+  }
+
+  .light .hover\:shadow-glow-sm:hover,
+  .light .hover\:shadow-glow-md:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04) !important;
+  }
+}
+
+@layer utilities {
+  /* Neon glow text */
+  .neon-text {
+    text-shadow: 0 0 10px rgba(77, 162, 255, 0.5),
+                 0 0 20px rgba(77, 162, 255, 0.3),
+                 0 0 30px rgba(77, 162, 255, 0.2);
+  }
+
+  .neon-text-cyan {
+    text-shadow: 0 0 10px rgba(0, 209, 255, 0.5),
+                 0 0 20px rgba(0, 209, 255, 0.3);
+  }
+
+  /* Light mode - no neon effect */
+  .light .neon-text,
+  .light .neon-text-cyan {
+    text-shadow: none;
+  }
+
+  /* Subtle grid background */
+  .bg-grid {
+    background-image:
+      linear-gradient(rgba(77, 162, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(77, 162, 255, 0.03) 1px, transparent 1px);
+    background-size: 50px 50px;
+  }
+
+  /* Noise texture overlay */
+  .noise {
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  }
+}
