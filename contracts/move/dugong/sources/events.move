@@ -2,110 +2,109 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /// Events for blockchain indexing
-module dugong::events {
-    use std::string::String;
+module dugong::events;
 
-    // ====== Account Events ======
+use std::string::String;
 
-    public struct AccountCreated has copy, drop {
-        xid: String,
-        handle: String,
-        account_id: ID,
-    }
+// ====== Account Events ======
 
-    public struct WalletLinked has copy, drop {
-        xid: String,
-        owner_address: address,
-    }
+public struct AccountCreated has copy, drop {
+    xid: String,
+    handle: String,
+    account_id: ID,
+}
 
-    public struct HandleUpdated has copy, drop {
-        xid: String,
-        old_handle: String,
-        new_handle: String,
-    }
+public struct WalletLinked has copy, drop {
+    xid: String,
+    owner_address: address,
+}
 
-    // ====== Asset Events ======
+public struct HandleUpdated has copy, drop {
+    xid: String,
+    old_handle: String,
+    new_handle: String,
+}
 
-    public struct CoinDeposited has copy, drop {
-        xid: String,
-        coin_type: String,
-        amount: u64,
-    }
+// ====== Asset Events ======
 
-    public struct CoinWithdrawn has copy, drop {
-        xid: String,
-        coin_type: String,
-        amount: u64,
-    }
+public struct CoinDeposited has copy, drop {
+    xid: String,
+    coin_type: String,
+    amount: u64,
+}
 
-    // ====== Transfer Events ======
+public struct CoinWithdrawn has copy, drop {
+    xid: String,
+    coin_type: String,
+    amount: u64,
+}
 
-    public struct TransferCompleted has copy, drop {
-        from_xid: String,
-        to_xid: String,
-        tweet_id: String,
-        coin_type: String,
-        amount: u64,
-        timestamp: u64,
-    }
+// ====== Transfer Events ======
 
-    // ====== Event Emission Functions ======
+public struct TransferCompleted has copy, drop {
+    from_xid: String,
+    to_xid: String,
+    tweet_id: String,
+    coin_type: String,
+    amount: u64,
+    timestamp: u64,
+}
 
-    public(package) fun emit_account_created(xid: String, handle: String, account_id: ID) {
-        sui::event::emit(AccountCreated {
-            xid,
-            handle,
-            account_id,
-        });
-    }
+// ====== Event Emission Functions ======
 
-    public(package) fun emit_wallet_linked(xid: String, owner_address: address) {
-        sui::event::emit(WalletLinked {
-            xid,
-            owner_address,
-        });
-    }
+public(package) fun emit_account_created(xid: String, handle: String, account_id: ID) {
+    sui::event::emit(AccountCreated {
+        xid,
+        handle,
+        account_id,
+    });
+}
 
-    public(package) fun emit_handle_updated(xid: String, old_handle: String, new_handle: String) {
-        sui::event::emit(HandleUpdated {
-            xid,
-            old_handle,
-            new_handle,
-        });
-    }
+public(package) fun emit_wallet_linked(xid: String, owner_address: address) {
+    sui::event::emit(WalletLinked {
+        xid,
+        owner_address,
+    });
+}
 
-    public(package) fun emit_coin_deposited(xid: String, coin_type: String, amount: u64) {
-        sui::event::emit(CoinDeposited {
-            xid,
-            coin_type,
-            amount,
-        });
-    }
+public(package) fun emit_handle_updated(xid: String, old_handle: String, new_handle: String) {
+    sui::event::emit(HandleUpdated {
+        xid,
+        old_handle,
+        new_handle,
+    });
+}
 
-    public(package) fun emit_coin_withdrawn(xid: String, coin_type: String, amount: u64) {
-        sui::event::emit(CoinWithdrawn {
-            xid,
-            coin_type,
-            amount,
-        });
-    }
+public(package) fun emit_coin_deposited(xid: String, coin_type: String, amount: u64) {
+    sui::event::emit(CoinDeposited {
+        xid,
+        coin_type,
+        amount,
+    });
+}
 
-    public(package) fun emit_transfer_completed(
-        from_xid: String,
-        to_xid: String,
-        tweet_id: String,
-        coin_type: String,
-        amount: u64,
-        timestamp: u64,
-    ) {
-        sui::event::emit(TransferCompleted {
-            from_xid,
-            to_xid,
-            tweet_id,
-            coin_type,
-            amount,
-            timestamp,
-        });
-    }
+public(package) fun emit_coin_withdrawn(xid: String, coin_type: String, amount: u64) {
+    sui::event::emit(CoinWithdrawn {
+        xid,
+        coin_type,
+        amount,
+    });
+}
 
+public(package) fun emit_transfer_completed(
+    from_xid: String,
+    to_xid: String,
+    tweet_id: String,
+    coin_type: String,
+    amount: u64,
+    timestamp: u64,
+) {
+    sui::event::emit(TransferCompleted {
+        from_xid,
+        to_xid,
+        tweet_id,
+        coin_type,
+        amount,
+        timestamp,
+    });
 }

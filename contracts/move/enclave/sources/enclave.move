@@ -33,7 +33,7 @@ public struct EnclaveConfig<phantom T> has key {
     name: String,
     pcrs: Pcrs,
     capability_id: ID,
-    version: u64, // Incremented when pcrs change. 
+    version: u64, // Incremented when pcrs change.
 }
 
 // A verified enclave instance, with its public key.
