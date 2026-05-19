@@ -1,4 +1,5 @@
-# Build context: apps/web (this directory).
+# Build context = repo root (same as the Rust services). Selected via
+# RAILWAY_DOCKERFILE_PATH=Dockerfile.web on the `web` service.
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 
@@ -25,16 +26,18 @@ ENV VITE_API_BASE_URL=$VITE_API_BASE_URL \
     VITE_TWITTER_CLIENT_ID=$VITE_TWITTER_CLIENT_ID \
     VITE_TWITTER_REDIRECT_URI=$VITE_TWITTER_REDIRECT_URI
 
-COPY package.json pnpm-lock.yaml ./
+COPY apps/web/package.json apps/web/pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile
-COPY . .
+COPY apps/web/ ./
 RUN pnpm build
 
 FROM nginx:1.27-alpine AS runtime
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # SPA fallback + listen on Railway's $PORT (defaults to 8080 locally).
-RUN printf '%s\n' \
+# The official nginx image runs envsubst over /etc/nginx/templates/*.template
+# at startup, but the directory doesn't exist until we create it.
+RUN mkdir -p /etc/nginx/templates && printf '%s\n' \
   'server {' \
   '  listen       ${PORT};' \
   '  server_name  _;' \
