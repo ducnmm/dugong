@@ -71,6 +71,9 @@ cp .env.example .env
 Edit `.env` with your credentials:
 - `TWITTERAPI_IO_API_KEY` for tweet/user lookup and reply posting
 - `TWITTERAPI_IO_LOGIN_COOKIES` and `TWITTERAPI_IO_PROXY` for TwitterAPI.io reply posting
+- `TWITTER_BOT_USERNAME`, `TWITTER_BOT_EMAIL`, `TWITTER_BOT_PASSWORD`, and
+  `TWITTER_BOT_TOTP_SECRET` for minting a post-capable login cookie with
+  `cargo run --bin dugong-login`
 - X OAuth2 credentials from https://developer.twitter.com for login/link-wallet OAuth
 - Database URL
 - Redis URL
@@ -93,7 +96,7 @@ By default the HTTP server can spawn the Sui indexer inside the same process, bu
    ```bash
    # Ensure the API does not spawn the indexer
    export ENABLE_INDEXER=false   # or add to your .env
-   
+
    cd backend
    cargo run
    ```
@@ -221,6 +224,7 @@ Key variables:
 - `DUGONG_REGISTRY_ID` - DugongRegistry shared object ID
 - `ENCLAVE_CONFIG_ID` - Enclave config object ID (for signature verification)
 - `TWITTERAPI_IO_LOGIN_COOKIES`, `TWITTERAPI_IO_PROXY` - TwitterAPI.io credentials for reply tweets
+- `TWITTER_BOT_TOTP_SECRET` - X 2FA base32 seed used by `dugong-login`; a guest login cookie cannot post replies
 - `INDEXER_POLL_INTERVAL_MS` - Interval for polling Sui events
 - `INDEXER_BATCH_SIZE` - Max events fetched per RPC call
 - `ENABLE_INDEXER` - Set to `true` to have the API process spawn the indexer internally; leave unset/`false` when running the dedicated `dugong-indexer` binary.

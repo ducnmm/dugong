@@ -163,6 +163,10 @@ struct CreateTweetRequest {
 #[derive(Debug, Deserialize)]
 struct CreateTweetResponse {
     status: String,
+    // TwitterAPI.io is inconsistent: some endpoints return the human-readable
+    // error under `msg`, others (e.g. user_login_v2) under `message`. Accept
+    // either so failures are never logged as an opaque "unknown error".
+    #[serde(alias = "message")]
     msg: Option<String>,
     tweet_id: Option<String>,
 }
@@ -294,19 +298,12 @@ impl TwitterClient {
         handle: &str,
         account_id: Option<&str>,
     ) -> Result<String> {
-        let message = if let Some(account_id) = account_id {
-            format!(
-                "✅ @{}, your Dugong account already exists.\n\n\
-                Account object:\n\
-                {}",
-                handle, account_id
-            )
-        } else {
-            format!(
-                "✅ @{}, your Dugong account already exists.\n\n\
-                You can already receive and send crypto via tweets.",
-                handle
-            )
+        // Twitter rejects verbatim-duplicate tweet text with HTTP 422, so the
+        // reply must vary per account. Include the @handle and the unique
+        // account object id (also the useful info to surface to the user).
+        let message = match account_id {
+            Some(account_id) => format!("@{} Account Already Exist\n\n{}", handle, account_id),
+            None => format!("@{} Account Already Exist", handle),
         };
 
         info!(
@@ -440,17 +437,14 @@ impl TwitterClient {
             );
             anyhow::anyhow!("TWITTERAPI_IO_LOGIN_COOKIES must be set to post replies")
         })?;
-        let proxy = self
-            .twitterapi_io_proxy
-            .as_ref()
-            .ok_or_else(|| {
-                warn!(
-                    tweet_id = %tweet_id,
-                    reply_text = %text,
-                    "Reply not posted because TWITTERAPI_IO_PROXY is missing"
-                );
-                anyhow::anyhow!("TWITTERAPI_IO_PROXY must be set to post replies")
-            })?;
+        let proxy = self.twitterapi_io_proxy.as_ref().ok_or_else(|| {
+            warn!(
+                tweet_id = %tweet_id,
+                reply_text = %text,
+                "Reply not posted because TWITTERAPI_IO_PROXY is missing"
+            );
+            anyhow::anyhow!("TWITTERAPI_IO_PROXY must be set to post replies")
+        })?;
 
         let request_body = CreateTweetRequest {
             login_cookies: login_cookies.clone(),
@@ -501,13 +495,14 @@ impl TwitterClient {
                 reply_text = %text,
                 api_status = %tweet_response.status,
                 api_message = ?tweet_response.msg,
+                raw_response = %response_text,
                 "Reply not posted because TwitterAPI.io returned an API error"
             );
             return Err(anyhow::anyhow!(
                 "TwitterAPI.io create tweet failed: {}",
                 tweet_response
                     .msg
-                    .unwrap_or_else(|| "unknown error".to_string())
+                    .unwrap_or_else(|| format!("unknown error (raw: {response_text})"))
             ));
         }
 

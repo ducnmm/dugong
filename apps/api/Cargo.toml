@@ -15,6 +15,14 @@ path = "src/main.rs"
 name = "dugong-indexer"
 path = "src/bin/indexer.rs"
 
+[[bin]]
+name = "dugong-login"
+path = "src/bin/login.rs"
+
+[[bin]]
+name = "dugong-test-tweet"
+path = "src/bin/test_tweet.rs"
+
 [dependencies]
 # Web framework
 axum = { version = "0.7", features = ["macros"] }

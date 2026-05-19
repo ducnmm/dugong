@@ -92,7 +92,7 @@ CREATE TABLE webhook_events (
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     processed_at TIMESTAMP
 );
-``` 
+```
 
 ```sql
 -- Indexer cursors (per worker)

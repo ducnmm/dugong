@@ -192,11 +192,7 @@ impl ProcessorWorker {
 
             if let Err(e) = self
                 .twitter
-                .reply_account_already_exists(
-                    tweet_id,
-                    &data.handle,
-                    Some(&existing.sui_object_id),
-                )
+                .reply_account_already_exists(tweet_id, &data.handle, Some(&existing.sui_object_id))
                 .await
             {
                 warn!(error = %e, "Failed to reply to tweet with account already exists message");

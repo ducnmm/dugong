@@ -6,6 +6,7 @@ mod db;
 mod error;
 mod indexer;
 mod processor;
+mod twitter_session;
 mod webhook;
 
 use crate::clients::redis_client::RedisClient;
@@ -34,6 +35,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Load config
     let config = Config::from_env()?;
+    // The processor worker posts a reply to every tweet it handles, so refuse
+    // to start without reply credentials instead of silently dropping replies.
+    config.ensure_reply_capable()?;
     info!("Config loaded");
 
     // Setup database
