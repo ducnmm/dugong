@@ -6,6 +6,7 @@ mod db;
 mod error;
 mod indexer;
 mod processor;
+mod twitter_session;
 mod webhook;
 
 use crate::clients::redis_client::RedisClient;

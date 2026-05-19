@@ -16,7 +16,7 @@
 //!                                        strongly recommended to avoid login failures
 
 use anyhow::{bail, Context, Result};
-use base64::Engine;
+use dugong_api::twitter_session::{login_cookie_auth_status, LoginCookieAuthStatus};
 use serde::{Deserialize, Serialize};
 use std::env;
 
@@ -51,6 +51,20 @@ fn required(name: &str) -> Result<String> {
         bail!("{name} must be set to a real value (found empty or placeholder)");
     }
     Ok(value)
+}
+
+fn redact_login_cookie(body: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return body.to_string();
+    };
+
+    for key in ["login_cookie", "login_cookies"] {
+        if let Some(cookie) = value.get_mut(key) {
+            *cookie = serde_json::Value::String("<redacted>".to_string());
+        }
+    }
+
+    serde_json::to_string(&value).unwrap_or_else(|_| "<redacted login response>".to_string())
 }
 
 #[tokio::main]
@@ -106,11 +120,16 @@ async fn main() -> Result<()> {
         serde_json::from_str(&body).context("Failed to parse login response")?;
 
     if !parsed.status.eq_ignore_ascii_case("success") {
-        eprintln!("Raw response from user_login_v2:\n{body}");
+        eprintln!(
+            "Raw response from user_login_v2:\n{}",
+            redact_login_cookie(&body)
+        );
         bail!(
             "user_login_v2 failed (status={}): {}",
             parsed.status,
-            parsed.msg.unwrap_or_else(|| "no msg field in response".to_string())
+            parsed
+                .msg
+                .unwrap_or_else(|| "no msg field in response".to_string())
         );
     }
 
@@ -123,20 +142,29 @@ async fn main() -> Result<()> {
     // guest_id / __cf_bm / att, no auth_token). Twitter rejects tweet
     // creation from guest sessions with HTTP 422, so verify the cookie is
     // actually authenticated before telling the user it worked.
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(cookie.as_bytes())
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok())
-        .unwrap_or_default();
-    let authenticated = decoded.contains("auth_token") || decoded.contains("kdt");
-    if !authenticated {
-        eprintln!("Raw response from user_login_v2:\n{body}");
-        bail!(
-            "user_login_v2 returned a GUEST session (no auth_token) - the bot \
-             account did not actually log in. Check TWITTER_BOT_PASSWORD and \
-             TWITTER_BOT_TOTP_SECRET (base32 seed, no spaces), and that the \
-             account has no pending verification/lock."
-        );
+    match login_cookie_auth_status(&cookie) {
+        LoginCookieAuthStatus::Authenticated => {}
+        LoginCookieAuthStatus::Unauthenticated => {
+            eprintln!(
+                "Raw response from user_login_v2:\n{}",
+                redact_login_cookie(&body)
+            );
+            bail!(
+                "user_login_v2 returned a guest session (no auth_token/kdt), so it cannot post. \
+                 Set TWITTER_BOT_TOTP_SECRET to the X 2FA base32 seed, rerun this command, \
+                 and make sure the account has no pending verification/lock."
+            );
+        }
+        LoginCookieAuthStatus::Unknown => {
+            eprintln!(
+                "Raw response from user_login_v2:\n{}",
+                redact_login_cookie(&body)
+            );
+            bail!(
+                "user_login_v2 returned a login cookie, but its format could not be verified. \
+                 Refusing to save it because unauthenticated cookies fail create_tweet_v2 with HTTP 422."
+            );
+        }
     }
 
     eprintln!("Success (authenticated session). Paste the line below into apps/api/.env:\n");

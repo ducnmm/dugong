@@ -17,6 +17,7 @@
 //! as duplicate content (HTTP 422).
 
 use anyhow::{bail, Context, Result};
+use dugong_api::twitter_session::ensure_authenticated_login_cookie;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -108,10 +109,13 @@ impl Poster {
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
+    let login_cookies = required("TWITTERAPI_IO_LOGIN_COOKIES")?;
+    ensure_authenticated_login_cookie(&login_cookies)?;
+
     let poster = Poster {
         http: reqwest::Client::new(),
         api_key: required("TWITTERAPI_IO_API_KEY")?,
-        login_cookies: required("TWITTERAPI_IO_LOGIN_COOKIES")?,
+        login_cookies,
         // Strip any trailing path; TwitterAPI.io wants exactly host:port.
         proxy: required("TWITTERAPI_IO_PROXY")?
             .trim_end_matches('/')

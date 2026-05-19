@@ -302,10 +302,7 @@ impl TwitterClient {
         // reply must vary per account. Include the @handle and the unique
         // account object id (also the useful info to surface to the user).
         let message = match account_id {
-            Some(account_id) => format!(
-                "@{} Account Already Exist\n\n{}",
-                handle, account_id
-            ),
+            Some(account_id) => format!("@{} Account Already Exist\n\n{}", handle, account_id),
             None => format!("@{} Account Already Exist", handle),
         };
 
@@ -440,17 +437,14 @@ impl TwitterClient {
             );
             anyhow::anyhow!("TWITTERAPI_IO_LOGIN_COOKIES must be set to post replies")
         })?;
-        let proxy = self
-            .twitterapi_io_proxy
-            .as_ref()
-            .ok_or_else(|| {
-                warn!(
-                    tweet_id = %tweet_id,
-                    reply_text = %text,
-                    "Reply not posted because TWITTERAPI_IO_PROXY is missing"
-                );
-                anyhow::anyhow!("TWITTERAPI_IO_PROXY must be set to post replies")
-            })?;
+        let proxy = self.twitterapi_io_proxy.as_ref().ok_or_else(|| {
+            warn!(
+                tweet_id = %tweet_id,
+                reply_text = %text,
+                "Reply not posted because TWITTERAPI_IO_PROXY is missing"
+            );
+            anyhow::anyhow!("TWITTERAPI_IO_PROXY must be set to post replies")
+        })?;
 
         let request_body = CreateTweetRequest {
             login_cookies: login_cookies.clone(),
