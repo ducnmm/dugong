@@ -7,7 +7,8 @@
 // Usage:
 //   scripts/railway-set-env.ts <service|all> [flags]
 //
-// Services: api, indexer, worker, nautilus, web, all
+// Production services: api, indexer, worker, nautilus, web
+// Dev services:        api-dev, indexer-dev, worker-dev, nautilus-dev, web-dev
 //
 // Flags:
 //   --dry-run                 Print the `railway variables ...` command instead of running it.
@@ -17,17 +18,17 @@
 //   --api-domain <domain>     Public api domain; rewrites VITE_API_BASE_URL (web).
 //   --nautilus-domain <d>     Public nautilus domain; rewrites VITE_ENCLAVE_URL (web).
 //   --nautilus-internal <url> Internal nautilus URL the api uses for ENCLAVE_URL.
-//                             Default: http://nautilus.railway.internal:3000
+//                             Default (prod): http://nautilus.railway.internal:3000
+//                             Default (dev):  http://nautilus-dev.railway.internal:43000
 //
 // Examples:
 //   scripts/railway-set-env.ts api --web-domain app.dugong.dev
 //   scripts/railway-set-env.ts web --api-domain api.dugong.dev \
 //                                  --nautilus-domain nautilus.dugong.dev \
 //                                  --web-domain app.dugong.dev
-//   scripts/railway-set-env.ts all --environment dev \
-//                                  --api-domain api-dev.dugong.dev \
-//                                  --nautilus-domain nautilus-dev.dugong.dev \
-//                                  --web-domain app-dev.dugong.dev
+//   # Push all dev services — Railway domains are baked in as defaults:
+//   scripts/railway-set-env.ts all --environment dev
+//   scripts/railway-set-env.ts all --environment dev --dry-run
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -58,24 +59,30 @@ type Service = {
 // rewrites — only the keep-list differs (indexer has no reply / OAuth code
 // path so it doesn't need those secrets).
 const apiDrop = (key: string) => key === "PORT";
-const apiRewrite = (key: string, val: string, ctx: Ctx): string | null => {
-  switch (key) {
-    case "DATABASE_URL":
-      return "${{Postgres.DATABASE_URL}}";
-    case "REDIS_URL":
-      return "${{Redis.REDIS_URL}}";
-    case "ENCLAVE_URL":
-      return ctx.nautilusInternal;
-    case "TWITTER_OAUTH2_REDIRECT_URI":
-      if (!ctx.webDomain) {
-        warn(`TWITTER_OAUTH2_REDIRECT_URI kept as-is ('${val}'); pass --web-domain to rewrite`);
+
+function makeApiRewrite(dbRef: string, redisRef: string) {
+  return (key: string, val: string, ctx: Ctx): string | null => {
+    switch (key) {
+      case "DATABASE_URL":
+        return dbRef;
+      case "REDIS_URL":
+        return redisRef;
+      case "ENCLAVE_URL":
+        return ctx.nautilusInternal;
+      case "TWITTER_OAUTH2_REDIRECT_URI":
+        if (!ctx.webDomain) {
+          warn(`TWITTER_OAUTH2_REDIRECT_URI kept as-is ('${val}'); pass --web-domain to rewrite`);
+          return val;
+        }
+        return `https://${ctx.webDomain}/callback`;
+      default:
         return val;
-      }
-      return `https://${ctx.webDomain}/callback`;
-    default:
-      return val;
-  }
-};
+    }
+  };
+}
+
+const apiRewrite    = makeApiRewrite("${{Postgres.DATABASE_URL}}", "${{Redis.REDIS_URL}}");
+const apiDevRewrite = makeApiRewrite("${{postgres-dev.DATABASE_URL}}", "${{redis-dev.REDIS_URL}}");
 
 // Variables the indexer binary does not read. Dropping them keeps the
 // Railway env panel honest about what the service actually needs.
@@ -90,7 +97,50 @@ const INDEXER_UNUSED = new Set([
   "ENOKI_NETWORK",
 ]);
 
+function makeWebRewrite(): Service["rewrite"] {
+  return (key, val, ctx) => {
+    switch (key) {
+      case "VITE_API_BASE_URL":
+        if (!ctx.apiDomain) {
+          warn(`VITE_API_BASE_URL kept as-is ('${val}'); pass --api-domain to rewrite`);
+          return val;
+        }
+        return `https://${ctx.apiDomain}`;
+      case "VITE_ENCLAVE_URL":
+        if (!ctx.nautilusDomain) {
+          warn(`VITE_ENCLAVE_URL kept as-is ('${val}'); pass --nautilus-domain to rewrite`);
+          return val;
+        }
+        return `https://${ctx.nautilusDomain}`;
+      case "VITE_TWITTER_REDIRECT_URI":
+        if (!ctx.webDomain) {
+          warn(`VITE_TWITTER_REDIRECT_URI kept as-is ('${val}'); pass --web-domain to rewrite`);
+          return val;
+        }
+        return `https://${ctx.webDomain}/callback`;
+      default:
+        return val;
+    }
+  };
+}
+
+// Production services — PORT is dropped so Railway injects its own.
+const PROD_SERVICES = ["api", "indexer", "worker", "nautilus", "web"] as const;
+// Dev services — PORT is kept at the value from .env so internal networking
+// uses a predictable port (worker-dev references api-dev on that port).
+const DEV_SERVICES  = ["api-dev", "indexer-dev", "worker-dev", "nautilus-dev", "web-dev"] as const;
+
+// Railway-generated public domains for the dev environment.
+// Override any of these via the --*-domain flags if you add a custom domain.
+const DEV_DEFAULTS = {
+  webDomain:       "web-dev-dev-ffbd.up.railway.app",
+  apiDomain:       "api-dev-dev-1672.up.railway.app",
+  nautilusDomain:  "nautilus-dev-dev.up.railway.app",
+  nautilusInternal:"http://nautilus-dev.railway.internal:43000",
+} as const;
+
 const services: Record<string, Service> = {
+  // ── Production ──────────────────────────────────────────────────────────
   api: {
     name: "api",
     envFile: "apps/api/.env",
@@ -106,7 +156,6 @@ const services: Record<string, Service> = {
   worker: {
     name: "worker",
     envFile: "apps/worker/.env",
-    // The worker .env already uses Railway-internal hosts; just pass through.
   },
   nautilus: {
     name: "nautilus",
@@ -118,30 +167,38 @@ const services: Record<string, Service> = {
   web: {
     name: "web",
     envFile: "apps/web/.env",
+    rewrite: makeWebRewrite(),
+  },
+
+  // ── Dev ─────────────────────────────────────────────────────────────────
+  // PORT is kept (not dropped) so worker-dev can reach api-dev on a fixed port.
+  "api-dev": {
+    name: "api-dev",
+    envFile: "apps/api/.env",
+    rewrite: apiDevRewrite,
+  },
+  "indexer-dev": {
+    name: "indexer-dev",
+    envFile: "apps/api/.env",
+    drop: (k) => INDEXER_UNUSED.has(k),
+    rewrite: apiDevRewrite,
+  },
+  "worker-dev": {
+    name: "worker-dev",
+    envFile: "apps/worker/.env",
     rewrite(key, val, ctx) {
-      switch (key) {
-        case "VITE_API_BASE_URL":
-          if (!ctx.apiDomain) {
-            warn(`VITE_API_BASE_URL kept as-is ('${val}'); pass --api-domain to rewrite`);
-            return val;
-          }
-          return `https://${ctx.apiDomain}`;
-        case "VITE_ENCLAVE_URL":
-          if (!ctx.nautilusDomain) {
-            warn(`VITE_ENCLAVE_URL kept as-is ('${val}'); pass --nautilus-domain to rewrite`);
-            return val;
-          }
-          return `https://${ctx.nautilusDomain}`;
-        case "VITE_TWITTER_REDIRECT_URI":
-          if (!ctx.webDomain) {
-            warn(`VITE_TWITTER_REDIRECT_URI kept as-is ('${val}'); pass --web-domain to rewrite`);
-            return val;
-          }
-          return `https://${ctx.webDomain}/callback`;
-        default:
-          return val;
-      }
+      if (key === "BACKEND_URL") return "http://api-dev.railway.internal:43001";
+      return val;
     },
+  },
+  "nautilus-dev": {
+    name: "nautilus-dev",
+    envFile: "apps/nautilus-server/.env",
+  },
+  "web-dev": {
+    name: "web-dev",
+    envFile: "apps/web/.env",
+    rewrite: makeWebRewrite(),
   },
 };
 
@@ -226,7 +283,9 @@ function applyService(svc: Service, ctx: Ctx, opts: { dryRun: boolean; environme
 function usage(): never {
   process.stdout.write(`usage: railway-set-env.ts <service|all> [flags]
 
-Services: ${Object.keys(services).join(", ")}, all
+Production services: ${PROD_SERVICES.join(", ")}
+Dev services:        ${DEV_SERVICES.join(", ")}
+Special:             all  (prod services by default; dev services when --environment dev)
 
 Flags:
   --dry-run                  Print the railway command instead of running it.
@@ -235,7 +294,14 @@ Flags:
   --api-domain <domain>      Public api domain      (used for VITE_API_BASE_URL).
   --nautilus-domain <domain> Public nautilus domain (used for VITE_ENCLAVE_URL).
   --nautilus-internal <url>  Internal nautilus URL for the api's ENCLAVE_URL.
-                             Default: http://nautilus.railway.internal:3000
+                             Default (prod): http://nautilus.railway.internal:3000
+                             Default (dev):  ${DEV_DEFAULTS.nautilusInternal}
+
+When --environment dev the Railway-generated public domains are used by default:
+  web:     ${DEV_DEFAULTS.webDomain}
+  api:     ${DEV_DEFAULTS.apiDomain}
+  nautilus:${DEV_DEFAULTS.nautilusDomain}
+
   --help                     Show this message.
 `);
   process.exit(0);
@@ -251,19 +317,21 @@ function main(): void {
       "web-domain":        { type: "string"  },
       "api-domain":        { type: "string"  },
       "nautilus-domain":   { type: "string"  },
-      "nautilus-internal": { type: "string", default: "http://nautilus.railway.internal:3000" },
+      "nautilus-internal": { type: "string"  },
       "help":              { type: "boolean" },
     },
   });
 
   if (values.help || positionals.length !== 1) usage();
   const target = positionals[0]!;
+  const isDevEnv = values.environment === "dev";
 
   const ctx: Ctx = {
-    webDomain:      values["web-domain"],
-    apiDomain:      values["api-domain"],
-    nautilusDomain: values["nautilus-domain"],
-    nautilusInternal: values["nautilus-internal"]!,
+    webDomain:       values["web-domain"]       ?? (isDevEnv ? DEV_DEFAULTS.webDomain       : undefined),
+    apiDomain:       values["api-domain"]       ?? (isDevEnv ? DEV_DEFAULTS.apiDomain       : undefined),
+    nautilusDomain:  values["nautilus-domain"]  ?? (isDevEnv ? DEV_DEFAULTS.nautilusDomain  : undefined),
+    nautilusInternal: values["nautilus-internal"] ??
+      (isDevEnv ? DEV_DEFAULTS.nautilusInternal : "http://nautilus.railway.internal:3000"),
   };
   const opts = {
     dryRun: !!values["dry-run"],
@@ -271,7 +339,8 @@ function main(): void {
   };
 
   if (target === "all") {
-    for (const svc of Object.values(services)) applyService(svc, ctx, opts);
+    const group = isDevEnv ? DEV_SERVICES : PROD_SERVICES;
+    for (const name of group) applyService(services[name]!, ctx, opts);
     return;
   }
   const svc = services[target];
