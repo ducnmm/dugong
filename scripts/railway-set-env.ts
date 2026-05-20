@@ -11,7 +11,7 @@
 //
 // Flags:
 //   --dry-run                 Print the `railway variables ...` command instead of running it.
-//   --environment <name>      Target a specific Railway environment (e.g. staging | production).
+//   --environment <name>      Target a specific Railway environment (e.g. dev | production).
 //   --web-domain <domain>     Public web domain; rewrites TWITTER_OAUTH2_REDIRECT_URI
 //                             (api) and VITE_TWITTER_REDIRECT_URI (web).
 //   --api-domain <domain>     Public api domain; rewrites VITE_API_BASE_URL (web).
@@ -24,10 +24,10 @@
 //   scripts/railway-set-env.ts web --api-domain api.dugong.dev \
 //                                  --nautilus-domain nautilus.dugong.dev \
 //                                  --web-domain app.dugong.dev
-//   scripts/railway-set-env.ts all --environment staging \
-//                                  --api-domain api-staging.dugong.dev \
-//                                  --nautilus-domain nautilus-staging.dugong.dev \
-//                                  --web-domain app-staging.dugong.dev
+//   scripts/railway-set-env.ts all --environment dev \
+//                                  --api-domain api-dev.dugong.dev \
+//                                  --nautilus-domain nautilus-dev.dugong.dev \
+//                                  --web-domain app-dev.dugong.dev
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -230,7 +230,7 @@ Services: ${Object.keys(services).join(", ")}, all
 
 Flags:
   --dry-run                  Print the railway command instead of running it.
-  --environment <name>       Target a Railway environment (staging | production | ...).
+  --environment <name>       Target a Railway environment (dev | production | ...).
   --web-domain <domain>      Public web domain      (used for OAuth + Vite redirect).
   --api-domain <domain>      Public api domain      (used for VITE_API_BASE_URL).
   --nautilus-domain <domain> Public nautilus domain (used for VITE_ENCLAVE_URL).
