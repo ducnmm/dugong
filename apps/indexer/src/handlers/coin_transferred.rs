@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use tracing::info;
 
 use super::EventHandler;
-use crate::indexer::types::{SuiEvent, TransferCompletedEvent};
+use crate::types::{SuiEvent, TransferCompletedEvent};
 
 pub struct TransferCompletedHandler;
 

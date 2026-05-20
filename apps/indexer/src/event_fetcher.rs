@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use tracing::debug;
 
-use crate::clients::sui_client::{EventPage, SuiClient, DUGONG_MODULE};
-use crate::config::Config;
+use dugong_core::clients::sui_client::{EventPage, SuiClient, DUGONG_MODULE};
+use dugong_core::config::Config;
 
 pub struct EventFetcher {
     client: SuiClient,

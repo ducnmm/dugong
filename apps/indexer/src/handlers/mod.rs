@@ -9,7 +9,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use sqlx::PgPool;
 
-use crate::indexer::types::SuiEvent;
+use crate::types::SuiEvent;
 
 /// Trait for event handlers
 #[async_trait]

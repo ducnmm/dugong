@@ -1,130 +1,115 @@
-# Dugong Backend
+# dugong-api
 
-Rust backend service for Dugong - processes Twitter webhooks and orchestrates transfers via Nautilus Enclave.
+HTTP service for Dugong. Receives Twitter webhooks, exposes REST endpoints
+for the web app, and runs the in-process transaction processor that signs
+and submits Sui transactions via the Nautilus enclave.
 
-## Features Implemented (Phase 1 - Foundation)
+This crate is one piece of a Cargo workspace; shared code (db, clients,
+config, migrations) lives in `dugong-core`, and the on-chain event indexer
+runs as a separate binary `dugong-indexer`. See the
+[repo-level README](../../README.md) and
+[local-dev guide](../../docs/local-dev.md) for the full picture.
 
-- Project structure with Axum web framework
-- Configuration management from environment variables
-- PostgreSQL database with migrations
-- Redis client for queue, dedup, and caching
-- Twitter webhook handler (CRC challenge + event processing)
-- Database models for accounts and webhook events
-- Enclave HTTP client for signing flows
-- Transaction processor worker (Redis queue -> enclave signed intent -> TODO Sui submit)
-- Sui JSON-RPC indexer to mirror account, handle, and wallet link events
-- Structured logging with tracing
-
-## Project Structure
+## What this crate contains
 
 ```
-backend/
-├── migrations/
-│   ├── 001_init.sql          # Database schema
-│   └── 002_indexer_state.sql # Indexer cursor storage
-├── src/
-│   ├── main.rs               # Server entry point
-│   ├── config.rs             # Environment configuration
-│   ├── clients/
-│   │   ├── redis_client.rs   # Redis operations
-│   │   ├── sui_client.rs     # Sui JSON-RPC wrapper
-│   │   └── enclave.rs        # Nautilus enclave HTTP client
-│   ├── processor/
-│   │   └── worker.rs         # Transaction processor worker
-│   ├── db/
-│   │   ├── mod.rs            # Database connection
-│   │   └── models.rs         # Data models & queries
-│   ├── indexer/
-│   │   └── mod.rs            # Sui event indexer worker
-│   └── webhook/
-│       ├── handler.rs        # Webhook endpoints
-│       └── signature.rs      # Twitter signature validation
+apps/api/
 ├── Cargo.toml
-└── .env.example
+├── docker-compose.yml      # local Postgres + Redis
+├── process_tweet_url.sh    # manual webhook trigger
+├── src/
+│   ├── main.rs             # binary entry point
+│   ├── lib.rs
+│   ├── routes.rs           # REST endpoints (account, wallet link, OAuth, sponsor)
+│   ├── error.rs            # API error type / axum IntoResponse
+│   ├── processor/
+│   │   └── worker.rs       # Redis queue -> enclave -> Sui -> reply
+│   └── webhook/
+│       ├── handler.rs      # /webhook + CRC challenge
+│       └── signature.rs    # Twitter signature validation
+└── tests/
+    └── unit_tests.rs
 ```
 
-## Quick Start
+Shared modules used by this crate (lifted into `dugong-core`):
+
+- `dugong_core::config` — env-driven `Config`
+- `dugong_core::db` — Postgres pool, models, embedded migrations
+- `dugong_core::clients` — Redis, Sui, Twitter, Enclave, Enoki, Sui-tx builder
+- `dugong_core::constants` — Redis key helpers, event ids, enclave consts
+- `dugong_core::twitter_session` — login cookie validation
+
+## Quick start
 
 ### 1. Prerequisites
 
-Install dependencies:
 ```bash
-# PostgreSQL
-brew install postgresql@14
-brew services start postgresql@14
-
-# Redis
-brew install redis
-brew services start redis
-
-# Create database
-createdb dugong
+# Spin up local Postgres + Redis
+cd apps/api
+docker compose up -d
 ```
 
-### 2. Configuration
+(Or install Postgres 14 + Redis natively; defaults in `.env.example` match
+the docker-compose ports.)
 
-Create `.env` from example:
+### 2. Configure
+
 ```bash
-cp .env.example .env
+cp apps/api/.env.example apps/api/.env
+# fill in real values - see docs/local-dev.md for which keys are required
 ```
-
-Edit `.env` with your credentials:
-- `TWITTERAPI_IO_API_KEY` for tweet/user lookup and reply posting
-- `TWITTERAPI_IO_LOGIN_COOKIES` and `TWITTERAPI_IO_PROXY` for TwitterAPI.io reply posting
-- `TWITTER_BOT_USERNAME`, `TWITTER_BOT_EMAIL`, `TWITTER_BOT_PASSWORD`, and
-  `TWITTER_BOT_TOTP_SECRET` for minting a post-capable login cookie with
-  `cargo run --bin dugong-login`
-- X OAuth2 credentials from https://developer.twitter.com for login/link-wallet OAuth
-- Database URL
-- Redis URL
-- Sui network config (get from deployed contracts)
 
 ### 3. Run
 
+From the repo root:
+
 ```bash
-# Run migrations and start server
-cargo run
+cargo run -p dugong-api
+# embedded migrations run on startup; server listens on http://localhost:43001
 ```
 
-Server will start at `http://localhost:43001`
+The API refuses to start without `TWITTERAPI_IO_LOGIN_COOKIES` +
+`TWITTERAPI_IO_PROXY`, because the processor posts a reply to every tweet
+it handles. If you only need the read-side, run `dugong-indexer` instead
+(see below).
 
-### Running backend and indexer as separate processes
+### Running alongside the indexer
 
-By default the HTTP server can spawn the Sui indexer inside the same process, but for local development it is often easier to decouple them.
+The indexer is its own binary in a sibling crate and shares this crate's
+`.env`:
 
-1. **Backend only**
-   ```bash
-   # Ensure the API does not spawn the indexer
-   export ENABLE_INDEXER=false   # or add to your .env
+```bash
+cargo run -p dugong-indexer
+```
 
-   cd backend
-   cargo run
-   ```
-   This starts only the Axum API + processor workers.
+Both processes read `apps/api/.env` (same Postgres + Sui RPC) so the
+indexer cursor and the API's webhook state stay consistent.
 
-2. **Indexer worker**
-   ```bash
-   # Uses the same .env configuration (DB, Sui RPC, Twitter, etc.)
-   cd backend
-   cargo run --bin indexer
-   ```
-   The indexer binary runs migrations (if needed) and then continuously mirrors Sui events, writing progress into the `indexer_state` table.
+### Helper CLIs
 
-Both processes expect the same `.env` file; they should point at the same PostgreSQL + Redis instances so cursor and queue states stay consistent.
+The one-off scripts moved to the `dugong-tools` crate:
 
-## API Endpoints
+```bash
+cargo run -p dugong-tools --bin dugong-login        # mint TwitterAPI.io login cookie
+cargo run -p dugong-tools --bin dugong-test-tweet   # smoke-test posting + self-reply
+```
 
-### Health Check
+## API endpoints
+
+### Health check
+
 ```bash
 curl http://localhost:43001/
 ```
 
-### CRC Challenge (GET)
+### CRC challenge (GET)
+
 ```bash
 curl "http://localhost:43001/webhook?crc_token=test123"
 ```
 
-### Webhook Event (POST)
+### Webhook event (POST)
+
 ```bash
 curl -X POST http://localhost:43001/webhook \
   -H "Content-Type: application/json" \
@@ -141,97 +126,78 @@ curl -X POST http://localhost:43001/webhook \
   }'
 ```
 
-## Setting up Twitter Webhook
+Account / wallet / OAuth / sponsor routes are wired in `src/main.rs`; see
+`src/routes.rs` for the handlers.
 
-### 1. Use ngrok to expose local server
+## Twitter webhook setup (optional)
+
+In production you can wire the official X Account Activity webhook. Locally
+the worker poller is usually enough.
 
 ```bash
 ngrok http 43001
 ```
 
-### 2. Register webhook URL in Twitter Developer Portal
+Register `https://<your-ngrok>.ngrok.io/webhook` in the X developer portal
+and set `TWITTER_WEBHOOK_SECRET` in `.env` for CRC signing.
 
-- Go to https://developer.twitter.com/en/portal/dashboard
-- Navigate to your app > Account Activity API > Webhooks
-- Add webhook URL: `https://your-ngrok-url.ngrok.io/webhook`
-- Twitter will send CRC challenge automatically
-- Set `TWITTER_WEBHOOK_SECRET` if using this official webhook CRC flow
+## Database schema
 
-### 3. Subscribe to account activities
+Embedded migrations live in `apps/core/migrations/`. Run them manually with:
 
-Use the worker poller for TwitterAPI.io-based polling, or subscribe with the official Twitter API if you still need Account Activity webhooks.
-
-## Database Schema
-
-### dugong_accounts
-Stores mapping between Twitter accounts and on-chain DugongAccount objects.
-
-```sql
-- twitter_user_id (unique)
-- twitter_handle
-- sui_object_id (unique)
-- owner_address (optional)
+```bash
+sqlx migrate run \
+  --source apps/core/migrations \
+  --database-url postgres://postgres:password@localhost:45432/dugong
 ```
 
-### webhook_events
-Stores received webhook events for deduplication and tracking.
+Highlights:
 
-```sql
-- event_id (unique)
-- tweet_id
-- payload (jsonb)
-- processed (boolean)
-```
-
-## Next Steps (Phase 2 - Core Logic)
-
-- [ ] Tweet parsing module (extract transfer commands)
-- [ ] Account service (query & sync from Sui)
-- [ ] Enclave client (call Nautilus Enclave for signing)
-- [ ] Sui client (query balance, submit transactions)
-- [ ] Transaction builder
-
-See `PLAN.md` for full roadmap.
+- `dugong_accounts` — Twitter ↔ on-chain DugongAccount mapping
+  (`twitter_user_id`, `twitter_handle`, `sui_object_id`, `owner_address`).
+- `webhook_events` — Received webhook events with `processed` flag and the
+  raw `payload` (jsonb), used for dedup and replay.
+- `indexer_state` — Per-stream cursor for `dugong-indexer`.
 
 ## Development
 
-### Run migrations manually
 ```bash
-sqlx migrate run --database-url postgres://postgres:password@localhost:45432/dugong
+# Type-check / test the whole workspace
+cargo check --workspace
+cargo test  --workspace
+
+# Just this crate
+cargo check -p dugong-api
+cargo test  -p dugong-api
 ```
 
-### Check code
-```bash
-cargo check
-```
+## Environment variables
 
-### Run tests
-```bash
-cargo test
-```
+See `.env.example` for everything. Key variables:
 
-## Environment Variables
+- `DATABASE_URL` — Postgres connection string
+- `REDIS_URL` — Redis connection string
+- `SUI_RPC_URL` — Sui fullnode RPC endpoint
+- `ENCLAVE_URL` — Nautilus enclave endpoint
+- `ENCLAVE_ID` — Enclave shared object id created by `register_enclave`
+  (the Enclave object, not the config)
+- `DUGONG_PACKAGE_ID` — Deployed Move package id
+- `DUGONG_REGISTRY_ID` — `DugongRegistry` shared object id
+- `ENCLAVE_CONFIG_ID` — Enclave config object id (signature verification)
+- `TWITTERAPI_IO_LOGIN_COOKIES`, `TWITTERAPI_IO_PROXY` — TwitterAPI.io
+  credentials for reply tweets
+- `TWITTER_BOT_TOTP_SECRET` — X 2FA base32 seed used by `dugong-login`;
+  guest login cookies cannot post replies
+- `INDEXER_POLL_INTERVAL_MS`, `INDEXER_BATCH_SIZE` — read by
+  `dugong-indexer` only
 
-See `.env.example` for all required environment variables.
+> `ENABLE_INDEXER` was previously used to co-run the indexer inside the API
+> process. The indexer is now always a separate binary; the variable is
+> retained in `Config` for backwards compatibility but has no effect.
 
-Key variables:
-- `DATABASE_URL` - PostgreSQL connection string
-- `REDIS_URL` - Redis connection string
-- `SUI_RPC_URL` - Sui fullnode RPC endpoint
-- `ENCLAVE_URL` - Nautilus Enclave endpoint
-- `ENCLAVE_ID` - Enclave shared object ID created by `register_enclave` (must be the Enclave object, not the config)
-- `DUGONG_PACKAGE_ID` - Deployed Move package ID
-- `DUGONG_REGISTRY_ID` - DugongRegistry shared object ID
-- `ENCLAVE_CONFIG_ID` - Enclave config object ID (for signature verification)
-- `TWITTERAPI_IO_LOGIN_COOKIES`, `TWITTERAPI_IO_PROXY` - TwitterAPI.io credentials for reply tweets
-- `TWITTER_BOT_TOTP_SECRET` - X 2FA base32 seed used by `dugong-login`; a guest login cookie cannot post replies
-- `INDEXER_POLL_INTERVAL_MS` - Interval for polling Sui events
-- `INDEXER_BATCH_SIZE` - Max events fetched per RPC call
-- `ENABLE_INDEXER` - Set to `true` to have the API process spawn the indexer internally; leave unset/`false` when running the dedicated `dugong-indexer` binary.
+## Security notes
 
-## Security Notes
-
-- Never commit `.env` file
-- Keep TwitterAPI.io, X OAuth2, and signing credentials secure
-- Validate all webhook signatures in production
-- Use proper database credentials in production
+- Never commit `.env`.
+- Keep TwitterAPI.io, X OAuth2, and signing credentials secure.
+- Validate all webhook signatures in production.
+- Use proper database credentials in production.

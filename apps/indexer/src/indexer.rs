@@ -1,18 +1,13 @@
-pub mod cursor;
-pub mod event_fetcher;
-pub mod event_processor;
-pub mod handlers;
-pub mod types;
-
 use anyhow::Result;
 use tokio::time::{interval, Duration};
 use tracing::info;
 
-use crate::config::Config;
-use cursor::CursorManager;
-use event_fetcher::EventFetcher;
-use event_processor::EventProcessor;
-use types::EventPage;
+use dugong_core::config::Config;
+
+use crate::cursor::CursorManager;
+use crate::event_fetcher::EventFetcher;
+use crate::event_processor::EventProcessor;
+use crate::types::EventPage;
 
 pub struct Indexer {
     event_fetcher: EventFetcher,

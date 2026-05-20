@@ -1,5 +1,5 @@
 // Re-export types from sui_client for convenience
-pub use crate::clients::sui_client::{EventPage, SuiEvent};
+pub use dugong_core::clients::sui_client::{EventPage, SuiEvent};
 
 use serde::{Deserialize, Serialize};
 

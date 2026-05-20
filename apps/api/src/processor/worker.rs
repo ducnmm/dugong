@@ -4,16 +4,13 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use tracing::{error, info, warn};
 
-use crate::{
-    clients::{
-        enclave::{CommandType, EnclaveClient, ProcessTweetResponse},
-        redis_client::RedisClient,
-        twitter::{TransactionResult, TwitterClient},
-    },
-    constants::redis,
-    db::models::{DugongAccount, WebhookEvent},
-    webhook::handler::AppState,
-};
+use dugong_core::clients::enclave::{CommandType, EnclaveClient, ProcessTweetResponse};
+use dugong_core::clients::redis_client::RedisClient;
+use dugong_core::clients::twitter::{TransactionResult, TwitterClient};
+use dugong_core::constants::redis;
+use dugong_core::db::models::{DugongAccount, WebhookEvent};
+
+use crate::webhook::handler::AppState;
 
 /// Simple transaction processor worker (SIMPLIFIED ARCHITECTURE):
 /// 1. pop queue item from Redis
@@ -212,7 +209,7 @@ impl ProcessorWorker {
 
         // Initialize transaction builder
         let tx_builder =
-            crate::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
+            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
                 .await
                 .context("Failed to initialize Sui transaction builder")?;
 
@@ -304,7 +301,7 @@ impl ProcessorWorker {
 
         // Check if recipient account exists, create if not
         let recipient_exists =
-            crate::db::models::DugongAccount::find_by_x_user_id(&self.state.db, &data.to_xid)
+            dugong_core::db::models::DugongAccount::find_by_x_user_id(&self.state.db, &data.to_xid)
                 .await
                 .context("Failed to check if recipient account exists")?
                 .is_some();
@@ -323,7 +320,7 @@ impl ProcessorWorker {
 
         // Initialize transaction builder
         let tx_builder =
-            crate::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
+            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
                 .await
                 .context("Failed to initialize Sui transaction builder")?;
 
@@ -378,7 +375,7 @@ impl ProcessorWorker {
     /// since handles come from ProcessTweetResponse
     #[allow(dead_code)]
     async fn get_x_handle(&self, xid: &str) -> Result<String> {
-        let account = crate::db::models::DugongAccount::find_by_x_user_id(&self.state.db, xid)
+        let account = dugong_core::db::models::DugongAccount::find_by_x_user_id(&self.state.db, xid)
             .await
             .context("Failed to fetch account")?;
 
@@ -414,7 +411,7 @@ impl ProcessorWorker {
 
         // Initialize transaction builder
         let tx_builder =
-            crate::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
+            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
                 .await
                 .context("Failed to initialize Sui transaction builder")?;
 
@@ -467,7 +464,7 @@ mod tests {
 
     #[test]
     fn test_event_status_is_done() {
-        use crate::db::models::EventStatus;
+        use dugong_core::db::models::EventStatus;
 
         let completed = WebhookEvent {
             id: 1,

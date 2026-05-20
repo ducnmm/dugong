@@ -6,11 +6,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::clients::enclave::EnclaveClient;
-use crate::clients::enoki::EnokiClient;
-use crate::clients::sui_transaction::SuiTransactionBuilder;
-use crate::clients::twitter::{TwitterOAuth2Client, TwitterUserInfo};
-use crate::db::models::{AccountBalance, DugongAccount, Transfer, TransferType};
+use dugong_core::clients::enclave::EnclaveClient;
+use dugong_core::clients::enoki::EnokiClient;
+use dugong_core::clients::sui_transaction::SuiTransactionBuilder;
+use dugong_core::clients::twitter::{TwitterOAuth2Client, TwitterUserInfo};
+use dugong_core::db::models::{AccountBalance, DugongAccount, Transfer, TransferType};
 use crate::webhook::handler::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -437,7 +437,7 @@ pub async fn get_transactions_by_account(
         transfers.iter().map(|t| t.coin_type.clone()).collect();
 
     // Fetch decimals for each coin type from Sui RPC
-    let sui_client = crate::clients::sui_client::SuiClient::new(&state.config.sui_rpc_url);
+    let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_rpc_url);
     let mut decimals_map: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     for coin_type in unique_coin_types {
         // Ensure coin_type has 0x prefix for RPC query

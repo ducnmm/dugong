@@ -16,7 +16,7 @@
 //!                                        strongly recommended to avoid login failures
 
 use anyhow::{bail, Context, Result};
-use dugong_api::twitter_session::{login_cookie_auth_status, LoginCookieAuthStatus};
+use dugong_core::twitter_session::{login_cookie_auth_status, LoginCookieAuthStatus};
 use serde::{Deserialize, Serialize};
 use std::env;
 

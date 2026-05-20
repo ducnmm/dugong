@@ -21,7 +21,7 @@ using the Railway CLI.
 > testing. For real attestation, run it on an AWS Nitro Enclave instead.
 
 The `dugong-api` binary runs database migrations automatically on startup
-(`sqlx::migrate!` in `apps/api/src/db/mod.rs`), so no manual migration step
+(`sqlx::migrate!` in `apps/core/src/db/mod.rs`), so no manual migration step
 is needed.
 
 ---

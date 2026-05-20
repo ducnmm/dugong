@@ -1,7 +1,7 @@
-use crate::clients::redis_client::RedisClient;
-use crate::config::Config;
-use crate::constants::{events, redis};
-use crate::db::models::WebhookEvent;
+use dugong_core::clients::redis_client::RedisClient;
+use dugong_core::config::Config;
+use dugong_core::constants::{events, redis};
+use dugong_core::db::models::WebhookEvent;
 use crate::error::{BackendError, Result};
 use crate::webhook::signature::generate_crc_response;
 use axum::{

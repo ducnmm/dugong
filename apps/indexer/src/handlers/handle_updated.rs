@@ -4,8 +4,8 @@ use sqlx::PgPool;
 use tracing::info;
 
 use super::EventHandler;
-use crate::db::models::DugongAccount;
-use crate::indexer::types::{HandleUpdatedEvent, SuiEvent};
+use dugong_core::db::models::DugongAccount;
+use crate::types::{HandleUpdatedEvent, SuiEvent};
 
 pub struct HandleUpdatedHandler;
 

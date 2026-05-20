@@ -1,0 +1,23 @@
+[package]
+name = "dugong-tools"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dugong-login"
+path = "src/bin/login.rs"
+
+[[bin]]
+name = "dugong-test-tweet"
+path = "src/bin/test_tweet.rs"
+
+[dependencies]
+dugong-core.workspace = true
+
+tokio.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+dotenvy.workspace = true

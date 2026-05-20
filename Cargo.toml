@@ -1,6 +1,9 @@
 [workspace]
 members = [
+    "apps/core",
     "apps/api",
+    "apps/indexer",
+    "apps/tools",
     "apps/nautilus-server",
     "apps/worker",
 ]
@@ -12,7 +15,62 @@ version = "0.1.0"
 license = "MIT"
 
 [workspace.dependencies]
+# Internal
+dugong-core = { path = "apps/core" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# Error handling
 anyhow = "1"
+thiserror = "1"
+
+# Serde
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["full"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "macros", "migrate", "chrono", "json"] }
+
+# Redis
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json"] }
+
+# Web framework (api only)
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+
+# Sui SDK - pinned to the same testnet commit for consistency
+sui-sdk = { git = "https://github.com/MystenLabs/sui", package = "sui-sdk", rev = "94ad8ccd0ed6c089a9fe072ff80c918b5ab44943" }
+sui-types = { git = "https://github.com/MystenLabs/sui", package = "sui-types", rev = "94ad8ccd0ed6c089a9fe072ff80c918b5ab44943" }
+sui-keys = { git = "https://github.com/MystenLabs/sui", package = "sui-keys", rev = "94ad8ccd0ed6c089a9fe072ff80c918b5ab44943" }
+shared-crypto = { git = "https://github.com/MystenLabs/sui", package = "shared-crypto", rev = "94ad8ccd0ed6c089a9fe072ff80c918b5ab44943" }
+fastcrypto = { git = "https://github.com/MystenLabs/fastcrypto", rev = "0eea35ee442a798fb1f1e7c2f39dc021bd21dbc3" }
+bcs = "0.1"
+
+# Crypto
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+base64 = "0.21"
+hex = "0.4"
+
+# JWT
+jsonwebtoken = "9"
+
+# Config & env
+dotenvy = "0.15"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Regex
+regex = "1"

@@ -2161,6 +2161,7 @@ dependencies = [
  "bcs",
  "chrono",
  "dotenvy",
+ "dugong-core",
  "fastcrypto 0.1.9 (git+https://github.com/MystenLabs/fastcrypto?rev=0eea35ee442a798fb1f1e7c2f39dc021bd21dbc3)",
  "hex",
  "hmac",
@@ -2183,6 +2184,61 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "dugong-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.21.7",
+ "bcs",
+ "chrono",
+ "dotenvy",
+ "fastcrypto 0.1.9 (git+https://github.com/MystenLabs/fastcrypto?rev=0eea35ee442a798fb1f1e7c2f39dc021bd21dbc3)",
+ "hex",
+ "redis",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "shared-crypto",
+ "sqlx",
+ "sui-keys",
+ "sui-sdk",
+ "sui-types",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "dugong-indexer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dotenvy",
+ "dugong-core",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "dugong-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "dugong-core",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

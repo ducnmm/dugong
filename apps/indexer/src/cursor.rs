@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use sqlx::PgPool;
 use tracing::debug;
 
-use crate::db::models::IndexerState;
+use dugong_core::db::models::IndexerState;
 
 pub struct CursorManager {
     pool: PgPool,

@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use tracing::info;
 
 use super::EventHandler;
-use crate::indexer::types::{CoinDepositedEvent, SuiEvent};
+use crate::types::{CoinDepositedEvent, SuiEvent};
 
 pub struct CoinDepositedHandler;
 

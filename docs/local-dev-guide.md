@@ -2,21 +2,27 @@
 
 This guide explains how to run the full Dugong stack on your machine.
 
+All Rust services live in one Cargo workspace rooted at the repo's
+`Cargo.toml`. Run `cargo` commands from the repo root.
+
 ## Components & Ports
 
-| Service           | Crate / dir             | Local URL                  | Port  |
-| ----------------- | ----------------------- | -------------------------- | ----- |
-| PostgreSQL        | docker (`apps/api`)     | `localhost:45432`          | 45432 |
-| Redis             | docker (`apps/api`)     | `localhost:46379`          | 46379 |
-| Nautilus enclave  | `apps/nautilus-server`  | `http://localhost:43000`   | 43000 |
-| API + processor   | `apps/api`              | `http://localhost:43001`   | 43001 |
-| Indexer           | `apps/api` (`dugong-indexer`) | n/a                  | n/a   |
-| Worker (poller)   | `apps/worker`           | n/a                        | n/a   |
-| Web (Vite)        | `apps/web`              | `http://localhost:43173`   | 43173 |
+| Service          | Crate                  | Local URL                | Port  |
+| ---------------- | ---------------------- | ------------------------ | ----- |
+| PostgreSQL       | docker (`apps/api`)    | `localhost:45432`        | 45432 |
+| Redis            | docker (`apps/api`)    | `localhost:46379`        | 46379 |
+| Nautilus enclave | `apps/nautilus-server` | `http://localhost:43000` | 43000 |
+| API + processor  | `apps/api`             | `http://localhost:43001` | 43001 |
+| Indexer          | `apps/indexer`         | n/a                      | n/a   |
+| Worker (poller)  | `apps/worker`          | n/a                      | n/a   |
+| Web (Vite)       | `apps/web`             | `http://localhost:43173` | 43173 |
 
-Data flow: `worker poller` (or `process_tweet_url.sh`) → API `/webhook` → Redis
-queue → API processor → Nautilus `/process_tweet` → Sui. The indexer mirrors
-Sui events back into Postgres.
+Shared library: `apps/core` (`dugong-core`) — every Rust binary depends on
+it for config, db, clients, and migrations.
+
+Data flow: `worker poller` (or `process_tweet_url.sh`) → API `/webhook` →
+Redis queue → API processor → Nautilus `/process_tweet` → Sui. The indexer
+mirrors Sui events back into Postgres.
 
 ## Prerequisites
 
@@ -40,7 +46,9 @@ defaults in `apps/api/.env.example`.
 
 ## 2. Configure environment
 
-Each app reads its own `.env`. Copy the examples and fill in real values:
+Each binary reads `apps/api/.env` (the API, indexer, and tools all share
+this file because they share the same Postgres, Redis, Sui RPC, and Twitter
+config). The worker and web app have their own `.env`:
 
 ```bash
 cp apps/api/.env.example     apps/api/.env
@@ -52,9 +60,8 @@ cp apps/web/.env.example     apps/web/.env
 Key values you must supply in `apps/api/.env`:
 
 - `TWITTERAPI_IO_API_KEY` — tweet/user lookup and reply posting
-- `TWITTERAPI_IO_LOGIN_COOKIES`, `TWITTERAPI_IO_PROXY` — required only for
-  posting reply tweets (the processor fails at startup without these unless
-  it runs indexer-only)
+- `TWITTERAPI_IO_LOGIN_COOKIES`, `TWITTERAPI_IO_PROXY` — required by the API
+  processor for posting reply tweets (the indexer does not need these)
 - `TWITTER_OAUTH2_CLIENT_ID`, `TWITTER_OAUTH2_CLIENT_SECRET` — X OAuth2 from
   https://developer.twitter.com
 - `DUGONG_PACKAGE_ID`, `DUGONG_REGISTRY_ID`, `ENCLAVE_CONFIG_ID`, `ENCLAVE_ID`
@@ -76,32 +83,31 @@ cargo run -p nautilus-server
 ## 4. Run the API + processor
 
 ```bash
-cd apps/api
-cargo run                       # runs migrations, serves http://localhost:43001
+cargo run -p dugong-api
+# runs migrations and serves http://localhost:43001
 ```
 
 Health check: `curl http://localhost:43001/`
 
-### Run the indexer separately (recommended)
+The API + processor binary requires reply credentials
+(`TWITTERAPI_IO_LOGIN_COOKIES` + `TWITTERAPI_IO_PROXY`); it refuses to start
+otherwise so replies never get silently dropped.
 
-The API does **not** spawn the indexer by default (`ENABLE_INDEXER=false`).
-Run it as its own process so it can run without reply credentials:
+## 5. Run the indexer
 
-```bash
-cd apps/api
-cargo run --bin dugong-indexer   # mirrors Sui events into the indexer_state table
-```
-
-Both processes must share the same `.env` (same Postgres + Redis).
-
-### Helper binaries
+The indexer is now its own binary (`dugong-indexer`). Run it as a separate
+process — it does not need reply credentials and can run on a host that
+only has Postgres + Sui RPC reachable:
 
 ```bash
-cargo run --bin dugong-login        # X OAuth2 login helper
-cargo run --bin dugong-test-tweet   # post a test tweet
+cargo run -p dugong-indexer
+# mirrors Sui events into the indexer_state + dugong_accounts tables
 ```
 
-## 5. Run the worker (poller)
+The API and indexer share the same `apps/api/.env` (same Postgres + Sui
+RPC), so the cursor stays consistent.
+
+## 6. Run the worker (poller)
 
 Polls X for mentions of `@DugongWallet` and forwards them to the API webhook:
 
@@ -112,7 +118,7 @@ cargo run -p dugong-worker
 Configured via `apps/worker/.env` (`BACKEND_URL`, `POLL_INTERVAL_SECONDS`,
 `TWITTER_MENTION`).
 
-## 6. Run the web app
+## 7. Run the web app
 
 ```bash
 cd apps/web
@@ -122,6 +128,21 @@ pnpm dev            # http://localhost:43173
 
 Vite proxies `/api` to `http://localhost:43001`. Set the `VITE_*` contract
 addresses in `apps/web/.env` to match `apps/api/.env`.
+
+## Helper tools
+
+The one-off CLIs live in the `dugong-tools` crate:
+
+```bash
+# Mint a TwitterAPI.io login cookie for the bot account
+cargo run -p dugong-tools --bin dugong-login
+
+# Smoke-test posting a tweet + self-reply via the bot account
+cargo run -p dugong-tools --bin dugong-test-tweet
+```
+
+Both read from `apps/api/.env` (run them from the repo root so the workspace
+target dir is reused).
 
 ## Triggering a tweet without the poller
 
@@ -141,12 +162,15 @@ Watch the API logs for `Pushed tweet … to queue`, `Calling unified
 ## Common tasks
 
 ```bash
-# Run migrations manually
-sqlx migrate run --database-url postgres://postgres:password@localhost:45432/dugong
+# Build / type-check / test the whole workspace
+cargo build --workspace
+cargo check  --workspace
+cargo test   --workspace
 
-# Type-check / test
-cargo check
-cargo test
+# Run migrations manually (migrations live in apps/core/migrations)
+sqlx migrate run \
+  --source apps/core/migrations \
+  --database-url postgres://postgres:password@localhost:45432/dugong
 
 # Inspect local DB / Redis
 docker exec -it dugong-postgres psql -U postgres -d dugong
@@ -158,9 +182,9 @@ cd apps/api && docker compose down          # add -v to wipe volumes
 
 ## Suggested startup order
 
-1. `docker compose up -d` (Postgres + Redis)
+1. `docker compose up -d` in `apps/api` (Postgres + Redis)
 2. `cargo run -p nautilus-server`
-3. `cargo run` in `apps/api` (API + processor)
-4. `cargo run --bin dugong-indexer` in `apps/api`
+3. `cargo run -p dugong-api` (API + processor)
+4. `cargo run -p dugong-indexer` (Sui events → Postgres)
 5. `cargo run -p dugong-worker` (or use `process_tweet_url.sh`)
 6. `pnpm dev` in `apps/web`

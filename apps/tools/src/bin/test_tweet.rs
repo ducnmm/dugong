@@ -17,7 +17,7 @@
 //! as duplicate content (HTTP 422).
 
 use anyhow::{bail, Context, Result};
-use dugong_api::twitter_session::ensure_authenticated_login_cookie;
+use dugong_core::twitter_session::ensure_authenticated_login_cookie;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};

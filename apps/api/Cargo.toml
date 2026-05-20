@@ -1,7 +1,8 @@
 [package]
 name = "dugong-api"
-version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
 
 [lib]
 name = "dugong_api"
@@ -11,78 +12,64 @@ path = "src/lib.rs"
 name = "dugong-api"
 path = "src/main.rs"
 
-[[bin]]
-name = "dugong-indexer"
-path = "src/bin/indexer.rs"
-
-[[bin]]
-name = "dugong-login"
-path = "src/bin/login.rs"
-
-[[bin]]
-name = "dugong-test-tweet"
-path = "src/bin/test_tweet.rs"
-
 [dependencies]
+dugong-core.workspace = true
+
 # Web framework
-axum = { version = "0.7", features = ["macros"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["trace", "cors"] }
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
-async-trait = "0.1"
+tokio.workspace = true
+async-trait.workspace = true
 
-# Database
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "macros", "migrate", "chrono", "json"] }
+# Database (handlers extract PgPool from state)
+sqlx.workspace = true
 
-# Redis
-redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+# Redis (error type bridged in error.rs)
+redis.workspace = true
 
-# HTTP client
-reqwest = { version = "0.11", features = ["json"] }
-
-# Sui SDK - all pinned to the same testnet commit for consistency
-sui-sdk = { git = "https://github.com/MystenLabs/sui", package = "sui-sdk", rev = "94ad8ccd0ed6c089a9fe072ff80c918b5ab44943" }
-sui-types = { git = "https://github.com/MystenLabs/sui", package = "sui-types", rev = "94ad8ccd0ed6c089a9fe072ff80c918b5ab44943" }
-sui-keys = { git = "https://github.com/MystenLabs/sui", package = "sui-keys", rev = "94ad8ccd0ed6c089a9fe072ff80c918b5ab44943" }
-bcs = "0.1"
+# HTTP client (for outbound calls in routes)
+reqwest.workspace = true
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde.workspace = true
+serde_json.workspace = true
 
-# Intent / signature utilities (Sui)
-shared-crypto = { git = "https://github.com/MystenLabs/sui", package = "shared-crypto", rev = "94ad8ccd0ed6c089a9fe072ff80c918b5ab44943" }
+# Sui types referenced in routes
+sui-sdk.workspace = true
+sui-types.workspace = true
+sui-keys.workspace = true
+shared-crypto.workspace = true
+fastcrypto.workspace = true
+bcs.workspace = true
 
-# Fastcrypto for hash traits (needed for signing) - matching the Sui SDK dependency.
-fastcrypto = { git = "https://github.com/MystenLabs/fastcrypto", rev = "0eea35ee442a798fb1f1e7c2f39dc021bd21dbc3" }
+# Webhook signature / general crypto
+hmac.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+base64.workspace = true
+hex.workspace = true
 
-# Crypto
-hmac = "0.12"
-sha1 = "0.10"
-sha2 = "0.10"
-base64 = "0.21"
-hex = "0.4"
-
-# JWT
-jsonwebtoken = "9"
+# JWT (Twitter OAuth)
+jsonwebtoken.workspace = true
 
 # Config & env
-dotenvy = "0.15"
+dotenvy.workspace = true
 
 # Error handling
-anyhow = "1"
-thiserror = "1"
+anyhow.workspace = true
+thiserror.workspace = true
 
 # Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 # Time
-chrono = { version = "0.4", features = ["serde"] }
+chrono.workspace = true
 
 # Regex
-regex = "1"
+regex.workspace = true
 
 [dev-dependencies]
