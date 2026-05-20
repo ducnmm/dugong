@@ -10,7 +10,7 @@ using the Railway CLI.
 | `api` | `apps/api` (`dugong-api`) | `Dockerfile.api` | yes |
 | `worker` | `apps/worker` (`dugong-worker`) | `Dockerfile.worker` | no (background) |
 | `nautilus` | `apps/nautilus-server` | `Dockerfile.nautilus` | yes (see caveat) |
-| `web` | `apps/web` | `apps/web/Dockerfile` | yes |
+| `web` | `apps/web` | `Dockerfile.web` | yes |
 | `Postgres` | Railway plugin | — | internal |
 | `Redis` | Railway plugin | — | internal |
 
@@ -75,13 +75,14 @@ right Dockerfile per service with `RAILWAY_DOCKERFILE_PATH`.
 railway variables --service api      --set "RAILWAY_DOCKERFILE_PATH=Dockerfile.api"
 railway variables --service worker   --set "RAILWAY_DOCKERFILE_PATH=Dockerfile.worker"
 railway variables --service nautilus --set "RAILWAY_DOCKERFILE_PATH=Dockerfile.nautilus"
+railway variables --service web      --set "RAILWAY_DOCKERFILE_PATH=Dockerfile.web"
 ```
 
-For `web`, no root-directory setting is needed when deploying via the
-CLI. `railway up apps/web --service web` (step 7) uploads `apps/web` as
-the build context, so `apps/web/Dockerfile` is auto-detected. (The
-dashboard "Root Directory" setting only applies to GitHub
-push-to-deploy, not `railway up`. There is no CLI command to set it.)
+All four Dockerfiles live at the repo root and use the repo root as
+build context (the Rust services need the workspace `Cargo.toml` +
+`Cargo.lock`; `Dockerfile.web` `COPY`s `apps/web/package.json`
+explicitly). `railway up` in step 7 is run from the repo root for every
+service.
 
 ## 6. Set environment variables
 
@@ -91,12 +92,16 @@ reference variables (resolved at deploy time).
 ### `api`
 
 > **Shortcut:** instead of the command below, run
-> `scripts/railway-set-api-env.sh` to push every value from
+> `scripts/railway-set-env.ts api` to push every value from
 > `apps/api/.env`, with deploy-time overrides applied automatically
 > (drops `PORT`, swaps `DATABASE_URL`/`REDIS_URL` to the Railway plugin
 > references, points `ENCLAVE_URL` at the private nautilus address).
-> Add `--dry-run` to preview, or `WEB_DOMAIN=<web-domain>` to rewrite
-> `TWITTER_OAUTH2_REDIRECT_URI`. Run `railway link` first.
+> Add `--dry-run` to preview, `--web-domain <host>` to rewrite
+> `TWITTER_OAUTH2_REDIRECT_URI`, or `--environment <name>` to target a
+> specific Railway environment. Use `all` instead of `api` to push every
+> service (`api`, `indexer`, `worker`, `nautilus`, `web`) in one go. Run
+> `railway link` first; on first use, install deps with
+> `cd scripts && npm install`.
 >
 > **Quoting (manual command):** use **single quotes** for every
 > `--set`. zsh/bash expand `${{...}}` inside double quotes and fail with
@@ -199,10 +204,11 @@ railway up --service nautilus --detach
 railway up --service worker --detach
 ```
 
-Deploy the web app, passing its directory as the build context:
+Deploy the web app (build context is the repo root, same as the Rust
+services):
 
 ```bash
-railway up apps/web --service web --detach
+railway up --service web --detach
 ```
 
 `--detach` returns immediately; drop it to stream build logs. The first
@@ -242,7 +248,7 @@ curl https://<api-domain>/health  # if a health route exists
 ## Redeploys
 
 ```bash
-railway up --service <name> --detach           # from repo root (web: from apps/web)
+railway up --service <name> --detach           # from repo root for every service
 railway redeploy --service <name>              # redeploy current build
 railway variables --service <name>             # list vars
 ```
