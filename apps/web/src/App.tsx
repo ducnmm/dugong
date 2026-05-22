@@ -13,8 +13,8 @@ function AppRoutes() {
   // Wait for auth state to be loaded from localStorage before rendering routes
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      <div className="neo-page flex items-center justify-center">
+        <div className="h-16 w-16 animate-spin rounded-full border-4 border-black border-t-cyan-300 bg-white shadow-neo-md" />
       </div>
     );
   }
@@ -34,6 +34,12 @@ function AppRoutes() {
         {/* Protected Routes - User's own dashboard */}
         <Route
           path="/dashboard"
+          element={
+            isAuthenticated ? <Navigate to="/dashboard/activity" replace /> : <Navigate to="/" replace />
+          }
+        />
+        <Route
+          path="/dashboard/:tab"
           element={
             isAuthenticated ? <Dashboard /> : <Navigate to="/" replace />
           }

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCurrentAccount } from '@mysten/dapp-kit';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowDownLeft,
   ArrowLeftRight,
@@ -10,10 +11,10 @@ import {
   Copy,
   ExternalLink,
   Info,
-  Link2,
+  LayoutDashboard,
+  Activity,
   X,
 } from 'lucide-react';
-import { Header } from '../components/Header';
 import { TokenIcon } from '../components/TokenIcon';
 import { useAuth } from '../contexts/useAuth';
 import { useDeposit, useWithdraw } from '../hooks/useDugongTransactions';
@@ -29,6 +30,7 @@ import {
   type PaginatedTransactionsResponse,
   type TokenBalance,
 } from '../utils/api';
+import { AccountMenu } from '../components/Header';
 
 type DashboardTab = 'overview' | 'activity';
 type ModalMode = 'select' | 'tokens';
@@ -36,10 +38,12 @@ type ModalMode = 'select' | 'tokens';
 export const Dashboard: React.FC = () => {
   useDocumentTitle('Dashboard');
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { tab } = useParams<{ tab?: string }>();
   const { user } = useAuth();
   const currentAccount = useCurrentAccount();
 
-  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
+  const activeTab: DashboardTab = tab === 'overview' ? 'overview' : 'activity';
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 5;
@@ -58,7 +62,6 @@ export const Dashboard: React.FC = () => {
 
   const [showLinkWalletModal, setShowLinkWalletModal] = useState(false);
   const [linkWalletSuccess, setLinkWalletSuccess] = useState<string | null>(null);
-  const [hideWalletConnectedBanner, setHideWalletConnectedBanner] = useState(false);
 
   const depositMutation = useDeposit();
   const withdrawMutation = useWithdraw();
@@ -175,11 +178,11 @@ export const Dashboard: React.FC = () => {
   const getTxColor = (type: string) => {
     switch (type) {
       case 'deposit':
-        return 'text-cyber-green bg-cyber-green/20';
+        return 'text-black bg-lime-200';
       case 'withdraw':
-        return 'text-red-400 bg-red-500/20';
+        return 'text-black bg-white';
       default:
-        return 'text-sui-400 bg-sui-500/20';
+        return 'text-black bg-cyan-200';
     }
   };
 
@@ -197,121 +200,149 @@ export const Dashboard: React.FC = () => {
   };
 
   const canMoveFunds = !!suiObjectId && !!currentAccount && !!isWalletMatched;
+  const balances = balanceData?.balances ?? [];
+  const primaryBalance =
+    balances.find((token) => token.symbol.toUpperCase() === 'SUI') ?? balances[0] ?? null;
+  const displayedBalance = {
+    amount: primaryBalance?.balance_formatted ?? '0',
+    symbol: primaryBalance?.symbol ?? 'SUI',
+  };
+  const detailItems = [
+    { label: 'X User ID', value: user?.twitterUserId || 'Unknown', copyable: !!user?.twitterUserId },
+    { label: 'X Handle', value: `@${user?.twitterHandle || 'Unknown'}`, copyable: false },
+    { label: 'Sui Object ID', value: suiObjectId || 'No Dugong account', copyable: !!suiObjectId, mono: true },
+    { label: 'Linked Wallet', value: user?.linkedWalletAddress || 'Not linked', copyable: !!user?.linkedWalletAddress, mono: true },
+  ];
+  const detailColors = ['bg-yellow-200', 'bg-lime-200', 'bg-cyan-200', 'bg-white'];
+  const fundButtonClass =
+    'flex min-h-[56px] items-center justify-center gap-2 rounded-lg border-4 border-black px-5 text-base font-black lowercase text-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-lg disabled:cursor-not-allowed disabled:border-gray-500 disabled:bg-gray-300 disabled:text-gray-600 disabled:opacity-70 disabled:shadow-none disabled:hover:translate-x-0 disabled:hover:translate-y-0';
 
   return (
-    <div className="min-h-screen">
-      <Header />
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {!suiObjectId && user && (
-          <div className="glass rounded-xl p-4 mb-6 border-yellow-500/30 bg-yellow-500/10">
-            <p className="text-yellow-300">
-              No Dugong account found. Create one by mentioning @dugong on X.
-            </p>
+    <div className="neo-page min-h-screen text-black">
+      <main className="mx-auto flex min-h-screen w-full items-center justify-center px-4 py-5">
+        <div className="relative w-full max-w-[800px] pt-[76px]">
+          <div className="absolute right-0 top-0 z-20">
+            <AccountMenu
+              triggerClassName="flex min-h-16 min-w-[220px] items-center justify-center gap-3 rounded-lg border-4 border-black bg-white px-6 py-3 text-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:bg-cyan-200 hover:shadow-neo-lg"
+              labelClassName="text-base font-black"
+              chevronClassName="h-5 w-5 text-black"
+            />
           </div>
-        )}
 
-        <div className="glass rounded-2xl p-8 mb-8 relative overflow-hidden">
-          <div className="absolute inset-0 bg-sui-gradient opacity-10" />
-          <div className="relative flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
-            <div>
-              <p className="text-sm text-gray-400 mb-2 uppercase tracking-wide">Your Balances</p>
-              {isLoadingBalance ? (
-                <div className="animate-pulse text-gray-400 text-2xl">Loading...</div>
-              ) : (
-                <div className="flex flex-wrap gap-4 mb-4">
-                  {balanceData?.balances && balanceData.balances.length > 0 ? (
-                    balanceData.balances.map((token) => (
-                      <div key={token.coin_type} className="flex items-center gap-3 glass rounded-xl px-4 py-3">
-                        <TokenIcon symbol={token.symbol} size="lg" />
-                        <div>
-                          <p className="text-2xl font-bold text-white">{token.balance_formatted}</p>
-                          <p className="text-sm text-gray-400">{token.symbol}</p>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="flex items-center gap-3 glass rounded-xl px-4 py-3">
-                      <TokenIcon symbol="SUI" size="lg" />
-                      <div>
-                        <p className="text-2xl font-bold text-white">0</p>
-                        <p className="text-sm text-gray-400">SUI</p>
-                      </div>
+          <section className="neo-card-strong mb-4 overflow-hidden rounded-lg bg-cyan-200 p-3 sm:p-4">
+            <div className="grid min-h-[130px] grid-cols-1 gap-4 md:grid-cols-[1fr_190px] md:items-center">
+              <div className="flex min-h-[88px] min-w-0 flex-col justify-center pl-4 sm:pl-7">
+                {isLoadingBalance ? (
+                  <p className="animate-pulse text-3xl font-black text-black">Loading...</p>
+                ) : (
+                  <div className="flex min-w-0 items-center gap-8 sm:gap-10">
+                    <TokenIcon
+                      symbol={displayedBalance.symbol}
+                      size="lg"
+                      framed={false}
+                      className="h-20 w-20"
+                    />
+                    <div className="min-w-0">
+                      <p className="flex min-w-0 items-baseline text-black">
+                        <span
+                          className="max-w-[14ch] truncate text-6xl font-black leading-none sm:text-7xl"
+                          title={displayedBalance.amount}
+                        >
+                          {displayedBalance.amount}
+                        </span>
+                      </p>
                     </div>
-                  )}
-                </div>
-              )}
-              {user && (
-                <p className="text-sm text-gray-500">@{user.twitterHandle || 'Unknown'}</p>
-              )}
-            </div>
+                  </div>
+                )}
+              </div>
 
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowDepositModal(true)}
-                disabled={!canMoveFunds}
-                title={
-                  !isWalletLinked
-                    ? 'Link your wallet first to deposit'
-                    : isWalletMismatched
-                      ? 'Switch to your linked wallet to deposit'
-                      : undefined
-                }
-                className="btn-sui flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:shadow-none disabled:hover:scale-100"
-              >
-                <ArrowDownLeft className="w-4 h-4" />
-                Deposit
-              </button>
-              <button
-                onClick={() => setShowWithdrawModal(true)}
-                disabled={!canMoveFunds}
-                title={
-                  !isWalletLinked
-                    ? 'Link your wallet first to withdraw'
-                    : isWalletMismatched
-                      ? 'Switch to your linked wallet to withdraw'
-                      : undefined
-                }
-                className="btn-glass flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <ArrowUpRight className="w-4 h-4" />
-                Withdraw
-              </button>
+              <div className="flex flex-col gap-2.5">
+                <button
+                  onClick={() => setShowDepositModal(true)}
+                  disabled={!canMoveFunds}
+                  title={
+                    !isWalletLinked
+                      ? 'Link your wallet first to deposit'
+                      : isWalletMismatched
+                        ? 'Switch to your linked wallet to deposit'
+                        : undefined
+                  }
+                  className={`${fundButtonClass} bg-yellow-200 hover:bg-yellow-300`}
+                >
+                  <ArrowDownLeft className="h-5 w-5" />
+                  deposit
+                </button>
+                <button
+                  onClick={() => setShowWithdrawModal(true)}
+                  disabled={!canMoveFunds}
+                  title={
+                    !isWalletLinked
+                      ? 'Link your wallet first to withdraw'
+                      : isWalletMismatched
+                        ? 'Switch to your linked wallet to withdraw'
+                        : undefined
+                  }
+                  className={`${fundButtonClass} bg-white hover:bg-cyan-200`}
+                >
+                  <ArrowUpRight className="h-5 w-5" />
+                  withdraw
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
+          </section>
 
-        <div className="glass rounded-2xl overflow-hidden">
-          <div className="border-b border-white/5">
-            <nav className="flex gap-1 p-2">
+          <section className="relative">
+            <nav
+              className="mb-4 flex gap-2 md:absolute md:left-[var(--tabs-left)] md:top-[112px] md:mb-0 md:flex-col md:gap-2"
+              style={{
+                '--tabs-left': 'clamp(-94px, calc((800px - 100vw) / 2 + 16px), 0px)',
+              } as React.CSSProperties}
+            >
               {(['overview', 'activity'] as const).map((tab) => (
                 <button
                   key={tab}
-                  className={`px-5 py-2.5 rounded-lg font-medium text-sm transition-all ${
+                  className={`flex h-[68px] w-[76px] items-center justify-center rounded-lg border-4 border-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-lg ${
                     activeTab === tab
-                      ? 'bg-white/10 text-white'
-                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                      ? 'bg-yellow-200 text-black'
+                      : 'bg-white text-black hover:bg-cyan-200'
                   }`}
-                  onClick={() => setActiveTab(tab)}
+                  onClick={() => navigate(`/dashboard/${tab}`)}
+                  aria-label={tab === 'overview' ? 'Overview' : 'Activity'}
+                  title={tab === 'overview' ? 'Overview' : 'Activity'}
                 >
-                  {tab === 'overview' ? 'Overview' : 'Activities'}
+                  {tab === 'overview' ? (
+                    <LayoutDashboard className="h-8 w-8" strokeWidth={3} />
+                  ) : (
+                    <Activity className="h-8 w-8" strokeWidth={3} />
+                  )}
                 </button>
               ))}
             </nav>
-          </div>
 
-          <div className="p-6">
+            <div className="neo-card-strong min-h-[370px] rounded-lg bg-white p-4 sm:p-5">
             {activeTab === 'overview' && (
-              <div className="space-y-4">
-                {isWalletMismatched && (
-                  <div className="glass rounded-xl p-4 border-red-500/30 bg-red-500/10">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center">
-                        <Link2 className="w-5 h-5 text-red-400" />
-                      </div>
+              <div className="flex min-h-[250px] flex-col justify-center gap-3">
+                {!suiObjectId && user && (
+                  <div className="rounded-lg border-2 border-black bg-red-200 p-3 shadow-neo-sm">
+                    <div className="flex items-start gap-3">
+                      <Info className="mt-0.5 h-5 w-5 shrink-0 text-black" />
                       <div>
-                        <p className="font-medium text-white">Wallet Mismatch</p>
-                        <p className="text-sm text-gray-400">
+                        <p className="font-black text-black">No Dugong account found</p>
+                        <p className="text-sm font-bold text-gray-700">
+                          Create one by mentioning @dugong on X.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {isWalletMismatched && (
+                  <div className="rounded-lg border-2 border-black bg-red-200 p-3 shadow-neo-sm">
+                    <div className="flex items-start gap-3">
+                      <Info className="mt-0.5 h-5 w-5 shrink-0 text-black" />
+                      <div>
+                        <p className="font-black text-black">Wallet mismatch</p>
+                        <p className="text-sm font-bold text-gray-700">
                           Switch to your linked wallet to deposit or withdraw.
                         </p>
                       </div>
@@ -320,97 +351,73 @@ export const Dashboard: React.FC = () => {
                 )}
 
                 {currentAccount && !isWalletLinked && (
-                  <div className="glass rounded-xl p-4 border-cyber-green/30 bg-cyber-green/5">
-                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-cyber-green/20 flex items-center justify-center">
-                          <Link2 className="w-5 h-5 text-cyber-green" />
-                        </div>
-                        <div>
-                          <p className="font-medium text-white">Link your wallet</p>
-                          <p className="text-sm text-gray-400">Enable deposits and withdrawals from this dApp.</p>
-                        </div>
+                  <button
+                    onClick={() => setShowLinkWalletModal(true)}
+                    className="rounded-lg border-2 border-black bg-yellow-200 px-5 py-3 text-left shadow-neo-sm transition-all hover:-translate-x-px hover:-translate-y-px hover:bg-yellow-300 hover:shadow-neo-md"
+                  >
+                    <span className="block font-black text-black">Link wallet</span>
+                    <span className="mt-1 block text-sm font-bold text-gray-700">
+                      Enable deposits and withdrawals from this dApp.
+                    </span>
+                  </button>
+                )}
+
+                {isWalletMatched && (
+                  <div className="rounded-lg border-2 border-black bg-lime-200 p-3 shadow-neo-sm">
+                    <div className="flex items-start gap-3">
+                      <Check className="mt-0.5 h-5 w-5 shrink-0 text-black" />
+                      <div>
+                        <p className="font-black text-black">Wallet connected</p>
+                        <p className="text-sm font-bold text-gray-700">Your linked wallet is connected.</p>
                       </div>
-                      <button
-                        onClick={() => setShowLinkWalletModal(true)}
-                        className="px-4 py-2 bg-cyber-green/20 text-cyber-green font-medium rounded-lg hover:bg-cyber-green/30 transition-all text-sm"
-                      >
-                        Link Now
-                      </button>
                     </div>
                   </div>
                 )}
 
-                {isWalletMatched && !hideWalletConnectedBanner && (
-                  <div className="glass rounded-xl p-4 border-cyber-green/30 bg-cyber-green/5">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-cyber-green/20 flex items-center justify-center">
-                          <Check className="w-5 h-5 text-cyber-green" />
-                        </div>
-                        <div>
-                          <p className="font-medium text-white">Wallet Connected</p>
-                          <p className="text-sm text-gray-400">Your linked wallet is connected.</p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => setHideWalletConnectedBanner(true)}
-                        className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
-                      >
-                        <X className="w-4 h-4 text-gray-400" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {[
-                    { label: 'X User ID', value: user?.twitterUserId || 'Unknown', copyable: !!user?.twitterUserId },
-                    { label: 'X Handle', value: `@${user?.twitterHandle || 'Unknown'}`, copyable: false },
-                    { label: 'Sui Object ID', value: suiObjectId || 'No Dugong account', copyable: !!suiObjectId, mono: true },
-                    { label: 'Linked Wallet', value: user?.linkedWalletAddress || 'Not linked', copyable: !!user?.linkedWalletAddress, mono: true },
-                  ].map((item) => (
-                    <div key={item.label} className="glass-subtle rounded-xl p-4">
-                      <p className="text-sm text-gray-500 mb-1">{item.label}</p>
-                      <div className="flex items-center justify-between gap-2">
-                        <p className={`text-white ${item.mono ? 'font-mono text-sm break-all' : ''}`}>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {detailItems.map((item, index) => (
+                    <button
+                      key={item.label}
+                      onClick={() => item.copyable && copyToClipboard(item.value, item.label)}
+                      disabled={!item.copyable}
+                      className={`min-h-[82px] rounded-lg border-2 border-black px-5 py-3 text-left text-black shadow-neo-sm transition-all enabled:hover:-translate-x-px enabled:hover:-translate-y-px enabled:hover:shadow-neo-md disabled:cursor-default ${detailColors[index % detailColors.length]}`}
+                    >
+                      <span className="mb-2 flex items-center justify-between gap-3">
+                        <span className="block text-xs font-black uppercase text-gray-700">
+                          {item.label}
+                        </span>
+                        {item.copyable && (
+                          copiedField === item.label ? (
+                            <Check className="h-4 w-4 shrink-0 text-black" />
+                          ) : (
+                            <Copy className="h-4 w-4 shrink-0 text-black" />
+                          )
+                        )}
+                      </span>
+                      <span className={`block text-sm font-black text-black ${item.mono ? 'break-all font-mono' : ''}`}>
                           {item.mono && item.value.length > 24
                             ? `${item.value.slice(0, 16)}...${item.value.slice(-8)}`
                             : item.value}
-                        </p>
-                        {item.copyable && (
-                          <button
-                            onClick={() => copyToClipboard(item.value, item.label)}
-                            className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
-                          >
-                            {copiedField === item.label ? (
-                              <Check className="w-4 h-4 text-cyber-green" />
-                            ) : (
-                              <Copy className="w-4 h-4 text-gray-400" />
-                            )}
-                          </button>
-                        )}
-                      </div>
-                    </div>
+                      </span>
+                      {item.copyable && copiedField === item.label && (
+                        <span className="mt-2 block text-xs font-black uppercase text-black">Copied</span>
+                      )}
+                    </button>
                   ))}
                 </div>
               </div>
             )}
 
             {activeTab === 'activity' && (
-              <div>
+              <div className="flex min-h-[290px] flex-col justify-start">
                 {isLoadingTxns ? (
                   <div className="text-center py-12">
-                    <div className="w-8 h-8 border-2 border-sui-500/30 border-t-sui-500 rounded-full animate-spin mx-auto mb-4" />
-                    <p className="text-gray-400">Loading activities...</p>
+                    <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-black border-t-transparent" />
+                    <p className="font-bold text-black">Loading activities...</p>
                   </div>
                 ) : transactions.length === 0 ? (
                   <div className="text-center py-12">
-                    <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-white/5 flex items-center justify-center">
-                      <ArrowLeftRight className="w-8 h-8 text-gray-500" />
-                    </div>
-                    <p className="text-gray-400">No activities yet</p>
-                    <p className="text-sm text-gray-500 mt-2">Your token activity history will appear here</p>
+                    <p className="font-black text-black">No activities yet</p>
                   </div>
                 ) : (
                   <>
@@ -418,19 +425,19 @@ export const Dashboard: React.FC = () => {
                       {transactions.map((tx) => (
                         <div
                           key={tx.tx_digest}
-                          className="flex items-center justify-between p-4 glass-subtle rounded-xl hover:bg-white/5 transition-all"
+                          className={`flex items-center justify-between rounded-lg border-2 border-black p-4 shadow-neo-sm ${getTxColor(tx.tx_type)}`}
                         >
                           <div className="flex items-center gap-4">
-                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${getTxColor(tx.tx_type)}`}>
+                            <div className="flex h-10 w-10 items-center justify-center rounded-md border-2 border-black bg-white shadow-neo-sm">
                               {getTxIcon(tx.tx_type)}
                             </div>
                             <div>
-                              <p className="font-medium text-white">{formatTxLabel(tx.tx_type)}</p>
+                              <p className="font-black text-black">{formatTxLabel(tx.tx_type)}</p>
                               <a
                                 href={getExplorerUrl(tx.tx_digest)}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-sm text-sui-400 hover:text-sui-300 font-mono flex items-center gap-1"
+                                className="flex items-center gap-1 font-mono text-sm font-bold text-gray-700 hover:text-black"
                               >
                                 {shortenDigest(tx.tx_digest)}
                                 <ExternalLink className="w-3 h-3" />
@@ -438,39 +445,33 @@ export const Dashboard: React.FC = () => {
                             </div>
                           </div>
                           <div className="text-right">
-                            <p className={`font-semibold ${
-                              tx.tx_type === 'deposit'
-                                ? 'text-cyber-green'
-                                : tx.tx_type === 'withdraw'
-                                  ? 'text-red-400'
-                                  : 'text-white'
-                            }`}>
+                            <p className="font-black text-black">
                               {tx.tx_type === 'deposit' ? '+' : tx.tx_type === 'withdraw' ? '-' : ''}
                               {tx.amount} {tx.coin_type.split('::').pop() || 'SUI'}
                             </p>
-                            <p className="text-sm text-gray-500">{formatTimestamp(tx.timestamp)}</p>
+                            <p className="text-sm font-bold text-gray-700">{formatTimestamp(tx.timestamp)}</p>
                           </div>
                         </div>
                       ))}
                     </div>
 
                     {(transactionsData?.total ?? 0) > itemsPerPage && (
-                      <div className="flex items-center justify-between mt-6 pt-4 border-t border-white/5">
-                        <p className="text-sm text-gray-500">
+                      <div className="mt-6 flex items-center justify-between border-t-2 border-black pt-4">
+                        <p className="text-sm font-bold text-gray-700">
                           Page {currentPage} of {transactionsData?.total_pages ?? 1}
                         </p>
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
                             disabled={currentPage === 1}
-                            className="btn-glass text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="rounded-lg border-2 border-black bg-white px-4 py-2 text-sm font-black text-black shadow-neo-sm transition-colors hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             Previous
                           </button>
                           <button
                             onClick={() => setCurrentPage((page) => page + 1)}
                             disabled={currentPage >= (transactionsData?.total_pages ?? 1)}
-                            className="btn-glass text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="rounded-lg border-2 border-black bg-white px-4 py-2 text-sm font-black text-black shadow-neo-sm transition-colors hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             Next
                           </button>
@@ -481,34 +482,35 @@ export const Dashboard: React.FC = () => {
                 )}
               </div>
             )}
-          </div>
+            </div>
+          </section>
         </div>
       </main>
 
       {showDepositModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100]">
-          <div className="glass-strong rounded-2xl p-6 w-full max-w-2xl mx-4">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4">
+          <div className="glass-strong w-full max-w-2xl p-6">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-white">
+              <h3 className="hero-font text-3xl font-black text-black">
                 {depositType === 'select' ? 'Deposit' : 'Deposit Tokens'}
               </h3>
-              <button onClick={resetDepositModal} className="p-2 rounded-lg hover:bg-white/10 transition-colors">
-                <X className="w-5 h-5 text-gray-400" />
+              <button onClick={resetDepositModal} className="rounded-md border-2 border-black bg-white p-2 shadow-neo-sm transition-colors hover:bg-cyan-200">
+                <X className="w-5 h-5 text-black" />
               </button>
             </div>
 
             {depositType === 'select' ? (
               <button
                 onClick={() => setDepositType('tokens')}
-                className="w-full glass glass-hover rounded-xl p-4 text-left"
+                className="glass glass-hover w-full p-4 text-left"
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-sui-500/20 flex items-center justify-center">
-                    <ArrowDownLeft className="w-6 h-6 text-sui-400" />
+                  <div className="neo-icon-tile h-12 w-12 bg-lime-200">
+                    <ArrowDownLeft className="w-6 h-6 text-black" />
                   </div>
                   <div>
-                    <h4 className="font-semibold text-white">Tokens</h4>
-                    <p className="text-sm text-gray-400">Deposit SUI or other tokens</p>
+                    <h4 className="font-black text-black">Tokens</h4>
+                    <p className="text-sm font-bold text-gray-600">Deposit SUI or other tokens</p>
                   </div>
                 </div>
               </button>
@@ -538,7 +540,7 @@ export const Dashboard: React.FC = () => {
                 )}
 
                 {depositMutation.error && (
-                  <p className="text-red-400 text-sm">
+                  <p className="text-sm font-bold text-black">
                     {depositMutation.error instanceof Error ? depositMutation.error.message : 'Deposit failed'}
                   </p>
                 )}
@@ -561,29 +563,29 @@ export const Dashboard: React.FC = () => {
       )}
 
       {showWithdrawModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100]">
-          <div className="glass-strong rounded-2xl p-6 w-full max-w-2xl mx-4">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4">
+          <div className="glass-strong w-full max-w-2xl p-6">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-white">
+              <h3 className="hero-font text-3xl font-black text-black">
                 {withdrawType === 'select' ? 'Withdraw' : 'Withdraw Tokens'}
               </h3>
-              <button onClick={resetWithdrawModal} className="p-2 rounded-lg hover:bg-white/10 transition-colors">
-                <X className="w-5 h-5 text-gray-400" />
+              <button onClick={resetWithdrawModal} className="rounded-md border-2 border-black bg-white p-2 shadow-neo-sm transition-colors hover:bg-cyan-200">
+                <X className="w-5 h-5 text-black" />
               </button>
             </div>
 
             {withdrawType === 'select' ? (
               <button
                 onClick={() => setWithdrawType('tokens')}
-                className="w-full glass glass-hover rounded-xl p-4 text-left"
+                className="glass glass-hover w-full p-4 text-left"
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-sui-500/20 flex items-center justify-center">
-                    <ArrowUpRight className="w-6 h-6 text-sui-400" />
+                  <div className="neo-icon-tile h-12 w-12 bg-white">
+                    <ArrowUpRight className="w-6 h-6 text-black" />
                   </div>
                   <div>
-                    <h4 className="font-semibold text-white">Tokens</h4>
-                    <p className="text-sm text-gray-400">Withdraw SUI or other tokens</p>
+                    <h4 className="font-black text-black">Tokens</h4>
+                    <p className="text-sm font-bold text-gray-600">Withdraw SUI or other tokens</p>
                   </div>
                 </div>
               </button>
@@ -612,7 +614,7 @@ export const Dashboard: React.FC = () => {
                 )}
 
                 {withdrawMutation.error && (
-                  <p className="text-red-400 text-sm">
+                  <p className="text-sm font-bold text-black">
                     {withdrawMutation.error instanceof Error ? withdrawMutation.error.message : 'Withdraw failed'}
                   </p>
                 )}
@@ -635,36 +637,36 @@ export const Dashboard: React.FC = () => {
       )}
 
       {showLinkWalletModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100]">
-          <div className="glass-strong rounded-2xl p-6 w-full max-w-md mx-4">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4">
+          <div className="glass-strong w-full max-w-md p-6">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-white">Link Sui Wallet</h3>
+              <h3 className="hero-font text-3xl font-black text-black">Link Sui Wallet</h3>
               <button
                 onClick={() => {
                   setShowLinkWalletModal(false);
                   setLinkWalletSuccess(null);
                 }}
-                className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+                className="rounded-md border-2 border-black bg-white p-2 shadow-neo-sm transition-colors hover:bg-cyan-200"
               >
-                <X className="w-5 h-5 text-gray-400" />
+                <X className="w-5 h-5 text-black" />
               </button>
             </div>
             <div className="space-y-4">
               <InfoPanel label="X Account" value={`@${user?.twitterHandle || 'Unknown'}`} />
               <InfoPanel label="Wallet Address" value={currentAccount?.address || 'Not connected'} mono />
-              <p className="text-sm text-gray-400">
+              <p className="text-sm font-bold text-gray-700">
                 Link through the dApp by signing a message with your wallet.
               </p>
-              {linkError && <p className="text-red-400 text-sm">{linkError}</p>}
+              {linkError && <p className="text-sm font-bold text-black">{linkError}</p>}
               {linkWalletSuccess && (
-                <div className="glass-subtle rounded-xl p-4 border-cyber-green/30 bg-cyber-green/10">
-                  <p className="text-cyber-green text-sm font-medium">Wallet linked successfully!</p>
+                <div className="glass-subtle bg-lime-200 p-4">
+                  <p className="text-sm font-black text-black">Wallet linked successfully!</p>
                   {linkWalletSuccess !== 'Wallet linked successfully!' && (
                     <a
                       href={getExplorerUrl(linkWalletSuccess)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-cyber-green/80 text-sm hover:text-cyber-green flex items-center gap-1 mt-1"
+                      className="mt-1 flex items-center gap-1 text-sm font-bold text-gray-700 hover:text-black"
                     >
                       View transaction
                       <ExternalLink className="w-3 h-3" />
@@ -686,7 +688,7 @@ export const Dashboard: React.FC = () => {
                   <button
                     onClick={handleLinkWallet}
                     disabled={isLinking || !currentAccount?.address}
-                    className="flex-1 px-5 py-2.5 bg-cyber-green/20 text-cyber-green font-medium rounded-xl hover:bg-cyber-green/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="btn-sui flex-1 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {isLinking ? 'Linking' : 'Link Wallet'}
                   </button>
@@ -718,31 +720,31 @@ const TokenSelector: React.FC<TokenSelectorProps> = ({
   onSelect,
 }) => (
   <div>
-    <label className="block text-sm font-medium text-gray-400 mb-2">Select Token</label>
+    <label className="mb-2 block text-sm font-black uppercase text-gray-700">Select Token</label>
     <div className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-700 rounded-xl px-4 py-3 flex items-center justify-between"
+        className="flex w-full items-center justify-between rounded-md border-2 border-black bg-white px-4 py-3 shadow-neo-sm"
       >
         {selected ? (
           <TokenOption symbol={selected.symbol} iconUrl={selected.iconUrl} name={`Balance: ${selected.balanceFormatted}`} />
         ) : (
-          <span className="text-gray-500 dark:text-gray-400">Select a token</span>
+          <span className="font-bold text-gray-600">Select a token</span>
         )}
-        <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`h-4 w-4 text-black transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
       {isOpen && (
-        <div className="absolute z-50 w-full mt-2 bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-700 rounded-xl overflow-hidden max-h-60 overflow-y-auto shadow-lg">
+        <div className="absolute z-50 mt-2 max-h-60 w-full overflow-hidden overflow-y-auto rounded-md border-2 border-black bg-white shadow-neo-md">
           {isLoading ? (
-            <div className="p-4 text-center text-gray-500">Loading tokens...</div>
+            <div className="p-4 text-center font-bold text-gray-600">Loading tokens...</div>
           ) : walletCoins.length === 0 ? (
-            <div className="p-4 text-center text-gray-500">No tokens in wallet</div>
+            <div className="p-4 text-center font-bold text-gray-600">No tokens in wallet</div>
           ) : (
             walletCoins.map((coin) => (
               <button
                 key={coin.coinType}
                 onClick={() => onSelect(coin)}
-                className="w-full p-3 flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-white/10 transition-colors"
+                className="flex w-full items-center gap-3 border-b-2 border-black p-3 transition-colors last:border-b-0 hover:bg-cyan-200"
               >
                 <TokenOption
                   symbol={coin.symbol}
@@ -775,29 +777,29 @@ const BalanceSelector: React.FC<BalanceSelectorProps> = ({
   onSelect,
 }) => (
   <div>
-    <label className="block text-sm font-medium text-gray-400 mb-2">Select Token</label>
+    <label className="mb-2 block text-sm font-black uppercase text-gray-700">Select Token</label>
     <div className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-700 rounded-xl px-4 py-3 flex items-center justify-between"
+        className="flex w-full items-center justify-between rounded-md border-2 border-black bg-white px-4 py-3 shadow-neo-sm"
       >
         {selected ? (
           <TokenOption symbol={selected.symbol} name={`Balance: ${selected.balance_formatted}`} />
         ) : (
-          <span className="text-gray-500 dark:text-gray-400">Select a token</span>
+          <span className="font-bold text-gray-600">Select a token</span>
         )}
-        <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`h-4 w-4 text-black transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
       {isOpen && (
-        <div className="absolute z-50 w-full mt-2 bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-700 rounded-xl overflow-hidden max-h-60 overflow-y-auto shadow-lg">
+        <div className="absolute z-50 mt-2 max-h-60 w-full overflow-hidden overflow-y-auto rounded-md border-2 border-black bg-white shadow-neo-md">
           {balances.length === 0 ? (
-            <div className="p-4 text-center text-gray-500">No tokens in Dugong</div>
+            <div className="p-4 text-center font-bold text-gray-600">No tokens in Dugong</div>
           ) : (
             balances.map((token) => (
               <button
                 key={token.coin_type}
                 onClick={() => onSelect(token)}
-                className="w-full p-3 flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-white/10 transition-colors"
+                className="flex w-full items-center gap-3 border-b-2 border-black p-3 transition-colors last:border-b-0 hover:bg-cyan-200"
               >
                 <TokenOption symbol={token.symbol} name={token.balance_formatted} />
               </button>
@@ -821,10 +823,10 @@ const TokenOption: React.FC<TokenOptionProps> = ({ symbol, name, iconUrl, hasUnk
     <TokenIcon symbol={symbol} iconUrl={iconUrl || undefined} size="sm" />
     <div>
       <div className="flex items-center gap-1.5">
-        <p className="text-gray-900 dark:text-white font-medium">{symbol}</p>
-        {hasUnknownDecimals && <Info className="w-3.5 h-3.5 text-yellow-500" />}
+        <p className="font-black text-black">{symbol}</p>
+        {hasUnknownDecimals && <Info className="w-3.5 h-3.5 text-gray-400" />}
       </div>
-      <p className="text-gray-500 dark:text-gray-400 text-sm">{name}</p>
+      <p className="text-sm font-bold text-gray-600">{name}</p>
     </div>
   </div>
 );
@@ -845,7 +847,7 @@ const AmountInput: React.FC<AmountInputProps> = ({
   available,
 }) => (
   <div>
-    <label className="block text-sm font-medium text-gray-400 mb-2">{label}</label>
+    <label className="mb-2 block text-sm font-black uppercase text-gray-700">{label}</label>
     <div className="relative">
       <input
         type="number"
@@ -859,13 +861,13 @@ const AmountInput: React.FC<AmountInputProps> = ({
       <button
         type="button"
         onClick={() => onChange(maxValue)}
-        className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-xs text-sui-400 hover:text-sui-300 font-medium"
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border-2 border-black bg-yellow-200 px-2 py-1 text-xs font-black text-black shadow-neo-sm hover:bg-yellow-300"
       >
         MAX
       </button>
     </div>
-    <p className="text-sm text-gray-500 mt-2">
-      Available: <span className="text-sui-400">{available}</span>
+    <p className="mt-2 text-sm font-bold text-gray-600">
+      Available: <span className="text-black">{available}</span>
     </p>
   </div>
 );
@@ -900,8 +902,8 @@ interface InfoPanelProps {
 }
 
 const InfoPanel: React.FC<InfoPanelProps> = ({ label, value, mono }) => (
-  <div className="glass-subtle rounded-xl p-4">
-    <p className="text-sm text-gray-500 mb-1">{label}</p>
-    <p className={`${mono ? 'font-mono text-sm break-all' : 'font-medium'} text-white`}>{value}</p>
+  <div className="glass-subtle p-4">
+    <p className="mb-1 text-sm font-black uppercase text-gray-600">{label}</p>
+    <p className={`${mono ? 'font-mono text-sm break-all' : 'font-black'} text-black`}>{value}</p>
   </div>
 );
