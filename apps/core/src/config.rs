@@ -43,6 +43,11 @@ pub struct Config {
     // Enclave
     pub enclave_url: String,
 
+    // Prediction markets
+    pub market_registry_id: String,
+    pub market_treasury_account_id: String,
+    pub market_default_fee_bps: u16,
+
     // Indexer
     pub indexer_poll_interval_ms: u64,
     pub indexer_batch_size: u64,
@@ -106,6 +111,16 @@ impl Config {
             // Enclave
             enclave_url: env::var("ENCLAVE_URL")
                 .unwrap_or_else(|_| "http://localhost:43000".to_string()),
+
+            // Prediction markets
+            market_registry_id: env::var("MARKET_REGISTRY_ID")
+                .unwrap_or_else(|_| "0x0".to_string()),
+            market_treasury_account_id: env::var("MARKET_TREASURY_ACCOUNT_ID")
+                .unwrap_or_else(|_| "0x0".to_string()),
+            market_default_fee_bps: env::var("MARKET_DEFAULT_FEE_BPS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(100), // 1% default
 
             // Indexer
             indexer_poll_interval_ms: env::var("INDEXER_POLL_INTERVAL_MS")

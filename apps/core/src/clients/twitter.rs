@@ -407,6 +407,101 @@ impl TwitterClient {
         Ok(user_response.data)
     }
 
+    /// Reply confirming a market was created with betting instructions
+    pub async fn reply_market_created(
+        &self,
+        tweet_id: &str,
+        question: &str,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let message = format!(
+            "📊 Prediction market created!\n\n\
+            ❓ {}\n\n\
+            To place a bet, reply to this tweet:\n\
+            @DugongWallet bet <amount> <coin> on yes\n\
+            @DugongWallet bet <amount> <coin> on no\n\n\
+            When ready, resolve with:\n\
+            @DugongWallet resolve yes  (or resolve no)\n\n\
+            🔗 https://suiscan.xyz/testnet/tx/{}",
+            question, tx_digest
+        );
+
+        info!(tweet_id = %tweet_id, "Replying with market created message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply confirming a bet was placed
+    pub async fn reply_bet_placed(
+        &self,
+        tweet_id: &str,
+        handle: &str,
+        amount_display: &str,
+        side: bool,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let side_str = if side { "YES" } else { "NO" };
+        let message = format!(
+            "✅ Bet placed, @{}!\n\n\
+            🎲 {} on {}\n\n\
+            Your stake is escrowed — payouts are distributed when the creator resolves the market.\n\n\
+            🔗 https://suiscan.xyz/testnet/tx/{}",
+            handle, amount_display, side_str, tx_digest
+        );
+
+        info!(tweet_id = %tweet_id, handle = %handle, "Replying with bet placed message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply with market resolution payout summary
+    pub async fn reply_market_resolved(
+        &self,
+        tweet_id: &str,
+        outcome: bool,
+        winner_count: usize,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let outcome_str = if outcome { "YES" } else { "NO" };
+        let message = format!(
+            "🏆 Market resolved: {}\n\n\
+            💰 Payouts distributed to {} winner(s)!\n\n\
+            Winnings have been credited to your @DugongWallet accounts.\n\n\
+            🔗 https://suiscan.xyz/testnet/tx/{}",
+            outcome_str, winner_count, tx_digest
+        );
+
+        info!(tweet_id = %tweet_id, outcome = %outcome_str, "Replying with market resolved message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when market is already closed / already resolved
+    pub async fn reply_market_closed(&self, tweet_id: &str, handle: &str) -> Result<String> {
+        let message = format!(
+            "❌ @{} — this market is already closed.\n\n\
+            Bets are only accepted while the market is open.",
+            handle
+        );
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when resolver is not the market creator
+    pub async fn reply_unauthorized_resolve(&self, tweet_id: &str, handle: &str) -> Result<String> {
+        let message = format!(
+            "❌ @{} — only the market creator can resolve this market.",
+            handle
+        );
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when market tweet cannot be found in the registry
+    pub async fn reply_market_not_found(&self, tweet_id: &str, handle: &str) -> Result<String> {
+        let message = format!(
+            "❌ @{} — no prediction market found for this tweet.\n\n\
+            Make sure you are replying directly to the market creation tweet.",
+            handle
+        );
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
     /// Reply to a tweet with error message
     #[allow(dead_code)]
     pub async fn reply_error(&self, tweet_id: &str, error_message: &str) -> Result<String> {

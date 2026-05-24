@@ -8,7 +8,7 @@ use dugong_core::clients::enclave::{CommandType, EnclaveClient, ProcessTweetResp
 use dugong_core::clients::redis_client::RedisClient;
 use dugong_core::clients::twitter::{TransactionResult, TwitterClient};
 use dugong_core::constants::redis;
-use dugong_core::db::models::{DugongAccount, WebhookEvent};
+use dugong_core::db::models::{DugongAccount, Market, MarketBet, WebhookEvent};
 
 use crate::webhook::handler::AppState;
 
@@ -134,6 +134,18 @@ impl ProcessorWorker {
             CommandType::UpdateHandle => {
                 // TODO: Implement handle update handling
                 Err(anyhow!("Handle update not yet implemented"))
+            }
+            CommandType::CreateMarket => {
+                self.handle_create_market(&process_result, &item.tweet_id, &item.event_id)
+                    .await
+            }
+            CommandType::PlaceBet => {
+                self.handle_place_bet(&process_result, &item.tweet_id, &item.event_id)
+                    .await
+            }
+            CommandType::ResolveMarket => {
+                self.handle_resolve_market(&process_result, &item.tweet_id, &item.event_id)
+                    .await
             }
         };
 
@@ -363,6 +375,391 @@ impl ProcessorWorker {
         }
 
         // Status: completed
+        WebhookEvent::set_completed(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to completed")?;
+
+        Ok(())
+    }
+
+    /// Handle create_market command (task 4.2)
+    async fn handle_create_market(
+        &self,
+        response: &ProcessTweetResponse,
+        tweet_id: &str,
+        event_id: &str,
+    ) -> Result<()> {
+        let data = EnclaveClient::parse_create_market_data(response)
+            .context("Failed to parse create market data")?;
+
+        info!(
+            creator_xid = %data.creator_xid,
+            market_tweet_id = %data.market_tweet_id,
+            question = %data.question,
+            "Handling create_market command"
+        );
+
+        WebhookEvent::set_submitting(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to submitting")?;
+
+        let tx_builder =
+            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
+                .await
+                .context("Failed to initialize Sui transaction builder")?;
+
+        let digest = match tx_builder
+            .submit_create_market(
+                &data.creator_xid,
+                &data.market_tweet_id,
+                &data.question,
+                data.fee_bps,
+                response.timestamp_ms,
+                &response.signature,
+            )
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => {
+                WebhookEvent::set_failed(&self.state.db, event_id, &e.to_string())
+                    .await
+                    .context("Failed to set event to failed")?;
+                if let Err(re) = self.twitter.reply_error(tweet_id, &e.to_string()).await {
+                    warn!(error = %re, "Failed to reply with error for create_market");
+                }
+                return Err(e).context("Failed to submit create_market transaction");
+            }
+        };
+
+        info!(tx_digest = %digest, "create_market transaction submitted");
+
+        WebhookEvent::set_replying(&self.state.db, event_id, &digest)
+            .await
+            .context("Failed to set event to replying")?;
+
+        if let Err(e) = self
+            .twitter
+            .reply_market_created(tweet_id, &data.question, &digest)
+            .await
+        {
+            warn!(error = %e, "Failed to reply market_created");
+        }
+
+        WebhookEvent::set_completed(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to completed")?;
+
+        Ok(())
+    }
+
+    /// Handle place_bet command (task 4.3)
+    async fn handle_place_bet(
+        &self,
+        response: &ProcessTweetResponse,
+        tweet_id: &str,
+        event_id: &str,
+    ) -> Result<()> {
+        let data = EnclaveClient::parse_place_bet_data(response)
+            .context("Failed to parse place bet data")?;
+
+        info!(
+            better_xid = %data.better_xid,
+            market_tweet_id = %data.market_tweet_id,
+            side = data.side,
+            amount = data.amount,
+            "Handling place_bet command"
+        );
+
+        // Look up market in DB via market_tweet_id
+        let market = match Market::find_by_market_tweet_id(&self.state.db, &data.market_tweet_id)
+            .await
+            .context("Failed to query market")?
+        {
+            Some(m) => m,
+            None => {
+                WebhookEvent::set_failed(&self.state.db, event_id, "Market not found")
+                    .await
+                    .context("Failed to set event to failed")?;
+                if let Err(e) = self
+                    .twitter
+                    .reply_market_not_found(tweet_id, &data.better_handle)
+                    .await
+                {
+                    warn!(error = %e, "Failed to reply market_not_found");
+                }
+                return Ok(());
+            }
+        };
+
+        if market.status != "open" {
+            WebhookEvent::set_failed(&self.state.db, event_id, "Market is closed")
+                .await
+                .context("Failed to set event to failed")?;
+            if let Err(e) = self
+                .twitter
+                .reply_market_closed(tweet_id, &data.better_handle)
+                .await
+            {
+                warn!(error = %e, "Failed to reply market_closed");
+            }
+            return Ok(());
+        }
+
+        // Auto-create better's account if missing
+        if DugongAccount::find_by_x_user_id(&self.state.db, &data.better_xid)
+            .await
+            .context("Failed to check better account")?
+            .is_none()
+        {
+            self.auto_create_recipient_account(&data.better_xid)
+                .await
+                .context("Failed to auto-create better account")?;
+        }
+
+        // Fetch better's account object ID from DB
+        let better_account = DugongAccount::find_by_x_user_id(&self.state.db, &data.better_xid)
+            .await
+            .context("Failed to fetch better account")?
+            .ok_or_else(|| anyhow!("Better account missing after auto-create"))?;
+
+        WebhookEvent::set_submitting(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to submitting")?;
+
+        let tx_builder =
+            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
+                .await
+                .context("Failed to initialize Sui transaction builder")?;
+
+        let digest = match tx_builder
+            .submit_place_bet(
+                &market.sui_object_id,
+                &better_account.sui_object_id,
+                data.amount,
+                data.side,
+                &data.bet_tweet_id,
+                &data.coin_type,
+                response.timestamp_ms,
+                &response.signature,
+            )
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => {
+                WebhookEvent::set_failed(&self.state.db, event_id, &e.to_string())
+                    .await
+                    .context("Failed to set event to failed")?;
+                if let Err(re) = self.twitter.reply_error(tweet_id, &e.to_string()).await {
+                    warn!(error = %re, "Failed to reply with place_bet error");
+                }
+                return Err(e).context("Failed to submit place_bet transaction");
+            }
+        };
+
+        info!(tx_digest = %digest, "place_bet transaction submitted");
+
+        // Record bet in DB
+        let decimals: u32 = match data.coin_type.to_uppercase().as_str() {
+            c if c.contains("usdc") => 6,
+            _ => 9,
+        };
+        let amount_display = format!(
+            "{:.prec$} {}",
+            data.amount as f64 / 10_u64.pow(decimals) as f64,
+            data.coin_type.split("::").last().unwrap_or(&data.coin_type),
+            prec = decimals as usize
+        )
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string();
+
+        if let Err(e) = MarketBet::upsert(
+            &self.state.db,
+            &data.market_tweet_id,
+            &data.bet_tweet_id,
+            &data.better_xid,
+            data.side,
+            &data.coin_type,
+            data.amount as i64,
+            Some(&digest),
+        )
+        .await
+        {
+            warn!(error = %e, "Failed to record market bet in DB");
+        }
+
+        WebhookEvent::set_replying(&self.state.db, event_id, &digest)
+            .await
+            .context("Failed to set event to replying")?;
+
+        if let Err(e) = self
+            .twitter
+            .reply_bet_placed(tweet_id, &data.better_handle, &amount_display, data.side, &digest)
+            .await
+        {
+            warn!(error = %e, "Failed to reply bet_placed");
+        }
+
+        WebhookEvent::set_completed(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to completed")?;
+
+        Ok(())
+    }
+
+    /// Handle resolve_market command (task 4.4)
+    async fn handle_resolve_market(
+        &self,
+        response: &ProcessTweetResponse,
+        tweet_id: &str,
+        event_id: &str,
+    ) -> Result<()> {
+        let data = EnclaveClient::parse_resolve_market_data(response)
+            .context("Failed to parse resolve market data")?;
+
+        info!(
+            resolver_xid = %data.resolver_xid,
+            market_tweet_id = %data.market_tweet_id,
+            outcome = data.outcome,
+            "Handling resolve_market command"
+        );
+
+        // Look up market
+        let market = match Market::find_by_market_tweet_id(&self.state.db, &data.market_tweet_id)
+            .await
+            .context("Failed to query market")?
+        {
+            Some(m) => m,
+            None => {
+                WebhookEvent::set_failed(&self.state.db, event_id, "Market not found")
+                    .await
+                    .context("Failed to set event to failed")?;
+                if let Err(e) = self
+                    .twitter
+                    .reply_market_not_found(tweet_id, &data.resolver_handle)
+                    .await
+                {
+                    warn!(error = %e, "Failed to reply market_not_found");
+                }
+                return Ok(());
+            }
+        };
+
+        if market.status != "open" {
+            WebhookEvent::set_failed(&self.state.db, event_id, "Market already resolved")
+                .await
+                .context("Failed to set event to failed")?;
+            if let Err(e) = self
+                .twitter
+                .reply_market_closed(tweet_id, &data.resolver_handle)
+                .await
+            {
+                warn!(error = %e, "Failed to reply market already resolved");
+            }
+            return Ok(());
+        }
+
+        // Authorization: resolver must be the creator
+        if market.creator_xid != data.resolver_xid {
+            WebhookEvent::set_failed(&self.state.db, event_id, "Unauthorized resolver")
+                .await
+                .context("Failed to set event to failed")?;
+            if let Err(e) = self
+                .twitter
+                .reply_unauthorized_resolve(tweet_id, &data.resolver_handle)
+                .await
+            {
+                warn!(error = %e, "Failed to reply unauthorized_resolve");
+            }
+            return Ok(());
+        }
+
+        WebhookEvent::set_submitting(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to submitting")?;
+
+        let tx_builder =
+            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
+                .await
+                .context("Failed to initialize Sui transaction builder")?;
+
+        // Submit resolve_market<T> per distinct coin type that has bets
+        let coin_types = Market::find_bet_coin_types(&self.state.db, &data.market_tweet_id)
+            .await
+            .context("Failed to fetch bet coin types")?;
+
+        let mut last_digest = String::new();
+        for coin_type in &coin_types {
+            let digest = tx_builder
+                .submit_resolve_market(
+                    &market.sui_object_id,
+                    &data.resolver_xid,
+                    data.outcome,
+                    coin_type,
+                    response.timestamp_ms,
+                    &response.signature,
+                )
+                .await
+                .with_context(|| format!("Failed to resolve market for coin {}", coin_type))?;
+
+            info!(tx_digest = %digest, coin_type = %coin_type, "resolve_market submitted");
+            last_digest = digest;
+        }
+
+        // Pay each winner per coin type
+        let winners = Market::find_winners(&self.state.db, &data.market_tweet_id, data.outcome)
+            .await
+            .context("Failed to fetch winners")?;
+
+        let mut winner_count = 0;
+        for (winner_xid, coin_type) in &winners {
+            // Ensure winner has an account
+            if DugongAccount::find_by_x_user_id(&self.state.db, winner_xid)
+                .await
+                .context("Failed to check winner account")?
+                .is_none()
+            {
+                self.auto_create_recipient_account(winner_xid)
+                    .await
+                    .context("Failed to auto-create winner account")?;
+            }
+
+            let winner_account = DugongAccount::find_by_x_user_id(&self.state.db, winner_xid)
+                .await
+                .context("Failed to fetch winner account")?
+                .ok_or_else(|| anyhow!("Winner account missing after auto-create"))?;
+
+            match tx_builder
+                .submit_pay_winner(&market.sui_object_id, &winner_account.sui_object_id, coin_type)
+                .await
+            {
+                Ok(d) => {
+                    info!(tx_digest = %d, winner_xid = %winner_xid, "pay_winner submitted");
+                    winner_count += 1;
+                }
+                Err(e) => {
+                    warn!(error = %e, winner_xid = %winner_xid, "Failed to pay winner");
+                }
+            }
+        }
+
+        // Mark market resolved in DB
+        if let Err(e) = Market::set_resolved(&self.state.db, &data.market_tweet_id, data.outcome).await {
+            warn!(error = %e, "Failed to mark market resolved in DB");
+        }
+
+        WebhookEvent::set_replying(&self.state.db, event_id, &last_digest)
+            .await
+            .context("Failed to set event to replying")?;
+
+        if let Err(e) = self
+            .twitter
+            .reply_market_resolved(tweet_id, data.outcome, winner_count, &last_digest)
+            .await
+        {
+            warn!(error = %e, "Failed to reply market_resolved");
+        }
+
         WebhookEvent::set_completed(&self.state.db, event_id)
             .await
             .context("Failed to set event to completed")?;

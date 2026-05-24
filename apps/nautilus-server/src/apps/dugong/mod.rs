@@ -136,6 +136,34 @@ pub struct UpdateHandlePayload {
     pub new_handle: Vec<u8>, // New Twitter handle as bytes
 }
 
+/// Create market payload — must match CreateMarketPayload in core.move
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CreateMarketPayload {
+    pub creator_xid: Vec<u8>,
+    pub market_tweet_id: Vec<u8>,
+    pub question: Vec<u8>,
+    pub fee_bps: u16,
+}
+
+/// Place bet payload — must match PlaceBetPayload in core.move
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PlaceBetPayload {
+    pub better_xid: Vec<u8>,
+    pub market_tweet_id: Vec<u8>,
+    pub bet_tweet_id: Vec<u8>,
+    pub amount: u64,
+    pub coin_type: Vec<u8>,
+    pub side: bool,
+}
+
+/// Resolve market payload — must match ResolveMarketPayload in core.move
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResolveMarketPayload {
+    pub resolver_xid: Vec<u8>,
+    pub market_tweet_id: Vec<u8>,
+    pub outcome: bool,
+}
+
 // ============================================================================
 // UNIFIED /process_tweet ENDPOINT - NEW SIMPLIFIED ARCHITECTURE
 // ============================================================================
@@ -147,6 +175,9 @@ pub enum CommandType {
     CreateAccount,
     Transfer,
     UpdateHandle,
+    CreateMarket,
+    PlaceBet,
+    ResolveMarket,
 }
 
 /// Common tweet metadata included in all responses
@@ -175,6 +206,37 @@ pub struct TransferData {
     pub coin_type: String,
 }
 
+/// Data for create_market command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateMarketData {
+    pub creator_xid: String,
+    pub creator_handle: String,
+    pub market_tweet_id: String,
+    pub question: String,
+    pub fee_bps: u16,
+}
+
+/// Data for place_bet command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaceBetData {
+    pub better_xid: String,
+    pub better_handle: String,
+    pub market_tweet_id: String,
+    pub bet_tweet_id: String,
+    pub amount: u64,
+    pub coin_type: String,
+    pub side: bool, // true = yes, false = no
+}
+
+/// Data for resolve_market command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveMarketData {
+    pub resolver_xid: String,
+    pub resolver_handle: String,
+    pub market_tweet_id: String,
+    pub outcome: bool, // true = yes, false = no
+}
+
 /// Unified response for /process_tweet endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessTweetResponse {
@@ -192,6 +254,9 @@ pub struct ProcessTweetResponse {
 pub enum ProcessTweetData {
     CreateAccount(CreateAccountData),
     Transfer(TransferData),
+    CreateMarket(CreateMarketData),
+    PlaceBet(PlaceBetData),
+    ResolveMarket(ResolveMarketData),
 }
 
 /// Error response for /process_tweet endpoint
@@ -250,6 +315,16 @@ pub async fn process_tweet(
             process_transfer_command(&state, &tweet_data, &receiver_username, current_timestamp)
                 .await
         }
+        ParsedCommand::CreateMarket { question } => {
+            process_create_market_command(&state, &tweet_data, &question, current_timestamp).await
+        }
+        ParsedCommand::PlaceBet { amount, coin_type, side } => {
+            process_place_bet_command(&state, &tweet_data, amount, &coin_type, side, current_timestamp)
+                .await
+        }
+        ParsedCommand::ResolveMarket { outcome } => {
+            process_resolve_market_command(&state, &tweet_data, outcome, current_timestamp).await
+        }
     }
 }
 
@@ -260,6 +335,8 @@ struct TweetData {
     author_handle: String,
     text: String,
     mentions: Vec<TweetMention>,
+    /// Parent tweet ID: in_reply_to_tweet_id, falling back to conversation_id
+    parent_tweet_id: Option<String>,
 }
 
 struct TweetMention {
@@ -272,6 +349,9 @@ struct TweetMention {
 enum ParsedCommand {
     CreateAccount,
     Transfer { receiver_username: String },
+    CreateMarket { question: String },
+    PlaceBet { amount: f64, coin_type: String, side: bool },
+    ResolveMarket { outcome: bool },
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,6 +372,10 @@ struct TweeterTweet {
     author: TweeterUser,
     #[serde(default)]
     entities: Option<TweeterTweetEntities>,
+    #[serde(rename = "inReplyToTweetId", default)]
+    in_reply_to_tweet_id: Option<String>,
+    #[serde(rename = "conversationId", default)]
+    conversation_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -419,6 +503,7 @@ async fn fetch_tweet_data(api_key: &str, tweet_url: &str) -> Result<TweetData, E
         author_handle: tweet.author.user_name,
         text: tweet.text,
         mentions,
+        parent_tweet_id: tweet.in_reply_to_tweet_id.or(tweet.conversation_id),
     })
 }
 
@@ -427,19 +512,64 @@ fn parse_tweet_command_type(
     tweet_text: &str,
     _author_xid: &str,
 ) -> Result<ParsedCommand, EnclaveError> {
-    // Regex patterns for different commands
-    // Create account: @dugong create [account] OR @dugong init [account]
-    let create_account_regex = Regex::new(r"(?i)@\w+\s+(create|init)(\s+account)?")
-        .map_err(|_| EnclaveError::GenericError("Invalid create account regex".to_string()))?;
-
     // Transfer: @dugong send <amount> <coin> to @<receiver>
     let transfer_regex = Regex::new(r"(?i)@\w+\s+send\s+(\d+(?:\.\d+)?)\s+(\w+)\s+to\s+@(\w+)")
         .map_err(|_| EnclaveError::GenericError("Invalid transfer regex".to_string()))?;
 
-    // Check create account
-    if create_account_regex.is_match(tweet_text) {
-        info!("Detected CreateAccount command");
-        return Ok(ParsedCommand::CreateAccount);
+    // Create market: @dugong create market: <question>
+    let create_market_regex = Regex::new(r"(?i)@\w+\s+create\s+market:\s*(.+)")
+        .map_err(|_| EnclaveError::GenericError("Invalid create market regex".to_string()))?;
+
+    // Place bet: @dugong bet <amount> <coin> on|with yes|no
+    let place_bet_regex =
+        Regex::new(r"(?i)@\w+\s+bet\s+(\d+(?:\.\d+)?)\s+(\w+)\s+(?:on|with)\s+(yes|no)")
+            .map_err(|_| EnclaveError::GenericError("Invalid place bet regex".to_string()))?;
+
+    // Resolve market: @dugong resolve|solve yes|no
+    let resolve_market_regex = Regex::new(r"(?i)@\w+\s+(?:resolve|solve)\s+(yes|no)")
+        .map_err(|_| EnclaveError::GenericError("Invalid resolve market regex".to_string()))?;
+
+    // Create account: @dugong create [account] OR @dugong init [account]
+    // Checked last so "create market:" takes precedence over bare "create"
+    let create_account_regex = Regex::new(r"(?i)@\w+\s+(create|init)(\s+account)?")
+        .map_err(|_| EnclaveError::GenericError("Invalid create account regex".to_string()))?;
+
+    // Check create market (before create account so "create market:" wins)
+    if let Some(caps) = create_market_regex.captures(tweet_text) {
+        let question = caps
+            .get(1)
+            .map(|m| m.as_str().trim().to_string())
+            .ok_or_else(|| EnclaveError::GenericError("Failed to extract market question".to_string()))?;
+        info!("Detected CreateMarket command: {}", question);
+        return Ok(ParsedCommand::CreateMarket { question });
+    }
+
+    // Check place bet
+    if let Some(caps) = place_bet_regex.captures(tweet_text) {
+        let amount_str = caps.get(1).map(|m| m.as_str()).unwrap_or("0");
+        let amount: f64 = amount_str
+            .parse()
+            .map_err(|_| EnclaveError::GenericError("Invalid bet amount".to_string()))?;
+        let coin_type = caps
+            .get(2)
+            .map(|m| m.as_str().to_uppercase())
+            .unwrap_or_default();
+        let side = caps
+            .get(3)
+            .map(|m| m.as_str().to_lowercase() == "yes")
+            .unwrap_or(false);
+        info!("Detected PlaceBet command: {} {} side={}", amount, coin_type, side);
+        return Ok(ParsedCommand::PlaceBet { amount, coin_type, side });
+    }
+
+    // Check resolve market
+    if let Some(caps) = resolve_market_regex.captures(tweet_text) {
+        let outcome = caps
+            .get(1)
+            .map(|m| m.as_str().to_lowercase() == "yes")
+            .unwrap_or(false);
+        info!("Detected ResolveMarket command: outcome={}", outcome);
+        return Ok(ParsedCommand::ResolveMarket { outcome });
     }
 
     // Check transfer
@@ -447,14 +577,18 @@ fn parse_tweet_command_type(
         let receiver_username = caps.get(3).map(|m| m.as_str().to_string()).ok_or_else(|| {
             EnclaveError::GenericError("Failed to extract receiver username".to_string())
         })?;
-
         info!("Detected Transfer command to @{}", receiver_username);
         return Ok(ParsedCommand::Transfer { receiver_username });
     }
 
-    // No valid command found
+    // Check create account (bare "create" or "init")
+    if create_account_regex.is_match(tweet_text) {
+        info!("Detected CreateAccount command");
+        return Ok(ParsedCommand::CreateAccount);
+    }
+
     Err(EnclaveError::GenericError(
-        "Could not parse tweet command. Expected formats: '@dugong create account' or '@dugong send <amount> <coin> to @<user>'".to_string()
+        "Could not parse tweet command. Supported: 'create market: <q>', 'bet <amt> <coin> on|with yes|no', 'resolve|solve yes|no', 'send <amt> <coin> to @<user>', 'create account'".to_string()
     ))
 }
 
@@ -595,6 +729,179 @@ async fn process_transfer_command(
     info!(
         "Created ProcessTweetResponse for Transfer: {} {} from @{} to @{}",
         amount_float, coin_type, tweet_data.author_handle, receiver_username
+    );
+
+    Ok(Json(response))
+}
+
+/// Process create market command.
+/// The tweet that issues the command IS the market's anchor tweet, so its ID
+/// becomes `market_tweet_id` in the payload.
+async fn process_create_market_command(
+    state: &Arc<AppState>,
+    tweet_data: &TweetData,
+    question: &str,
+    timestamp_ms: u64,
+) -> Result<Json<ProcessTweetResponse>, EnclaveError> {
+    let market_tweet_id = tweet_data.tweet_id.clone();
+    let fee_bps: u16 = 100; // 1% default fee
+
+    let payload = CreateMarketPayload {
+        creator_xid: tweet_data.author_xid.clone().into_bytes(),
+        market_tweet_id: market_tweet_id.clone().into_bytes(),
+        question: question.as_bytes().to_vec(),
+        fee_bps,
+    };
+
+    let signed = to_signed_response(
+        &state.eph_kp,
+        payload,
+        timestamp_ms,
+        IntentScope::CreateMarket,
+    );
+
+    let response = ProcessTweetResponse {
+        command_type: CommandType::CreateMarket,
+        intent: 5,
+        timestamp_ms,
+        signature: signed.signature,
+        common: TweetCommon {
+            tweet_id: tweet_data.tweet_id.clone(),
+            author_xid: tweet_data.author_xid.clone(),
+            author_handle: tweet_data.author_handle.clone(),
+        },
+        data: ProcessTweetData::CreateMarket(CreateMarketData {
+            creator_xid: tweet_data.author_xid.clone(),
+            creator_handle: tweet_data.author_handle.clone(),
+            market_tweet_id: market_tweet_id.clone(),
+            question: question.to_string(),
+            fee_bps,
+        }),
+    };
+
+    info!(
+        "Created ProcessTweetResponse for CreateMarket: market_tweet_id={}, question={}",
+        market_tweet_id, question
+    );
+
+    Ok(Json(response))
+}
+
+/// Process place bet command.
+/// The bet is a reply to the market tweet; `parent_tweet_id` identifies the market.
+async fn process_place_bet_command(
+    state: &Arc<AppState>,
+    tweet_data: &TweetData,
+    amount_float: f64,
+    coin_type: &str,
+    side: bool,
+    timestamp_ms: u64,
+) -> Result<Json<ProcessTweetResponse>, EnclaveError> {
+    let market_tweet_id = tweet_data
+        .parent_tweet_id
+        .clone()
+        .ok_or_else(|| EnclaveError::GenericError(
+            "Bet tweet must be a reply to the market tweet".to_string(),
+        ))?;
+
+    let decimals = get_coin_decimals(coin_type);
+    let amount = (amount_float * 10_u64.pow(decimals) as f64) as u64;
+    let canonical_coin_type = to_canonical_coin_type(coin_type);
+
+    let payload = PlaceBetPayload {
+        better_xid: tweet_data.author_xid.clone().into_bytes(),
+        market_tweet_id: market_tweet_id.clone().into_bytes(),
+        bet_tweet_id: tweet_data.tweet_id.clone().into_bytes(),
+        amount,
+        coin_type: canonical_coin_type.clone().into_bytes(),
+        side,
+    };
+
+    let signed = to_signed_response(
+        &state.eph_kp,
+        payload,
+        timestamp_ms,
+        IntentScope::PlaceBet,
+    );
+
+    let response = ProcessTweetResponse {
+        command_type: CommandType::PlaceBet,
+        intent: 6,
+        timestamp_ms,
+        signature: signed.signature,
+        common: TweetCommon {
+            tweet_id: tweet_data.tweet_id.clone(),
+            author_xid: tweet_data.author_xid.clone(),
+            author_handle: tweet_data.author_handle.clone(),
+        },
+        data: ProcessTweetData::PlaceBet(PlaceBetData {
+            better_xid: tweet_data.author_xid.clone(),
+            better_handle: tweet_data.author_handle.clone(),
+            market_tweet_id: market_tweet_id.clone(),
+            bet_tweet_id: tweet_data.tweet_id.clone(),
+            amount,
+            coin_type: coin_type.to_string(),
+            side,
+        }),
+    };
+
+    info!(
+        "Created ProcessTweetResponse for PlaceBet: market={}, bet_tweet={}, {} {} side={}",
+        market_tweet_id, tweet_data.tweet_id, amount_float, coin_type, side
+    );
+
+    Ok(Json(response))
+}
+
+/// Process resolve market command.
+/// The resolve is a reply to the market tweet; `parent_tweet_id` identifies the market.
+async fn process_resolve_market_command(
+    state: &Arc<AppState>,
+    tweet_data: &TweetData,
+    outcome: bool,
+    timestamp_ms: u64,
+) -> Result<Json<ProcessTweetResponse>, EnclaveError> {
+    let market_tweet_id = tweet_data
+        .parent_tweet_id
+        .clone()
+        .ok_or_else(|| EnclaveError::GenericError(
+            "Resolve tweet must be a reply to the market tweet".to_string(),
+        ))?;
+
+    let payload = ResolveMarketPayload {
+        resolver_xid: tweet_data.author_xid.clone().into_bytes(),
+        market_tweet_id: market_tweet_id.clone().into_bytes(),
+        outcome,
+    };
+
+    let signed = to_signed_response(
+        &state.eph_kp,
+        payload,
+        timestamp_ms,
+        IntentScope::ResolveMarket,
+    );
+
+    let response = ProcessTweetResponse {
+        command_type: CommandType::ResolveMarket,
+        intent: 7,
+        timestamp_ms,
+        signature: signed.signature,
+        common: TweetCommon {
+            tweet_id: tweet_data.tweet_id.clone(),
+            author_xid: tweet_data.author_xid.clone(),
+            author_handle: tweet_data.author_handle.clone(),
+        },
+        data: ProcessTweetData::ResolveMarket(ResolveMarketData {
+            resolver_xid: tweet_data.author_xid.clone(),
+            resolver_handle: tweet_data.author_handle.clone(),
+            market_tweet_id: market_tweet_id.clone(),
+            outcome,
+        }),
+    };
+
+    info!(
+        "Created ProcessTweetResponse for ResolveMarket: market={}, outcome={}",
+        market_tweet_id, outcome
     );
 
     Ok(Json(response))
@@ -1167,6 +1474,138 @@ mod test {
             serde_json::to_string(&CommandType::Transfer).unwrap(),
             r#""transfer""#
         );
+    }
+
+    #[test]
+    fn test_parse_tweet_command_type_create_market() {
+        let test_cases = vec![
+            ("@DugongWallet create market: BTC over 100K before March?", "BTC over 100K before March?"),
+            ("@dugongwallet CREATE MARKET: Will ETH flip BTC?", "Will ETH flip BTC?"),
+            ("@DugongWallet create market:  leading spaces trimmed  ", "leading spaces trimmed"),
+        ];
+
+        for (tweet, expected_question) in test_cases {
+            let result = parse_tweet_command_type(tweet, "123");
+            assert!(result.is_ok(), "Failed for tweet: {}", tweet);
+            match result.unwrap() {
+                ParsedCommand::CreateMarket { question } => {
+                    assert_eq!(question.trim_end(), expected_question, "Wrong question for: {}", tweet);
+                }
+                other => panic!("Expected CreateMarket, got {:?} for: {}", other, tweet),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_tweet_command_type_place_bet() {
+        let test_cases = vec![
+            ("@DugongWallet bet 5 SUI on yes", 5.0, "SUI", true),
+            ("@DugongWallet bet 10.5 USDC with no", 10.5, "USDC", false),
+            ("@DugongWallet BET 100 WAL ON YES", 100.0, "WAL", true),
+        ];
+
+        for (tweet, expected_amount, expected_coin, expected_side) in test_cases {
+            let result = parse_tweet_command_type(tweet, "123");
+            assert!(result.is_ok(), "Failed for tweet: {}", tweet);
+            match result.unwrap() {
+                ParsedCommand::PlaceBet { amount, coin_type, side } => {
+                    assert!((amount - expected_amount).abs() < 0.001, "Wrong amount for: {}", tweet);
+                    assert_eq!(coin_type, expected_coin, "Wrong coin for: {}", tweet);
+                    assert_eq!(side, expected_side, "Wrong side for: {}", tweet);
+                }
+                other => panic!("Expected PlaceBet, got {:?} for: {}", other, tweet),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_tweet_command_type_resolve_market() {
+        let test_cases = vec![
+            ("@DugongWallet resolve yes", true),
+            ("@DugongWallet resolve no", false),
+            ("@DugongWallet solve yes", true),
+            ("@DugongWallet RESOLVE YES", true),
+        ];
+
+        for (tweet, expected_outcome) in test_cases {
+            let result = parse_tweet_command_type(tweet, "123");
+            assert!(result.is_ok(), "Failed for tweet: {}", tweet);
+            match result.unwrap() {
+                ParsedCommand::ResolveMarket { outcome } => {
+                    assert_eq!(outcome, expected_outcome, "Wrong outcome for: {}", tweet);
+                }
+                other => panic!("Expected ResolveMarket, got {:?} for: {}", other, tweet),
+            }
+        }
+    }
+
+    #[test]
+    fn test_create_market_payload_bcs_roundtrip() {
+        let payload = CreateMarketPayload {
+            creator_xid: b"123456789".to_vec(),
+            market_tweet_id: b"1800000000000000001".to_vec(),
+            question: b"Will BTC hit 100K?".to_vec(),
+            fee_bps: 100,
+        };
+
+        let timestamp = 1744038900000u64;
+        let intent_msg = IntentMessage::new(payload, timestamp, IntentScope::CreateMarket);
+        let bcs_bytes = bcs::to_bytes(&intent_msg).expect("BCS serialize failed");
+        let _roundtrip: IntentMessage<CreateMarketPayload> =
+            bcs::from_bytes(&bcs_bytes).expect("BCS deserialize failed");
+        println!("CreateMarketPayload BCS: {}", Hex::encode(&bcs_bytes));
+    }
+
+    #[test]
+    fn test_place_bet_payload_bcs_roundtrip() {
+        let payload = PlaceBetPayload {
+            better_xid: b"987654321".to_vec(),
+            market_tweet_id: b"1800000000000000001".to_vec(),
+            bet_tweet_id: b"1800000000000000002".to_vec(),
+            amount: 5_000_000_000,
+            coin_type: to_canonical_coin_type("SUI").into_bytes(),
+            side: true,
+        };
+
+        let timestamp = 1744038900000u64;
+        let intent_msg = IntentMessage::new(payload, timestamp, IntentScope::PlaceBet);
+        let bcs_bytes = bcs::to_bytes(&intent_msg).expect("BCS serialize failed");
+        let _roundtrip: IntentMessage<PlaceBetPayload> =
+            bcs::from_bytes(&bcs_bytes).expect("BCS deserialize failed");
+        println!("PlaceBetPayload BCS: {}", Hex::encode(&bcs_bytes));
+    }
+
+    #[test]
+    fn test_resolve_market_payload_bcs_roundtrip() {
+        let payload = ResolveMarketPayload {
+            resolver_xid: b"123456789".to_vec(),
+            market_tweet_id: b"1800000000000000001".to_vec(),
+            outcome: true,
+        };
+
+        let timestamp = 1744038900000u64;
+        let intent_msg = IntentMessage::new(payload, timestamp, IntentScope::ResolveMarket);
+        let bcs_bytes = bcs::to_bytes(&intent_msg).expect("BCS serialize failed");
+        let _roundtrip: IntentMessage<ResolveMarketPayload> =
+            bcs::from_bytes(&bcs_bytes).expect("BCS deserialize failed");
+        println!("ResolveMarketPayload BCS: {}", Hex::encode(&bcs_bytes));
+    }
+
+    #[test]
+    fn test_create_market_not_confused_with_create_account() {
+        // "create market:" must NOT match as CreateAccount
+        let result = parse_tweet_command_type("@DugongWallet create market: Some question", "123");
+        match result.unwrap() {
+            ParsedCommand::CreateMarket { .. } => {}
+            other => panic!("Expected CreateMarket, got {:?}", other),
+        }
+
+        // Bare "create" still resolves to CreateAccount
+        let result = parse_tweet_command_type("@DugongWallet create account", "123");
+        match result.unwrap() {
+            ParsedCommand::CreateAccount => {}
+            other => panic!("Expected CreateAccount, got {:?}", other),
+        }
     }
 
     #[test]

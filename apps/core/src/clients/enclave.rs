@@ -17,6 +17,9 @@ pub enum CommandType {
     CreateAccount,
     Transfer,
     UpdateHandle,
+    CreateMarket,
+    PlaceBet,
+    ResolveMarket,
 }
 
 /// Common tweet metadata
@@ -43,6 +46,37 @@ pub struct TransferData {
     pub to_handle: String,
     pub amount: u64,
     pub coin_type: String,
+}
+
+/// Data for create_market command
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateMarketData {
+    pub creator_xid: String,
+    pub creator_handle: String,
+    pub market_tweet_id: String,
+    pub question: String,
+    pub fee_bps: u16,
+}
+
+/// Data for place_bet command
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlaceBetData {
+    pub better_xid: String,
+    pub better_handle: String,
+    pub market_tweet_id: String,
+    pub bet_tweet_id: String,
+    pub amount: u64,
+    pub coin_type: String,
+    pub side: bool,
+}
+
+/// Data for resolve_market command
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResolveMarketData {
+    pub resolver_xid: String,
+    pub resolver_handle: String,
+    pub market_tweet_id: String,
+    pub outcome: bool,
 }
 
 /// Unified response from /process_tweet endpoint
@@ -132,6 +166,24 @@ impl EnclaveClient {
     pub fn parse_create_account_data(response: &ProcessTweetResponse) -> Result<CreateAccountData> {
         serde_json::from_value(response.data.clone())
             .context("Failed to parse create account data from process_tweet response")
+    }
+
+    /// Parse create market data from ProcessTweetResponse
+    pub fn parse_create_market_data(response: &ProcessTweetResponse) -> Result<CreateMarketData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse create market data from process_tweet response")
+    }
+
+    /// Parse place bet data from ProcessTweetResponse
+    pub fn parse_place_bet_data(response: &ProcessTweetResponse) -> Result<PlaceBetData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse place bet data from process_tweet response")
+    }
+
+    /// Parse resolve market data from ProcessTweetResponse
+    pub fn parse_resolve_market_data(response: &ProcessTweetResponse) -> Result<ResolveMarketData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse resolve market data from process_tweet response")
     }
 
     // ========================================================================

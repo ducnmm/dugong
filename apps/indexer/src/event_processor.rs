@@ -60,6 +60,15 @@ impl EventProcessor {
             "HandleUpdated" => {
                 self.handle_handle_updated(event).await?;
             }
+            "MarketCreated" => {
+                self.handle_market_created(event).await?;
+            }
+            "BetPlaced" => {
+                self.handle_bet_placed(event).await?;
+            }
+            "MarketResolved" => {
+                self.handle_market_resolved(event).await?;
+            }
             _ => {
                 warn!("Unknown event type: {}", event_type);
             }
@@ -96,5 +105,20 @@ impl EventProcessor {
     async fn handle_handle_updated(&self, event: &SuiEvent) -> Result<()> {
         use super::handlers::handle_updated::HandleUpdatedHandler;
         HandleUpdatedHandler::handle(&self.pool, event).await
+    }
+
+    async fn handle_market_created(&self, event: &SuiEvent) -> Result<()> {
+        use super::handlers::market_created::MarketCreatedHandler;
+        MarketCreatedHandler::handle(&self.pool, event).await
+    }
+
+    async fn handle_bet_placed(&self, event: &SuiEvent) -> Result<()> {
+        use super::handlers::bet_placed::BetPlacedHandler;
+        BetPlacedHandler::handle(&self.pool, event).await
+    }
+
+    async fn handle_market_resolved(&self, event: &SuiEvent) -> Result<()> {
+        use super::handlers::market_resolved::MarketResolvedHandler;
+        MarketResolvedHandler::handle(&self.pool, event).await
     }
 }
