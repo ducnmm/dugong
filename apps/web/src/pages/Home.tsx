@@ -5,15 +5,19 @@ import { useAuth } from '../contexts/useAuth';
 import { useXAuth } from '../hooks/useXAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
-const DUGONG_LOGO_SRC = '/android-chrome-192x192.png';
 const HOME_BACKGROUND_SRC = '/dugong-home-background-new.png';
 const HOME_MASCOT_SRC = '/dugong-home-mascot.png';
+const X_DEFAULT_AVATAR_SRC = 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
+
+const getXAvatarUrl = (handle: string) =>
+  `https://unavatar.io/x/${encodeURIComponent(handle.trim().replace(/^@/, ''))}`;
 
 interface AccountSearchResult {
   x_user_id: string;
   x_handle: string;
   sui_object_id: string;
   owner_address?: string;
+  profile_image_url?: string | null;
 }
 
 export const Home: React.FC = () => {
@@ -143,52 +147,28 @@ export const Home: React.FC = () => {
                 {searchResults.map((account) => (
                   <div
                     key={account.x_user_id}
-                    className="flex flex-col gap-5 p-5 transition-colors hover:bg-cyan-200 sm:flex-row sm:items-start sm:justify-between"
+                    className="flex flex-col gap-5 p-5 transition-colors hover:bg-cyan-200 sm:flex-row sm:items-center sm:justify-between"
                   >
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-3 flex items-center gap-3">
-                        <div className="dugong-logo-mark flex h-10 w-10 shrink-0 rounded-md p-1">
-                          <img
-                            src={DUGONG_LOGO_SRC}
-                            alt="Dugong"
-                            className="dugong-logo-img"
-                          />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="truncate text-xl font-black text-black">
-                            @{account.x_handle}
-                          </p>
-                          <p className="text-sm font-bold text-gray-600">
-                            ID: {account.x_user_id}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="space-y-2 sm:pl-[52px]">
-                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
-                          <span className="text-xs font-black uppercase text-gray-600">
-                            Account
-                          </span>
-                          <code className="w-fit max-w-full truncate rounded-md border-2 border-black bg-white px-2 py-1 font-mono text-xs text-black">
-                            {account.sui_object_id.slice(0, 20)}...{account.sui_object_id.slice(-8)}
-                          </code>
-                        </div>
-
-                        {account.owner_address && (
-                          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
-                            <span className="text-xs font-black uppercase text-gray-600">
-                              Owner
-                            </span>
-                            <code className="w-fit max-w-full truncate rounded-md border-2 border-black bg-white px-2 py-1 font-mono text-xs text-black">
-                              {account.owner_address.slice(0, 20)}...{account.owner_address.slice(-8)}
-                            </code>
-                          </div>
-                        )}
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <img
+                        src={account.profile_image_url || getXAvatarUrl(account.x_handle)}
+                        alt={`@${account.x_handle}`}
+                        className="h-11 w-11 shrink-0 rounded-md border-2 border-black bg-white object-cover shadow-neo-sm"
+                        referrerPolicy="no-referrer"
+                        onError={(event) => {
+                          event.currentTarget.onerror = null;
+                          event.currentTarget.src = X_DEFAULT_AVATAR_SRC;
+                        }}
+                      />
+                      <div className="min-w-0">
+                        <p className="truncate text-xl font-black text-black">
+                          @{account.x_handle}
+                        </p>
                       </div>
                     </div>
 
                     <button
-                      onClick={() => navigate(`/account/${account.x_user_id}`)}
+                      onClick={() => navigate(`/account/${account.x_user_id}/dashboard`)}
                       className="btn-glass flex h-11 items-center justify-center gap-2 text-sm sm:w-auto"
                     >
                       View Account

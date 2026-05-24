@@ -102,6 +102,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/account/:sui_object_id/transactions",
             get(crate::api::get_transactions_by_account),
         )
+        .route(
+            "/api/transaction/:tx_digest",
+            get(crate::api::get_transaction_by_digest),
+        )
         .route("/api/accounts/search", get(crate::api::search_accounts))
         .route(
             "/api/accounts/:twitter_user_id",

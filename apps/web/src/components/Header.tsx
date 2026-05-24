@@ -38,6 +38,26 @@ const DugongLogoMark: React.FC<{ size?: 'sm' | 'md' | 'lg'; rounded?: 'full' | '
   );
 };
 
+const WalletIconTile: React.FC<{ icon?: string; name: string }> = ({ icon, name }) => {
+  const [hasError, setHasError] = useState(false);
+
+  return (
+    <span className="wallet-option-icon" aria-hidden="true">
+      {icon && !hasError ? (
+        <img
+          src={icon}
+          alt=""
+          className="wallet-option-icon-img"
+          onError={() => setHasError(true)}
+        />
+      ) : (
+        <Wallet className="h-5 w-5" />
+      )}
+      <span className="sr-only">{name}</span>
+    </span>
+  );
+};
+
 interface AccountMenuProps {
   triggerClassName?: string;
   labelClassName?: string;
@@ -132,7 +152,7 @@ export const AccountMenu: React.FC<AccountMenuProps> = ({
                 </button>
               </>
             ) : (
-              <div className="border-b-2 border-black py-2">
+              <div className="border-b-4 border-black py-2">
                 <p className="account-menu-label px-4 py-2 uppercase tracking-wide">
                   Connect Wallet
                 </p>
@@ -150,13 +170,7 @@ export const AccountMenu: React.FC<AccountMenuProps> = ({
                       }}
                       className="account-menu-action gap-3"
                     >
-                      {wallet.icon && (
-                        <img
-                          src={wallet.icon}
-                          alt={wallet.name}
-                          className="h-6 w-6 rounded-md border-2 border-black bg-white"
-                        />
-                      )}
+                      <WalletIconTile icon={wallet.icon} name={wallet.name} />
                       <span className="text-sm">{wallet.name}</span>
                     </button>
                   ))

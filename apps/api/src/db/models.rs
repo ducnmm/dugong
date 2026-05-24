@@ -449,6 +449,23 @@ pub struct Transfer {
 }
 
 impl Transfer {
+    /// Find a transfer by transaction digest.
+    pub async fn find_by_transaction_digest(
+        pool: &sqlx::PgPool,
+        transaction_digest: &str,
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query_as::<_, Transfer>(
+            r#"
+            SELECT id, transaction_digest, transfer_type, from_xid, to_xid, coin_type, amount, tweet_id, timestamp, created_at
+            FROM transfers
+            WHERE transaction_digest = $1
+            "#,
+        )
+        .bind(transaction_digest)
+        .fetch_optional(pool)
+        .await
+    }
+
     /// Find transfers by x_user_id (either as sender or receiver)
     pub async fn find_by_x_user_id(
         pool: &sqlx::PgPool,

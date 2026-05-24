@@ -9,8 +9,16 @@ import '@mysten/dapp-kit/dist/index.css';
 import './index.css';
 import App from './App.tsx';
 
-// Create a client for React Query
-const queryClient = new QueryClient();
+// Create a client for React Query.
+// Screens fetch when mounted; mutations explicitly invalidate the data they change.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    },
+  },
+});
 
 // Configure Sui network
 const networks = {

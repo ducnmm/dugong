@@ -185,6 +185,8 @@ pub struct TwitterUser {
     pub id: String,
     #[serde(rename = "userName")]
     pub username: String,
+    #[serde(default, rename = "profilePicture")]
+    pub profile_picture: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]
     pub name: String,

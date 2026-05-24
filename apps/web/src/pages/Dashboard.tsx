@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -22,11 +22,10 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useLinkWallet } from '../hooks/useLinkWallet';
 import { useWalletCoins, type WalletCoin } from '../hooks/useWalletCoins';
 import {
-  formatTimestamp,
   getAccountBalance,
+  getAccountByTwitterId,
   getExplorerUrl,
   getTransactionHistory,
-  shortenDigest,
   type PaginatedTransactionsResponse,
   type TokenBalance,
 } from '../utils/api';
@@ -35,14 +34,41 @@ import { AccountMenu } from '../components/Header';
 type DashboardTab = 'overview' | 'activity';
 type ModalMode = 'select' | 'tokens';
 
+const shortenWalletAddress = (address: string, visibleCharsPerSide = 8) => {
+  if (address.length <= visibleCharsPerSide * 2 + 3) return address;
+  return `${address.slice(0, visibleCharsPerSide)}...${address.slice(-visibleCharsPerSide)}`;
+};
+
+const formatRelativeTime = (timestamp: number) => {
+  if (!timestamp) return 'Unknown';
+
+  const normalizedTimestamp = timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - normalizedTimestamp) / 1000));
+
+  if (elapsedSeconds < 45) return 'just now';
+
+  const units = [
+    { label: 'year', seconds: 31_536_000 },
+    { label: 'month', seconds: 2_592_000 },
+    { label: 'week', seconds: 604_800 },
+    { label: 'day', seconds: 86_400 },
+    { label: 'hour', seconds: 3_600 },
+    { label: 'minute', seconds: 60 },
+  ];
+
+  const unit = units.find((item) => elapsedSeconds >= item.seconds) ?? units[units.length - 1];
+  const value = Math.floor(elapsedSeconds / unit.seconds);
+  return `${value} ${unit.label}${value === 1 ? '' : 's'} ago`;
+};
+
 export const Dashboard: React.FC = () => {
-  useDocumentTitle('Dashboard');
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { tab } = useParams<{ tab?: string }>();
+  const { tab, twitter_id: publicTwitterId } = useParams<{ tab?: string; twitter_id?: string }>();
   const { user } = useAuth();
   const currentAccount = useCurrentAccount();
 
+  const isPublicDashboard = !!publicTwitterId;
   const activeTab: DashboardTab = tab === 'overview' ? 'overview' : 'activity';
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -62,28 +88,52 @@ export const Dashboard: React.FC = () => {
 
   const [showLinkWalletModal, setShowLinkWalletModal] = useState(false);
   const [linkWalletSuccess, setLinkWalletSuccess] = useState<string | null>(null);
+  const copyResetTimeoutRef = useRef<number | null>(null);
 
   const depositMutation = useDeposit();
   const withdrawMutation = useWithdraw();
   const { linkWallet, isLinking, error: linkError } = useLinkWallet();
   const { data: walletCoins = [], isLoading: isLoadingWalletCoins } = useWalletCoins();
 
-  const suiObjectId = user?.suiObjectId;
-  const isWalletLinked = !!user?.linkedWalletAddress;
+  const {
+    data: publicAccountData,
+    isLoading: isLoadingPublicAccount,
+    isFetched: hasFetchedPublicAccount,
+  } = useQuery({
+    queryKey: ['public-dugong-account', publicTwitterId],
+    queryFn: () => getAccountByTwitterId(publicTwitterId!),
+    enabled: isPublicDashboard,
+  });
+
+  const publicAccount = publicAccountData?.account ?? null;
+  const viewedTwitterHandle = isPublicDashboard ? publicAccount?.x_handle : user?.twitterHandle;
+  const suiObjectId = isPublicDashboard ? publicAccount?.sui_object_id : user?.suiObjectId;
+  const linkedWalletAddress = isPublicDashboard
+    ? publicAccount?.owner_address ?? null
+    : user?.linkedWalletAddress ?? null;
+  const isWalletLinked = !!linkedWalletAddress;
   const isWalletMatched =
+    !isPublicDashboard &&
     isWalletLinked &&
-    currentAccount?.address?.toLowerCase() === user?.linkedWalletAddress?.toLowerCase();
+    currentAccount?.address?.toLowerCase() === linkedWalletAddress?.toLowerCase();
   const isWalletMismatched =
+    !isPublicDashboard &&
     isWalletLinked &&
     currentAccount?.address &&
-    currentAccount.address.toLowerCase() !== user.linkedWalletAddress?.toLowerCase();
+    currentAccount.address.toLowerCase() !== linkedWalletAddress?.toLowerCase();
+
+  useDocumentTitle(
+    isPublicDashboard
+      ? viewedTwitterHandle
+        ? `@${viewedTwitterHandle} - Dashboard`
+        : 'Dugong Account'
+      : 'Dashboard'
+  );
 
   const { data: balanceData, isLoading: isLoadingBalance } = useQuery({
     queryKey: ['dugong-balance', suiObjectId],
     queryFn: () => getAccountBalance(suiObjectId!),
     enabled: !!suiObjectId,
-    refetchInterval: 1000,
-    staleTime: 0,
   });
 
   const { data: transactionsData, isLoading: isLoadingTxns } =
@@ -91,16 +141,21 @@ export const Dashboard: React.FC = () => {
       queryKey: ['dugong-transactions', suiObjectId, currentPage],
       queryFn: () => getTransactionHistory(suiObjectId!, currentPage, itemsPerPage),
       enabled: !!suiObjectId,
-      refetchInterval: 1000,
-      staleTime: 0,
     });
 
   const transactions = transactionsData?.data ?? [];
 
   const copyToClipboard = async (text: string, field: string) => {
+    if (copyResetTimeoutRef.current) {
+      window.clearTimeout(copyResetTimeoutRef.current);
+    }
+
     await navigator.clipboard.writeText(text);
     setCopiedField(field);
-    window.setTimeout(() => setCopiedField(null), 2000);
+    copyResetTimeoutRef.current = window.setTimeout(() => {
+      setCopiedField(null);
+      copyResetTimeoutRef.current = null;
+    }, 3000);
   };
 
   const resetDepositModal = () => {
@@ -118,6 +173,14 @@ export const Dashboard: React.FC = () => {
     setSelectedWithdrawToken(null);
     setShowWithdrawTokenDropdown(false);
   };
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimeoutRef.current) {
+        window.clearTimeout(copyResetTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleDeposit = async () => {
     if (!suiObjectId || !depositAmount || !selectedDepositToken) return;
@@ -150,7 +213,7 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleLinkWallet = async () => {
-    if (!currentAccount?.address) return;
+    if (isPublicDashboard || !currentAccount?.address) return;
     try {
       setLinkWalletSuccess(null);
       const result = await linkWallet(currentAccount.address);
@@ -199,7 +262,7 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  const canMoveFunds = !!suiObjectId && !!currentAccount && !!isWalletMatched;
+  const canMoveFunds = !isPublicDashboard && !!suiObjectId && !!currentAccount && !!isWalletMatched;
   const balances = balanceData?.balances ?? [];
   const primaryBalance =
     balances.find((token) => token.symbol.toUpperCase() === 'SUI') ?? balances[0] ?? null;
@@ -207,45 +270,135 @@ export const Dashboard: React.FC = () => {
     amount: primaryBalance?.balance_formatted ?? '0',
     symbol: primaryBalance?.symbol ?? 'SUI',
   };
-  const detailItems = [
-    { label: 'X User ID', value: user?.twitterUserId || 'Unknown', copyable: !!user?.twitterUserId },
-    { label: 'X Handle', value: `@${user?.twitterHandle || 'Unknown'}`, copyable: false },
-    { label: 'Sui Object ID', value: suiObjectId || 'No Dugong account', copyable: !!suiObjectId, mono: true },
-    { label: 'Linked Wallet', value: user?.linkedWalletAddress || 'Not linked', copyable: !!user?.linkedWalletAddress, mono: true },
-  ];
-  const detailColors = ['bg-yellow-200', 'bg-lime-200', 'bg-cyan-200', 'bg-white'];
+  const supportedTokenBalances = (['SUI', 'WAL', 'USDC'] as const).map((symbol) => {
+    const token = balances.find((balance) => balance.symbol.toUpperCase() === symbol);
+    return {
+      symbol,
+      amount: token?.balance_formatted ?? '0',
+    };
+  });
+  const linkedWalletLabel = linkedWalletAddress || 'Not linked';
+  const linkedWalletDisplay = linkedWalletAddress
+    ? shortenWalletAddress(linkedWalletAddress, 6)
+    : linkedWalletLabel;
+  const walletStatus = isPublicDashboard
+    ? isWalletLinked
+      ? {
+          desktopText: `Linked wallet: ${linkedWalletDisplay}`,
+          mobileText: linkedWalletDisplay,
+          tone: 'bg-lime-200 hover:bg-lime-300',
+          icon:
+            copiedField === 'Linked Wallet' ? (
+              <Check className="h-5 w-5 text-black" />
+            ) : (
+              <Copy className="h-5 w-5 text-black" />
+            ),
+          isActionable: true,
+        }
+      : {
+          desktopText: 'No linked wallet',
+          mobileText: 'No linked wallet',
+          tone: 'bg-yellow-200 hover:bg-yellow-300',
+          icon: <Info className="h-5 w-5 text-black" />,
+          isActionable: false,
+        }
+    : !isWalletLinked
+      ? {
+          desktopText: 'Link wallet',
+          mobileText: 'Link wallet',
+          tone: 'bg-yellow-200 hover:bg-yellow-300',
+          icon: <ArrowLeftRight className="h-5 w-5 text-black" />,
+          isActionable: !!currentAccount,
+        }
+      : isWalletMatched
+        ? {
+            desktopText: `Signed in with linked wallet: ${linkedWalletDisplay}`,
+            mobileText: linkedWalletDisplay,
+            tone: 'bg-lime-200 hover:bg-lime-300',
+            icon:
+              copiedField === 'Linked Wallet' ? (
+                <Check className="h-5 w-5 text-black" />
+              ) : (
+                <Copy className="h-5 w-5 text-black" />
+              ),
+            isActionable: true,
+          }
+        : {
+            desktopText: `Switch to linked wallet: ${linkedWalletDisplay}`,
+            mobileText: linkedWalletDisplay,
+            tone: 'bg-red-200 hover:bg-red-300',
+            icon:
+              copiedField === 'Linked Wallet' ? (
+                <Check className="h-5 w-5 text-black" />
+              ) : (
+                <Copy className="h-5 w-5 text-black" />
+              ),
+            isActionable: !!linkedWalletAddress,
+          };
   const fundButtonClass =
-    'flex min-h-[56px] items-center justify-center gap-2 rounded-lg border-4 border-black px-5 text-base font-black lowercase text-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-lg disabled:cursor-not-allowed disabled:border-gray-500 disabled:bg-gray-300 disabled:text-gray-600 disabled:opacity-70 disabled:shadow-none disabled:hover:translate-x-0 disabled:hover:translate-y-0';
+    'flex min-h-[56px] w-full items-center justify-center gap-2 rounded-lg border-4 border-black px-4 text-sm font-black lowercase text-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-lg disabled:cursor-not-allowed disabled:border-gray-500 disabled:bg-gray-300 disabled:text-gray-600 disabled:opacity-70 disabled:shadow-none disabled:hover:translate-x-0 disabled:hover:translate-y-0 sm:px-5 sm:text-base';
+
+  if (isPublicDashboard && isLoadingPublicAccount) {
+    return (
+      <div className="neo-page flex items-center justify-center">
+        <div className="h-16 w-16 animate-spin rounded-full border-4 border-black border-t-cyan-300 bg-white shadow-neo-md" />
+      </div>
+    );
+  }
+
+  if (isPublicDashboard && hasFetchedPublicAccount && !publicAccount) {
+    return (
+      <div className="neo-page flex items-center justify-center text-black">
+        <div className="neo-card-strong max-w-md bg-red-200 p-6 text-center">
+          <h2 className="mb-4 text-2xl font-black text-black">Account not found</h2>
+          <button
+            onClick={() => navigate('/')}
+            className="rounded-md border-2 border-black bg-white px-4 py-2 text-sm font-black text-black shadow-neo-sm transition-colors hover:bg-cyan-200"
+          >
+            Back to Search
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="neo-page min-h-screen text-black">
-      <main className="mx-auto flex min-h-screen w-full items-center justify-center px-4 py-5">
-        <div className="relative w-full max-w-[800px] pt-[76px]">
-          <div className="absolute right-0 top-0 z-20">
-            <AccountMenu
-              triggerClassName="flex min-h-16 min-w-[220px] items-center justify-center gap-3 rounded-lg border-4 border-black bg-white px-6 py-3 text-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:bg-cyan-200 hover:shadow-neo-lg"
-              labelClassName="text-base font-black"
-              chevronClassName="h-5 w-5 text-black"
-            />
-          </div>
+    <div className="neo-page text-black">
+      <main className="mx-auto flex h-full min-h-0 w-full items-center justify-center overflow-y-auto px-3 py-4 sm:px-4 sm:py-5">
+        <div className="relative w-full max-w-[800px]">
+          {(!isPublicDashboard || user) && (
+            <div className="mb-4 flex w-full justify-end">
+              <div className="w-full max-w-[320px] sm:w-auto">
+                <AccountMenu
+                  triggerClassName="flex min-h-14 w-full min-w-0 items-center justify-center gap-3 rounded-lg border-4 border-black bg-white px-4 py-3 text-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:bg-cyan-200 hover:shadow-neo-lg sm:min-h-16 sm:min-w-[220px] sm:px-6"
+                  labelClassName="truncate text-base font-black"
+                  chevronClassName="h-5 w-5 shrink-0 text-black"
+                />
+              </div>
+            </div>
+          )}
 
           <section className="neo-card-strong mb-4 overflow-hidden rounded-lg bg-cyan-200 p-3 sm:p-4">
-            <div className="grid min-h-[130px] grid-cols-1 gap-4 md:grid-cols-[1fr_190px] md:items-center">
-              <div className="flex min-h-[88px] min-w-0 flex-col justify-center pl-4 sm:pl-7">
+            <div
+              className={`grid grid-cols-1 gap-4 sm:min-h-[130px] sm:items-center ${
+                isPublicDashboard ? '' : 'sm:grid-cols-[1fr_180px] md:grid-cols-[1fr_190px]'
+              }`}
+            >
+              <div className="flex min-h-[88px] min-w-0 flex-col justify-center pl-1 sm:pl-4 md:pl-7">
                 {isLoadingBalance ? (
                   <p className="animate-pulse text-3xl font-black text-black">Loading...</p>
                 ) : (
-                  <div className="flex min-w-0 items-center gap-8 sm:gap-10">
+                  <div className="flex min-w-0 items-center gap-4 sm:gap-8 md:gap-10">
                     <TokenIcon
                       symbol={displayedBalance.symbol}
                       size="lg"
                       framed={false}
-                      className="h-20 w-20"
+                      className="h-16 w-16 sm:h-20 sm:w-20"
                     />
                     <div className="min-w-0">
                       <p className="flex min-w-0 items-baseline text-black">
                         <span
-                          className="max-w-[14ch] truncate text-6xl font-black leading-none sm:text-7xl"
+                          className="max-w-[12ch] truncate text-5xl font-black leading-none sm:max-w-[14ch] sm:text-6xl md:text-7xl"
                           title={displayedBalance.amount}
                         >
                           {displayedBalance.amount}
@@ -256,44 +409,46 @@ export const Dashboard: React.FC = () => {
                 )}
               </div>
 
-              <div className="flex flex-col gap-2.5">
-                <button
-                  onClick={() => setShowDepositModal(true)}
-                  disabled={!canMoveFunds}
-                  title={
-                    !isWalletLinked
-                      ? 'Link your wallet first to deposit'
-                      : isWalletMismatched
-                        ? 'Switch to your linked wallet to deposit'
-                        : undefined
-                  }
-                  className={`${fundButtonClass} bg-yellow-200 hover:bg-yellow-300`}
-                >
-                  <ArrowDownLeft className="h-5 w-5" />
-                  deposit
-                </button>
-                <button
-                  onClick={() => setShowWithdrawModal(true)}
-                  disabled={!canMoveFunds}
-                  title={
-                    !isWalletLinked
-                      ? 'Link your wallet first to withdraw'
-                      : isWalletMismatched
-                        ? 'Switch to your linked wallet to withdraw'
-                        : undefined
-                  }
-                  className={`${fundButtonClass} bg-white hover:bg-cyan-200`}
-                >
-                  <ArrowUpRight className="h-5 w-5" />
-                  withdraw
-                </button>
-              </div>
+              {!isPublicDashboard && (
+                <div className="flex flex-col gap-2.5">
+                  <button
+                    onClick={() => setShowDepositModal(true)}
+                    disabled={!canMoveFunds}
+                    title={
+                      !isWalletLinked
+                        ? 'Link your wallet first to deposit'
+                        : isWalletMismatched
+                          ? 'Switch to your linked wallet to deposit'
+                          : undefined
+                    }
+                    className={`${fundButtonClass} bg-yellow-200 hover:bg-yellow-300`}
+                  >
+                    <ArrowDownLeft className="h-5 w-5" />
+                    deposit
+                  </button>
+                  <button
+                    onClick={() => setShowWithdrawModal(true)}
+                    disabled={!canMoveFunds}
+                    title={
+                      !isWalletLinked
+                        ? 'Link your wallet first to withdraw'
+                        : isWalletMismatched
+                          ? 'Switch to your linked wallet to withdraw'
+                          : undefined
+                    }
+                    className={`${fundButtonClass} bg-white hover:bg-cyan-200`}
+                  >
+                    <ArrowUpRight className="h-5 w-5" />
+                    withdraw
+                  </button>
+                </div>
+              )}
             </div>
           </section>
 
           <section className="relative">
             <nav
-              className="mb-4 flex gap-2 md:absolute md:left-[var(--tabs-left)] md:top-[112px] md:mb-0 md:flex-col md:gap-2"
+              className="mb-4 flex gap-2 xl:absolute xl:left-[var(--tabs-left)] xl:top-[112px] xl:mb-0 xl:flex-col xl:gap-2"
               style={{
                 '--tabs-left': 'clamp(-94px, calc((800px - 100vw) / 2 + 16px), 0px)',
               } as React.CSSProperties}
@@ -301,12 +456,18 @@ export const Dashboard: React.FC = () => {
               {(['overview', 'activity'] as const).map((tab) => (
                 <button
                   key={tab}
-                  className={`flex h-[68px] w-[76px] items-center justify-center rounded-lg border-4 border-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-lg ${
+                  className={`flex h-14 w-16 items-center justify-center rounded-lg border-4 border-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-lg sm:h-[68px] sm:w-[76px] ${
                     activeTab === tab
                       ? 'bg-yellow-200 text-black'
                       : 'bg-white text-black hover:bg-cyan-200'
                   }`}
-                  onClick={() => navigate(`/dashboard/${tab}`)}
+                  onClick={() =>
+                    navigate(
+                      isPublicDashboard
+                        ? `/account/${publicTwitterId}/dashboard/${tab}`
+                        : `/dashboard/${tab}`
+                    )
+                  }
                   aria-label={tab === 'overview' ? 'Overview' : 'Activity'}
                   title={tab === 'overview' ? 'Overview' : 'Activity'}
                 >
@@ -319,97 +480,59 @@ export const Dashboard: React.FC = () => {
               ))}
             </nav>
 
-            <div className="neo-card-strong min-h-[370px] rounded-lg bg-white p-4 sm:p-5">
+            <div className="neo-card-strong h-[400px] w-full overflow-hidden rounded-lg bg-white p-3 sm:p-4">
             {activeTab === 'overview' && (
-              <div className="flex min-h-[250px] flex-col justify-center gap-3">
-                {!suiObjectId && user && (
-                  <div className="rounded-lg border-2 border-black bg-red-200 p-3 shadow-neo-sm">
-                    <div className="flex items-start gap-3">
-                      <Info className="mt-0.5 h-5 w-5 shrink-0 text-black" />
-                      <div>
-                        <p className="font-black text-black">No Dugong account found</p>
-                        <p className="text-sm font-bold text-gray-700">
-                          Create one by mentioning @dugong on X.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
+              <div className="flex h-full min-h-0 flex-col gap-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isPublicDashboard && !isWalletLinked && currentAccount) {
+                      setShowLinkWalletModal(true);
+                      return;
+                    }
 
-                {isWalletMismatched && (
-                  <div className="rounded-lg border-2 border-black bg-red-200 p-3 shadow-neo-sm">
-                    <div className="flex items-start gap-3">
-                      <Info className="mt-0.5 h-5 w-5 shrink-0 text-black" />
-                      <div>
-                        <p className="font-black text-black">Wallet mismatch</p>
-                        <p className="text-sm font-bold text-gray-700">
-                          Switch to your linked wallet to deposit or withdraw.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {currentAccount && !isWalletLinked && (
-                  <button
-                    onClick={() => setShowLinkWalletModal(true)}
-                    className="rounded-lg border-2 border-black bg-yellow-200 px-5 py-3 text-left shadow-neo-sm transition-all hover:-translate-x-px hover:-translate-y-px hover:bg-yellow-300 hover:shadow-neo-md"
+                    if (linkedWalletAddress) {
+                      copyToClipboard(linkedWalletAddress, 'Linked Wallet');
+                    }
+                  }}
+                  disabled={!walletStatus.isActionable}
+                  className={`relative flex min-h-[64px] w-full min-w-0 items-center justify-center rounded-md border-2 border-black px-14 text-center shadow-neo-sm transition-all enabled:hover:-translate-x-px enabled:hover:-translate-y-px enabled:hover:shadow-neo-md disabled:cursor-default ${walletStatus.tone}`}
+                >
+                  <span
+                    className="min-w-0 truncate text-sm font-black text-black sm:text-base"
+                    title={linkedWalletLabel}
                   >
-                    <span className="block font-black text-black">Link wallet</span>
-                    <span className="mt-1 block text-sm font-bold text-gray-700">
-                      Enable deposits and withdrawals from this dApp.
-                    </span>
-                  </button>
-                )}
+                    <span className="sm:hidden">{walletStatus.mobileText}</span>
+                    <span className="hidden sm:inline">{walletStatus.desktopText}</span>
+                  </span>
+                  <span className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 shrink-0 items-center justify-center rounded-md border-2 border-black bg-white shadow-neo-sm">
+                    {walletStatus.icon}
+                  </span>
+                </button>
 
-                {isWalletMatched && (
-                  <div className="rounded-lg border-2 border-black bg-lime-200 p-3 shadow-neo-sm">
-                    <div className="flex items-start gap-3">
-                      <Check className="mt-0.5 h-5 w-5 shrink-0 text-black" />
-                      <div>
-                        <p className="font-black text-black">Wallet connected</p>
-                        <p className="text-sm font-bold text-gray-700">Your linked wallet is connected.</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {detailItems.map((item, index) => (
-                    <button
-                      key={item.label}
-                      onClick={() => item.copyable && copyToClipboard(item.value, item.label)}
-                      disabled={!item.copyable}
-                      className={`min-h-[82px] rounded-lg border-2 border-black px-5 py-3 text-left text-black shadow-neo-sm transition-all enabled:hover:-translate-x-px enabled:hover:-translate-y-px enabled:hover:shadow-neo-md disabled:cursor-default ${detailColors[index % detailColors.length]}`}
-                    >
-                      <span className="mb-2 flex items-center justify-between gap-3">
-                        <span className="block text-xs font-black uppercase text-gray-700">
-                          {item.label}
+                <div className="-m-1 min-h-0 flex-1 p-1">
+                  <div className="grid h-full w-full grid-cols-1 grid-rows-3 gap-3 md:grid-cols-3 md:grid-rows-1 md:gap-4">
+                    {supportedTokenBalances.map((token) => (
+                      <div
+                        key={token.symbol}
+                        className="flex min-h-0 min-w-0 flex-row items-center justify-center gap-5 rounded-md border-2 border-black bg-white p-3 text-center text-black shadow-neo-sm transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-md md:flex-col md:gap-5 md:p-4"
+                      >
+                        <TokenIcon symbol={token.symbol} size="lg" framed={false} className="h-12 w-12 md:h-20 md:w-20" />
+                        <span
+                          className="block max-w-full truncate text-xl font-black leading-tight text-black md:text-4xl"
+                          title={token.amount}
+                        >
+                          {token.amount}
                         </span>
-                        {item.copyable && (
-                          copiedField === item.label ? (
-                            <Check className="h-4 w-4 shrink-0 text-black" />
-                          ) : (
-                            <Copy className="h-4 w-4 shrink-0 text-black" />
-                          )
-                        )}
-                      </span>
-                      <span className={`block text-sm font-black text-black ${item.mono ? 'break-all font-mono' : ''}`}>
-                          {item.mono && item.value.length > 24
-                            ? `${item.value.slice(0, 16)}...${item.value.slice(-8)}`
-                            : item.value}
-                      </span>
-                      {item.copyable && copiedField === item.label && (
-                        <span className="mt-2 block text-xs font-black uppercase text-black">Copied</span>
-                      )}
-                    </button>
-                  ))}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
 
             {activeTab === 'activity' && (
-              <div className="flex min-h-[290px] flex-col justify-start">
+              <div className="flex h-full min-h-0 flex-col justify-start">
                 {isLoadingTxns ? (
                   <div className="text-center py-12">
                     <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-black border-t-transparent" />
@@ -421,42 +544,36 @@ export const Dashboard: React.FC = () => {
                   </div>
                 ) : (
                   <>
-                    <div className="space-y-3">
+                    <div className="-m-1 min-h-0 flex-1 space-y-3 overflow-y-auto p-1">
                       {transactions.map((tx) => (
-                        <div
+                        <button
                           key={tx.tx_digest}
-                          className={`flex items-center justify-between rounded-lg border-2 border-black p-4 shadow-neo-sm ${getTxColor(tx.tx_type)}`}
+                          onClick={() => navigate(`/tx/${encodeURIComponent(tx.tx_digest)}`, { state: { transaction: tx } })}
+                          className={`flex w-full flex-col gap-3 rounded-md border-2 border-black p-3 text-left shadow-neo-sm transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-md sm:flex-row sm:items-center sm:justify-between sm:p-4 ${getTxColor(tx.tx_type)}`}
                         >
-                          <div className="flex items-center gap-4">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-md border-2 border-black bg-white shadow-neo-sm">
+                          <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border-2 border-black bg-white shadow-neo-sm">
                               {getTxIcon(tx.tx_type)}
                             </div>
-                            <div>
+                            <div className="min-w-0">
                               <p className="font-black text-black">{formatTxLabel(tx.tx_type)}</p>
-                              <a
-                                href={getExplorerUrl(tx.tx_digest)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-1 font-mono text-sm font-bold text-gray-700 hover:text-black"
-                              >
-                                {shortenDigest(tx.tx_digest)}
-                                <ExternalLink className="w-3 h-3" />
-                              </a>
                             </div>
                           </div>
-                          <div className="text-right">
-                            <p className="font-black text-black">
+                          <div className="min-w-0 text-left sm:text-right">
+                            <p className="break-words text-sm font-black text-black sm:text-base">
                               {tx.tx_type === 'deposit' ? '+' : tx.tx_type === 'withdraw' ? '-' : ''}
                               {tx.amount} {tx.coin_type.split('::').pop() || 'SUI'}
                             </p>
-                            <p className="text-sm font-bold text-gray-700">{formatTimestamp(tx.timestamp)}</p>
+                            <p className="text-xs font-bold text-gray-700 sm:text-sm">
+                              {formatRelativeTime(tx.timestamp)}
+                            </p>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
 
                     {(transactionsData?.total ?? 0) > itemsPerPage && (
-                      <div className="mt-6 flex items-center justify-between border-t-2 border-black pt-4">
+                      <div className="mt-6 flex flex-col gap-3 border-t-2 border-black pt-4 sm:flex-row sm:items-center sm:justify-between">
                         <p className="text-sm font-bold text-gray-700">
                           Page {currentPage} of {transactionsData?.total_pages ?? 1}
                         </p>
@@ -464,14 +581,14 @@ export const Dashboard: React.FC = () => {
                           <button
                             onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
                             disabled={currentPage === 1}
-                            className="rounded-lg border-2 border-black bg-white px-4 py-2 text-sm font-black text-black shadow-neo-sm transition-colors hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="flex-1 rounded-lg border-2 border-black bg-white px-4 py-2 text-sm font-black text-black shadow-neo-sm transition-colors hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
                           >
                             Previous
                           </button>
                           <button
                             onClick={() => setCurrentPage((page) => page + 1)}
                             disabled={currentPage >= (transactionsData?.total_pages ?? 1)}
-                            className="rounded-lg border-2 border-black bg-white px-4 py-2 text-sm font-black text-black shadow-neo-sm transition-colors hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="flex-1 rounded-lg border-2 border-black bg-white px-4 py-2 text-sm font-black text-black shadow-neo-sm transition-colors hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
                           >
                             Next
                           </button>

@@ -19,7 +19,7 @@ import {
 import { API_BASE_URL } from '../utils/constants';
 
 // OAuth configuration
-const TWITTER_AUTH_URL = 'https://twitter.com/i/oauth2/authorize';
+const TWITTER_AUTH_URL = 'https://x.com/i/oauth2/authorize';
 const CLIENT_ID = import.meta.env.VITE_TWITTER_CLIENT_ID;
 const REDIRECT_URI = import.meta.env.VITE_TWITTER_REDIRECT_URI;
 const SCOPES = ['tweet.read', 'users.read', 'offline.access'];

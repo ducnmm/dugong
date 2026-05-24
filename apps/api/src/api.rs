@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::clients::enclave::EnclaveClient;
 use crate::clients::enoki::EnokiClient;
 use crate::clients::sui_transaction::SuiTransactionBuilder;
-use crate::clients::twitter::{TwitterOAuth2Client, TwitterUserInfo};
+use crate::clients::twitter::{TwitterClient, TwitterOAuth2Client, TwitterUserInfo};
 use crate::db::models::{AccountBalance, DugongAccount, Transfer, TransferType};
 use crate::webhook::handler::AppState;
 
@@ -19,6 +19,7 @@ pub struct AccountResponse {
     pub x_handle: String,
     pub sui_object_id: String,
     pub owner_address: Option<String>,
+    pub profile_image_url: Option<String>,
 }
 
 impl From<DugongAccount> for AccountResponse {
@@ -28,6 +29,7 @@ impl From<DugongAccount> for AccountResponse {
             x_handle: account.x_handle,
             sui_object_id: account.sui_object_id,
             owner_address: account.owner_address,
+            profile_image_url: None,
         }
     }
 }
@@ -82,9 +84,35 @@ pub async fn search_accounts(
     };
 
     let count = accounts.len();
-    let accounts: Vec<AccountResponse> = accounts.into_iter().map(|a| a.into()).collect();
+    let twitter = TwitterClient::new(&state.config);
+    let mut account_responses = Vec::with_capacity(count);
 
-    Ok(Json(SearchResponse { accounts, count }))
+    for account in accounts {
+        let profile_image_url = match twitter.get_user_by_username(&account.x_handle).await {
+            Ok(user) => user.profile_picture,
+            Err(err) => {
+                tracing::warn!(
+                    x_handle = %account.x_handle,
+                    error = %err,
+                    "Failed to fetch X profile image for account search result"
+                );
+                None
+            }
+        };
+
+        account_responses.push(AccountResponse {
+            x_user_id: account.x_user_id,
+            x_handle: account.x_handle,
+            sui_object_id: account.sui_object_id,
+            owner_address: account.owner_address,
+            profile_image_url,
+        });
+    }
+
+    Ok(Json(SearchResponse {
+        accounts: account_responses,
+        count,
+    }))
 }
 
 // ====== Account Detail API ======
@@ -485,6 +513,42 @@ pub async fn get_transactions_by_account(
         limit,
         total_pages,
     }))
+}
+
+/// Get one transaction by transaction digest
+pub async fn get_transaction_by_digest(
+    State(state): State<Arc<AppState>>,
+    Path(tx_digest): Path<String>,
+) -> Result<Json<TransactionResponse>, StatusCode> {
+    let transfer = match Transfer::find_by_transaction_digest(&state.db, &tx_digest).await {
+        Ok(Some(transfer)) => transfer,
+        Ok(None) => return Err(StatusCode::NOT_FOUND),
+        Err(err) => {
+            tracing::error!("Failed to query transaction by digest: {:?}", err);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    let query_coin_type = if transfer.coin_type.starts_with("0x") {
+        transfer.coin_type.clone()
+    } else {
+        format!("0x{}", transfer.coin_type)
+    };
+    let sui_client = crate::clients::sui_client::SuiClient::new(&state.config.sui_rpc_url);
+    let decimals = match sui_client.get_coin_metadata(&query_coin_type).await {
+        Ok(Some(metadata)) => metadata.decimals,
+        Ok(None) | Err(_) => {
+            if transfer.coin_type.ends_with("::usdc::USDC") {
+                6
+            } else {
+                9
+            }
+        }
+    };
+
+    Ok(Json(TransactionResponse::from_transfer_with_decimals(
+        transfer, decimals,
+    )))
 }
 
 /// Token balance info
