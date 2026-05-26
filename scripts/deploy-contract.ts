@@ -147,10 +147,11 @@ const ENV_SYNC_MAP: Record<DeployOutputKey, EnvTarget[]> = {
 };
 
 // Railway services that read each env file (must match scripts/railway-set-env.ts).
-// The indexer Railway service still reads apps/api/.env, so apps/api/.env pushes
-// to both api and indexer; apps/indexer/.env is local-only and pushes nothing.
+// The indexer Railway service reads its own apps/indexer/.env, so each env file
+// pushes to exactly its own service(s).
 const RAILWAY_SERVICES_BY_ENV_FILE: Record<string, string[]> = {
-  [API_ENV]: ["api", "indexer"],
+  [API_ENV]: ["api"],
+  [INDEXER_ENV]: ["indexer"],
   [WEB_ENV]: ["web"],
 };
 
