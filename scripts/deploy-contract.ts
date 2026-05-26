@@ -31,7 +31,8 @@
 //   --treasury-account <id>      Sui object ID of the treasury DugongAccount.
 //                                Written as MARKET_TREASURY_ACCOUNT_ID to .env.
 //   --environment <name>         Railway environment passed to railway-set-env.ts.
-//   --skip-railway               Skip the railway-set-env.ts step.
+//   --railway                    Also push synced .env files to Railway
+//                                (off by default; runs railway-set-env.ts).
 //   --dry-run                    Print commands without executing them.
 //   --help                       Show this message.
 
