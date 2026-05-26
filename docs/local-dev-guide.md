@@ -105,7 +105,11 @@ cargo run -p dugong-indexer
 ```
 
 The API and indexer share the same `apps/api/.env` (same Postgres + Sui
-RPC), so the cursor stays consistent.
+RPC), so the cursor stays consistent. The indexer binary loads that file
+automatically relative to the workspace, so the command above works from any
+directory — you don't need to `cd apps/api` first. Real environment variables
+still take precedence, which is how it picks up Railway-injected config in
+production.
 
 ## 6. Run the worker (poller)
 

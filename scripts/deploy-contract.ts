@@ -7,10 +7,20 @@
 // can be parsed deterministically.
 //
 // After a successful deploy the script:
-//   1. Patches apps/api/.env and apps/web/.env with the new package / registry IDs.
-//   2. Updates Published.toml (published-at + version).
-//   3. Runs scripts/railway-set-env.ts to push the patched vars to Railway
-//      (unless --skip-railway is passed).
+//   1. Parses every relevant object change from the Sui JSON output (package,
+//      DugongRegistry, MarketRegistry, and — when present — the enclave config
+//      and enclave shared object).
+//   2. Syncs those IDs into the .env file of every consuming service, driven by
+//      the single ENV_SYNC_MAP table below. Absent outputs are skipped (never
+//      written as empty), so an upgrade can't blank out IDs created elsewhere.
+//   3. Updates Published.toml (published-at + version).
+//   4. Only when --railway is passed: runs scripts/railway-set-env.ts for every
+//      Railway service backed by a patched env file (e.g. api + indexer both
+//      read apps/api/.env). Railway is OFF by default; local .env files are
+//      always patched.
+//
+// To add a new consuming service, add an entry to ENV_SYNC_MAP (and, if it has
+// a Railway service, to RAILWAY_SERVICES_BY_ENV_FILE) — no other changes needed.
 //
 // Usage:
 //   scripts/deploy-contract.ts [flags]
@@ -75,6 +85,86 @@ function run(
   if (result.status !== 0) die(`command exited with status ${result.status}`);
   return (result.stdout as string | null) ?? "";
 }
+
+// ── Deployed-output → service env mapping ─────────────────────────────────────
+//
+// The single source of truth for "which deployed ID goes into which service's
+// .env, under which key". Each output maps to one target per consuming service.
+// Services absent from a target list receive no contract keys.
+//
+// Consumers (confirmed against the code that reads each key):
+//   apps/api/.env     → apps/core/src/config.rs   (DUGONG_*, ENCLAVE_*, MARKET_*)
+//   apps/indexer/.env → same shared dugong-core Config; the indexer reads its
+//                       own file locally (apps/indexer/src/main.rs). It uses
+//                       DUGONG_PACKAGE_ID to scope its event query and needs
+//                       the other contract IDs to satisfy Config::from_env.
+//   apps/web/.env     → apps/web/src/utils/constants.ts (VITE_*)
+// worker and nautilus-server read no contract IDs and are intentionally omitted.
+
+type DeployOutputKey =
+  | "packageId"
+  | "dugongRegistryId"
+  | "marketRegistryId"
+  | "enclaveConfigId"
+  | "enclaveId"
+  | "treasuryAccountId";
+
+type EnvTarget = { envFile: string; envKey: string };
+
+const API_ENV = "apps/api/.env";
+const INDEXER_ENV = "apps/indexer/.env";
+const WEB_ENV = "apps/web/.env";
+
+const ENV_SYNC_MAP: Record<DeployOutputKey, EnvTarget[]> = {
+  packageId: [
+    { envFile: API_ENV, envKey: "DUGONG_PACKAGE_ID" },
+    { envFile: INDEXER_ENV, envKey: "DUGONG_PACKAGE_ID" },
+    { envFile: WEB_ENV, envKey: "VITE_DUGONG_PACKAGE_ID" },
+  ],
+  // DugongRegistry (core.move) — distinct from the MarketRegistry below.
+  dugongRegistryId: [
+    { envFile: API_ENV, envKey: "DUGONG_REGISTRY_ID" },
+    { envFile: INDEXER_ENV, envKey: "DUGONG_REGISTRY_ID" },
+  ],
+  // MarketRegistry (markets.move). The indexer doesn't read this (optional in
+  // Config), so it stays out of the indexer file.
+  marketRegistryId: [{ envFile: API_ENV, envKey: "MARKET_REGISTRY_ID" }],
+  // EnclaveConfig — lives in the separate enclave package, so it is usually
+  // absent from a dugong-package deploy and the existing value is preserved.
+  enclaveConfigId: [
+    { envFile: API_ENV, envKey: "ENCLAVE_CONFIG_ID" },
+    { envFile: INDEXER_ENV, envKey: "ENCLAVE_CONFIG_ID" },
+    { envFile: WEB_ENV, envKey: "VITE_ENCLAVE_CONFIG_ADDRESS" },
+  ],
+  // Enclave shared object — also from the enclave package (NOT the config id).
+  enclaveId: [
+    { envFile: API_ENV, envKey: "ENCLAVE_ID" },
+    { envFile: INDEXER_ENV, envKey: "ENCLAVE_ID" },
+    { envFile: WEB_ENV, envKey: "VITE_DUGONG_ENCLAVE_ADDRESS" },
+  ],
+  // Supplied via --treasury-account, not parsed from deploy output.
+  treasuryAccountId: [{ envFile: API_ENV, envKey: "MARKET_TREASURY_ACCOUNT_ID" }],
+};
+
+// Railway services that read each env file (must match scripts/railway-set-env.ts).
+// The indexer Railway service still reads apps/api/.env, so apps/api/.env pushes
+// to both api and indexer; apps/indexer/.env is local-only and pushes nothing.
+const RAILWAY_SERVICES_BY_ENV_FILE: Record<string, string[]> = {
+  [API_ENV]: ["api", "indexer"],
+  [WEB_ENV]: ["web"],
+};
+
+// Substrings matched against a created object's `objectType` to identify it.
+// `enclave` uses the trailing `<` so it does not also match `EnclaveConfig<`.
+const OBJECT_TYPE_MATCH: Record<
+  "dugongRegistryId" | "marketRegistryId" | "enclaveConfigId" | "enclaveId",
+  string
+> = {
+  dugongRegistryId: "::core::DugongRegistry",
+  marketRegistryId: "::markets::MarketRegistry",
+  enclaveConfigId: "::enclave::EnclaveConfig",
+  enclaveId: "::enclave::Enclave<",
+};
 
 // ── Published.toml parsing ────────────────────────────────────────────────────
 
@@ -182,10 +272,16 @@ type ObjectChange = {
   version?: string;
 };
 
+/**
+ * Parse the package ID plus every recognised created object from the Sui JSON
+ * output. The package is required; any other object that is not present in this
+ * deploy (e.g. shared objects already created on an upgrade, or enclave objects
+ * that belong to a different package) is returned as absent so callers can skip
+ * it rather than overwrite an existing value with an empty string.
+ */
 function parseDeployOutput(json: string): {
-  packageId: string;
-  marketRegistryId: string | null;
   version: number;
+  outputs: Partial<Record<DeployOutputKey, string>>;
 } {
   let parsed: { objectChanges?: ObjectChange[] };
   try {
@@ -198,18 +294,25 @@ function parseDeployOutput(json: string): {
 
   const published = changes.find((c) => c.type === "published");
   if (!published?.packageId) die("No published package found in sui output");
-  const packageId = published.packageId;
   const version = published.version ? parseInt(published.version, 10) : 1;
 
-  // MarketRegistry is created at first publish; on upgrade it already exists.
-  const registry = changes.find(
-    (c) =>
-      c.type === "created" &&
-      c.objectType?.includes("::markets::MarketRegistry")
-  );
-  const marketRegistryId = registry?.objectId ?? null;
+  const outputs: Partial<Record<DeployOutputKey, string>> = {
+    packageId: published.packageId,
+  };
 
-  return { packageId, marketRegistryId, version };
+  // Locate each created object by its objectType substring. Created-only so we
+  // don't pick up mutated/wrapped objects; absent matches stay undefined.
+  for (const [key, needle] of Object.entries(OBJECT_TYPE_MATCH) as [
+    keyof typeof OBJECT_TYPE_MATCH,
+    string
+  ][]) {
+    const match = changes.find(
+      (c) => c.type === "created" && c.objectType?.includes(needle)
+    );
+    if (match?.objectId) outputs[key] = match.objectId;
+  }
+
+  return { version, outputs };
 }
 
 // ── usage ─────────────────────────────────────────────────────────────────────
@@ -222,8 +325,11 @@ Flags:
   --gas-budget <MIST>          Gas budget in MIST (default: 500000000).
   --treasury-account <id>      Object ID of the treasury DugongAccount.
                                Written as MARKET_TREASURY_ACCOUNT_ID to .env.
-  --environment <name>         Railway environment passed to railway-set-env.ts.
-  --skip-railway               Skip the railway-set-env.ts step.
+  --railway                    Push synced vars to Railway via railway-set-env.ts.
+                               OFF by default — local .env files are always
+                               patched; pass this flag to also update Railway.
+  --environment <name>         Railway environment passed to railway-set-env.ts
+                               (only used with --railway).
   --dry-run                    Print commands without executing them.
   --help                       Show this message.
 `);
@@ -241,7 +347,7 @@ function main(): void {
       "gas-budget":      { type: "string",  default: "500000000" },
       "treasury-account":{ type: "string" },
       environment:       { type: "string" },
-      "skip-railway":    { type: "boolean", default: false },
+      railway:           { type: "boolean", default: false },
       "dry-run":         { type: "boolean", default: false },
       help:              { type: "boolean", default: false },
     },
@@ -252,7 +358,7 @@ function main(): void {
   const network     = values.network!;
   const gasBudget   = values["gas-budget"]!;
   const dryRun      = !!values["dry-run"];
-  const skipRailway = !!values["skip-railway"];
+  const syncRailway = !!values.railway;
   const treasury    = values["treasury-account"];
   const environment = values.environment;
 
@@ -298,11 +404,17 @@ function main(): void {
     return;
   }
 
-  // 4. Parse output.
-  const { packageId, marketRegistryId, version } = parseDeployOutput(rawJson);
-  info(`Package ID:   ${packageId}`);
-  info(`Registry ID:  ${marketRegistryId ?? "(not in this deploy output)"}`);
-  info(`Version:      ${version}`);
+  // 4. Parse output. The treasury account is supplied via flag, not parsed.
+  const { version, outputs } = parseDeployOutput(rawJson);
+  if (treasury) outputs.treasuryAccountId = treasury;
+
+  const packageId = outputs.packageId!;
+  info(`Package ID:        ${packageId}`);
+  info(`DugongRegistry:    ${outputs.dugongRegistryId ?? "(absent — preserved)"}`);
+  info(`MarketRegistry:    ${outputs.marketRegistryId ?? "(absent — preserved)"}`);
+  info(`EnclaveConfig:     ${outputs.enclaveConfigId ?? "(absent — preserved)"}`);
+  info(`Enclave object:    ${outputs.enclaveId ?? "(absent — preserved)"}`);
+  info(`Version:           ${version}`);
 
   // 5. Update Published.toml.
   const chainIds: Record<string, string> = {
@@ -317,37 +429,50 @@ function main(): void {
     upgradeCap: existing?.upgradeCap,
   });
 
-  // 6. Patch .env files.
-  const apiPatches: Record<string, string> = {
-    DUGONG_PACKAGE_ID: packageId,
-  };
-  if (marketRegistryId) {
-    apiPatches.MARKET_REGISTRY_ID = marketRegistryId;
+  // 6. Sync IDs into every consuming service's .env, driven by ENV_SYNC_MAP.
+  //    Group patches per file (one write each) and skip absent outputs so we
+  //    never blank out an existing value.
+  const patchesByFile = new Map<string, Record<string, string>>();
+  for (const [key, targets] of Object.entries(ENV_SYNC_MAP) as [
+    DeployOutputKey,
+    EnvTarget[]
+  ][]) {
+    const value = outputs[key];
+    if (value == null) continue; // absent → preserve existing value
+    for (const target of targets) {
+      const filePatches = patchesByFile.get(target.envFile) ?? {};
+      filePatches[target.envKey] = value;
+      patchesByFile.set(target.envFile, filePatches);
+    }
   }
-  if (treasury) {
-    apiPatches.MARKET_TREASURY_ACCOUNT_ID = treasury;
+  for (const [envFile, patches] of patchesByFile) {
+    patchEnvFile(envFile, patches);
   }
-  patchEnvFile("apps/api/.env", apiPatches);
 
-  const webPatches: Record<string, string> = {
-    VITE_DUGONG_PACKAGE_ID: packageId,
-  };
-  patchEnvFile("apps/web/.env", webPatches);
-
-  // 7. Sync to Railway.
-  if (skipRailway) {
-    info("Skipping Railway sync (--skip-railway).");
+  // 7. Sync to Railway — opt-in. Push every Railway service backed by a patched
+  //    env file (one file can feed several services, e.g. api + indexer).
+  if (!syncRailway) {
+    info("Skipping Railway sync (pass --railway to enable).");
+    info("Deploy complete.");
     return;
   }
 
-  info("Syncing env vars to Railway...");
-  const railwayArgs = ["scripts/railway-set-env.ts", "api"];
-  if (environment) railwayArgs.push("--environment", environment);
-  run("npx", ["--yes", "tsx", ...railwayArgs], { dryRun });
+  const railwayServices = new Set<string>();
+  for (const envFile of patchesByFile.keys()) {
+    for (const svc of RAILWAY_SERVICES_BY_ENV_FILE[envFile] ?? []) {
+      railwayServices.add(svc);
+    }
+  }
+  if (railwayServices.size === 0) {
+    warn("No Railway service is mapped to the patched env files — nothing to push.");
+  }
 
-  const webRailwayArgs = ["scripts/railway-set-env.ts", "web"];
-  if (environment) webRailwayArgs.push("--environment", environment);
-  run("npx", ["--yes", "tsx", ...webRailwayArgs], { dryRun });
+  info("Syncing env vars to Railway...");
+  for (const service of railwayServices) {
+    const railwayArgs = ["scripts/railway-set-env.ts", service];
+    if (environment) railwayArgs.push("--environment", environment);
+    run("npx", ["--yes", "tsx", ...railwayArgs], { dryRun });
+  }
 
   info("Deploy complete.");
 }

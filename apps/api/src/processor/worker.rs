@@ -220,10 +220,11 @@ impl ProcessorWorker {
             .context("Failed to set event to submitting")?;
 
         // Initialize transaction builder
-        let tx_builder =
-            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
-                .await
-                .context("Failed to initialize Sui transaction builder")?;
+        let tx_builder = dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(
+            self.state.config.clone(),
+        )
+        .await
+        .context("Failed to initialize Sui transaction builder")?;
 
         // Submit transaction with enclave signature
         let digest = match tx_builder
@@ -331,10 +332,11 @@ impl ProcessorWorker {
             .context("Failed to set event to submitting")?;
 
         // Initialize transaction builder
-        let tx_builder =
-            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
-                .await
-                .context("Failed to initialize Sui transaction builder")?;
+        let tx_builder = dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(
+            self.state.config.clone(),
+        )
+        .await
+        .context("Failed to initialize Sui transaction builder")?;
 
         // Submit transaction with enclave signature
         let digest = tx_builder
@@ -403,10 +405,11 @@ impl ProcessorWorker {
             .await
             .context("Failed to set event to submitting")?;
 
-        let tx_builder =
-            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
-                .await
-                .context("Failed to initialize Sui transaction builder")?;
+        let tx_builder = dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(
+            self.state.config.clone(),
+        )
+        .await
+        .context("Failed to initialize Sui transaction builder")?;
 
         let digest = match tx_builder
             .submit_create_market(
@@ -526,10 +529,11 @@ impl ProcessorWorker {
             .await
             .context("Failed to set event to submitting")?;
 
-        let tx_builder =
-            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
-                .await
-                .context("Failed to initialize Sui transaction builder")?;
+        let tx_builder = dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(
+            self.state.config.clone(),
+        )
+        .await
+        .context("Failed to initialize Sui transaction builder")?;
 
         let digest = match tx_builder
             .submit_place_bet(
@@ -594,7 +598,13 @@ impl ProcessorWorker {
 
         if let Err(e) = self
             .twitter
-            .reply_bet_placed(tweet_id, &data.better_handle, &amount_display, data.side, &digest)
+            .reply_bet_placed(
+                tweet_id,
+                &data.better_handle,
+                &amount_display,
+                data.side,
+                &digest,
+            )
             .await
         {
             warn!(error = %e, "Failed to reply bet_placed");
@@ -678,10 +688,11 @@ impl ProcessorWorker {
             .await
             .context("Failed to set event to submitting")?;
 
-        let tx_builder =
-            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
-                .await
-                .context("Failed to initialize Sui transaction builder")?;
+        let tx_builder = dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(
+            self.state.config.clone(),
+        )
+        .await
+        .context("Failed to initialize Sui transaction builder")?;
 
         // Submit resolve_market<T> per distinct coin type that has bets
         let coin_types = Market::find_bet_coin_types(&self.state.db, &data.market_tweet_id)
@@ -730,7 +741,11 @@ impl ProcessorWorker {
                 .ok_or_else(|| anyhow!("Winner account missing after auto-create"))?;
 
             match tx_builder
-                .submit_pay_winner(&market.sui_object_id, &winner_account.sui_object_id, coin_type)
+                .submit_pay_winner(
+                    &market.sui_object_id,
+                    &winner_account.sui_object_id,
+                    coin_type,
+                )
                 .await
             {
                 Ok(d) => {
@@ -744,7 +759,9 @@ impl ProcessorWorker {
         }
 
         // Mark market resolved in DB
-        if let Err(e) = Market::set_resolved(&self.state.db, &data.market_tweet_id, data.outcome).await {
+        if let Err(e) =
+            Market::set_resolved(&self.state.db, &data.market_tweet_id, data.outcome).await
+        {
             warn!(error = %e, "Failed to mark market resolved in DB");
         }
 
@@ -772,9 +789,10 @@ impl ProcessorWorker {
     /// since handles come from ProcessTweetResponse
     #[allow(dead_code)]
     async fn get_x_handle(&self, xid: &str) -> Result<String> {
-        let account = dugong_core::db::models::DugongAccount::find_by_x_user_id(&self.state.db, xid)
-            .await
-            .context("Failed to fetch account")?;
+        let account =
+            dugong_core::db::models::DugongAccount::find_by_x_user_id(&self.state.db, xid)
+                .await
+                .context("Failed to fetch account")?;
 
         match account {
             Some(acc) => Ok(acc.x_handle),
@@ -807,10 +825,11 @@ impl ProcessorWorker {
         );
 
         // Initialize transaction builder
-        let tx_builder =
-            dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(self.state.config.clone())
-                .await
-                .context("Failed to initialize Sui transaction builder")?;
+        let tx_builder = dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(
+            self.state.config.clone(),
+        )
+        .await
+        .context("Failed to initialize Sui transaction builder")?;
 
         // Submit init account transaction with enclave signature
         let digest = tx_builder
