@@ -38,3 +38,6 @@ seal-sdk = { git = "https://github.com/MystenLabs/seal", rev = "608d30caba1d1fbf
 default = ["dugong"]
 seal-example = ["sui-crypto", "sui-sdk-types", "seal-sdk"]
 dugong = ["regex"]
+
+[dev-dependencies]
+wiremock = "0.6"

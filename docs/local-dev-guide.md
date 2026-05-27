@@ -184,6 +184,42 @@ docker exec -it dugong-redis redis-cli
 cd apps/api && docker compose down          # add -v to wipe volumes
 ```
 
+## Testing
+
+The Rust suites split into two kinds:
+
+- **Pure-logic and HTTP-client tests** (wiremock-backed) need no external
+  services. They run with a plain `cargo test`.
+- **Database tests** use `#[sqlx::test]`, which provisions an isolated,
+  migrated Postgres database per test. These need a reachable Postgres via
+  `DATABASE_URL`. The codebase uses runtime sqlx queries (not `query!`
+  macros), so a database is **not** needed to *compile* — only to *run* the
+  DB-backed tests.
+- **Redis-backed api tests** (webhook enqueue / processor) need a reachable
+  Redis via `REDIS_URL` (default `redis://127.0.0.1:56379`). They *skip
+  themselves* if Redis is unreachable, so they never fail a DB-only run.
+
+```bash
+# Spin up a throwaway Postgres for tests
+docker run -d --name dugong-test-pg \
+  -e POSTGRES_PASSWORD=postgres -p 55432:5432 postgres:16-alpine
+
+# Point #[sqlx::test] at it and run everything
+export DATABASE_URL="postgres://postgres:postgres@localhost:55432/postgres"
+cargo test --workspace
+
+# A single crate
+cargo test -p dugong-core
+```
+
+Frontend tests live in `apps/web`:
+
+```bash
+cd apps/web
+pnpm test --run        # vitest unit/component/hook tests
+pnpm test:e2e          # Playwright E2E (builds + serves the app)
+```
+
 ## Suggested startup order
 
 1. `docker compose up -d` in `apps/api` (Postgres + Redis)

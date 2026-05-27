@@ -37,20 +37,34 @@ pub struct TwitterMeta {
     pub result_count: Option<i32>,
 }
 
+/// Production base URL for the TwitterAPI.io search endpoint.
+pub const TWITTERAPI_IO_BASE_URL: &str = "https://api.twitterapi.io";
+
 pub struct TwitterClient {
     client: reqwest::Client,
     api_key: String,
+    base_url: String,
 }
 
 impl TwitterClient {
     pub fn new(api_key: String) -> Self {
+        Self::with_base_url(api_key, TWITTERAPI_IO_BASE_URL.to_string())
+    }
+
+    /// Construct a client pointed at a custom base URL (used in tests to aim
+    /// the search endpoint at a mock server).
+    pub fn with_base_url(api_key: String, base_url: String) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("Failed to build HTTP client");
 
-        Self { client, api_key }
+        Self {
+            client,
+            api_key,
+            base_url,
+        }
     }
 
     /// Search for recent tweets mentioning a specific account
@@ -84,10 +98,12 @@ impl TwitterClient {
         let mut retries = 3;
         let mut last_error = None;
 
+        let url = format!("{}/twitter/tweet/advanced_search", self.base_url);
+
         while retries > 0 {
             match self
                 .client
-                .get("https://api.twitterapi.io/twitter/tweet/advanced_search")
+                .get(&url)
                 .header("X-API-Key", &self.api_key)
                 .query(&[("query", query.as_str()), ("queryType", "Latest")])
                 .send()

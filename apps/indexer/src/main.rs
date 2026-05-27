@@ -1,14 +1,7 @@
-mod cursor;
-mod event_fetcher;
-mod event_processor;
-mod handlers;
-mod indexer;
-mod types;
-
 use dugong_core::config::Config;
 use dugong_core::db::{create_pool, run_migrations};
 
-use crate::indexer::Indexer;
+use dugong_indexer::indexer::Indexer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

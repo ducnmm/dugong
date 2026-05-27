@@ -8,6 +8,11 @@ use tracing::{info, warn};
 
 use crate::config::Config;
 
+/// Default production base URL for Twitter's official API (api.twitter.com).
+pub const TWITTER_API_BASE_URL: &str = "https://api.twitter.com";
+/// Default production base URL for the TwitterAPI.io third-party service.
+pub const TWITTERAPI_IO_BASE_URL: &str = "https://api.twitterapi.io";
+
 // ====== OAuth 2.0 Types ======
 
 /// OAuth 2.0 token response from Twitter
@@ -39,14 +44,21 @@ pub struct TwitterOAuth2Client {
     http_client: Client,
     client_id: String,
     client_secret: String,
+    api_base: String,
 }
 
 impl TwitterOAuth2Client {
     pub fn new(config: &Config) -> Self {
+        Self::with_base_url(config, TWITTER_API_BASE_URL.to_string())
+    }
+
+    /// Construct a client pointed at a custom Twitter API base URL (used in tests).
+    pub fn with_base_url(config: &Config, api_base: String) -> Self {
         Self {
             http_client: Client::new(),
             client_id: config.twitter_oauth2_client_id.clone(),
             client_secret: config.twitter_oauth2_client_secret.clone(),
+            api_base,
         }
     }
 
@@ -57,7 +69,7 @@ impl TwitterOAuth2Client {
         code_verifier: &str,
         redirect_uri: &str,
     ) -> Result<OAuth2TokenResponse> {
-        let url = "https://api.twitter.com/2/oauth2/token";
+        let url = format!("{}/2/oauth2/token", self.api_base);
 
         // Build form data
         let params = [
@@ -73,7 +85,7 @@ impl TwitterOAuth2Client {
 
         let response = self
             .http_client
-            .post(url)
+            .post(&url)
             .header("Authorization", &auth_header)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .form(&params)
@@ -104,11 +116,11 @@ impl TwitterOAuth2Client {
 
     /// Get authenticated user info using access token
     pub async fn get_user_info(&self, access_token: &str) -> Result<TwitterUserInfo> {
-        let url = "https://api.twitter.com/2/users/me";
+        let url = format!("{}/2/users/me", self.api_base);
 
         let response = self
             .http_client
-            .get(url)
+            .get(&url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await
@@ -147,6 +159,7 @@ pub struct TwitterClient {
     twitterapi_io_api_key: String,
     twitterapi_io_login_cookies: Option<String>,
     twitterapi_io_proxy: Option<String>,
+    twitterapi_io_base: String,
 }
 
 /// Request body for creating a tweet through TwitterAPI.io.
@@ -202,11 +215,17 @@ pub struct TransactionResult {
 
 impl TwitterClient {
     pub fn new(config: &Config) -> Self {
+        Self::with_base_url(config, TWITTERAPI_IO_BASE_URL.to_string())
+    }
+
+    /// Construct a client pointed at a custom TwitterAPI.io base URL (used in tests).
+    pub fn with_base_url(config: &Config, twitterapi_io_base: String) -> Self {
         Self {
             http_client: Client::new(),
             twitterapi_io_api_key: config.twitterapi_io_api_key.clone(),
             twitterapi_io_login_cookies: config.twitterapi_io_login_cookies.clone(),
             twitterapi_io_proxy: config.twitterapi_io_proxy.clone(),
+            twitterapi_io_base,
         }
     }
 
@@ -360,11 +379,11 @@ impl TwitterClient {
     pub async fn get_user_by_username(&self, username: &str) -> Result<TwitterUser> {
         // Remove @ prefix if present
         let clean_username = username.trim_start_matches('@');
-        let url = "https://api.twitterapi.io/twitter/user/info";
+        let url = format!("{}/twitter/user/info", self.twitterapi_io_base);
 
         let response = self
             .http_client
-            .get(url)
+            .get(&url)
             .header("X-API-Key", &self.twitterapi_io_api_key)
             .query(&[("userName", clean_username)])
             .send()
@@ -523,7 +542,7 @@ impl TwitterClient {
 
     /// Post a reply to a specific tweet
     async fn reply_to_tweet(&self, tweet_id: &str, text: &str) -> Result<String> {
-        let url = "https://api.twitterapi.io/twitter/create_tweet_v2";
+        let url = format!("{}/twitter/create_tweet_v2", self.twitterapi_io_base);
         let login_cookies = self.twitterapi_io_login_cookies.as_ref().ok_or_else(|| {
             warn!(
                 tweet_id = %tweet_id,
@@ -553,7 +572,7 @@ impl TwitterClient {
 
         let response = self
             .http_client
-            .post(url)
+            .post(&url)
             .header("X-API-Key", &self.twitterapi_io_api_key)
             .header("Content-Type", "application/json")
             .body(body_json)

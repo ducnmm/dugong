@@ -1,3 +1,3 @@
 mod worker;
 
-pub use worker::ProcessorWorker;
+pub use worker::{ProcessOutcome, ProcessorWorker};

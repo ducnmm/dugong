@@ -37,6 +37,11 @@ pub struct Config {
     pub enoki_api_key: String,
     pub enoki_network: String,
 
+    // External API base URLs (overridable in tests; default to production)
+    pub enoki_base_url: String,
+    pub twitter_api_base: String,
+    pub twitterapi_io_base: String,
+
     // Backend signer
     pub backend_signer_private_key: String,
 
@@ -103,6 +108,14 @@ impl Config {
             // Enoki
             enoki_api_key: env::var("ENOKI_API_KEY").context("ENOKI_API_KEY must be set")?,
             enoki_network: env::var("ENOKI_NETWORK").unwrap_or_else(|_| "testnet".to_string()),
+
+            // External API base URLs (default to production; overridable in tests)
+            enoki_base_url: env::var("ENOKI_API_BASE_URL")
+                .unwrap_or_else(|_| crate::clients::enoki::ENOKI_API_BASE_URL.to_string()),
+            twitter_api_base: env::var("TWITTER_API_BASE_URL")
+                .unwrap_or_else(|_| crate::clients::twitter::TWITTER_API_BASE_URL.to_string()),
+            twitterapi_io_base: env::var("TWITTERAPI_IO_BASE_URL")
+                .unwrap_or_else(|_| crate::clients::twitter::TWITTERAPI_IO_BASE_URL.to_string()),
 
             // Backend signer
             backend_signer_private_key: env::var("BACKEND_SIGNER_PRIVATE_KEY")

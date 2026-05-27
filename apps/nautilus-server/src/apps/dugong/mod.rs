@@ -294,7 +294,8 @@ pub async fn process_tweet(
 
     // Fetch tweet data from Tweeter API. This keeps tweet verification inside
     // the enclave instead of relying on the worker-provided webhook payload.
-    let tweet_data = fetch_tweet_data(&state.api_key, &tweet_url).await?;
+    let tweet_data =
+        fetch_tweet_data(&state.twitterapi_io_base_url, &state.api_key, &tweet_url).await?;
 
     info!(
         "Tweet fetched - ID: {}, Author: {} (@{}), Text: {}",
@@ -429,7 +430,11 @@ impl TweeterUserInfoResponse {
 }
 
 /// Fetch tweet data from Tweeter API.
-async fn fetch_tweet_data(api_key: &str, tweet_url: &str) -> Result<TweetData, EnclaveError> {
+async fn fetch_tweet_data(
+    base_url: &str,
+    api_key: &str,
+    tweet_url: &str,
+) -> Result<TweetData, EnclaveError> {
     let client = reqwest::Client::new();
 
     // Extract tweet ID from URL
@@ -445,7 +450,7 @@ async fn fetch_tweet_data(api_key: &str, tweet_url: &str) -> Result<TweetData, E
     info!("Fetching tweet ID: {}", tweet_id);
 
     let response = client
-        .get("https://api.twitterapi.io/twitter/tweets")
+        .get(format!("{}/twitter/tweets", base_url))
         .header("X-API-Key", api_key)
         .query(&[("tweet_ids", tweet_id)])
         .send()
@@ -685,7 +690,12 @@ async fn process_transfer_command(
     let to_xid = if let Some(xid) = resolve_mentioned_user_id(tweet_data, receiver_username) {
         xid
     } else {
-        fetch_user_id_by_username(&state.api_key, receiver_username).await?
+        fetch_user_id_by_username(
+            &state.twitterapi_io_base_url,
+            &state.api_key,
+            receiver_username,
+        )
+        .await?
     };
 
     // Create TransferPayload
@@ -971,7 +981,8 @@ pub async fn process_secure_link_wallet(
     );
 
     // 1. Verify access token with Twitter API and get user info (XID)
-    let twitter_user = verify_twitter_access_token(&req.access_token).await?;
+    let twitter_user =
+        verify_twitter_access_token(&state.twitter_api_base_url, &req.access_token).await?;
     let xid = twitter_user.id.clone();
     info!(
         "Verified Twitter user: {} (@{})",
@@ -1065,14 +1076,17 @@ struct TwitterUserInfo {
 }
 
 /// Verify Twitter access token and return user info
-async fn verify_twitter_access_token(access_token: &str) -> Result<TwitterUserInfo, EnclaveError> {
+async fn verify_twitter_access_token(
+    base_url: &str,
+    access_token: &str,
+) -> Result<TwitterUserInfo, EnclaveError> {
     let client = reqwest::Client::new();
 
     // Call Twitter API to verify token and get user info
-    let url = "https://api.twitter.com/2/users/me";
+    let url = format!("{}/2/users/me", base_url);
 
     let response = client
-        .get(url)
+        .get(&url)
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
@@ -1205,13 +1219,17 @@ fn resolve_mentioned_user_id(tweet_data: &TweetData, username: &str) -> Option<S
 }
 
 /// Fetch Twitter user ID by username via Tweeter API.
-async fn fetch_user_id_by_username(api_key: &str, username: &str) -> Result<String, EnclaveError> {
+async fn fetch_user_id_by_username(
+    base_url: &str,
+    api_key: &str,
+    username: &str,
+) -> Result<String, EnclaveError> {
     let client = reqwest::Client::new();
 
     info!("Fetching user ID for @{}", username);
 
     let response = client
-        .get("https://api.twitterapi.io/twitter/user/info")
+        .get(format!("{}/twitter/user/info", base_url))
         .header("X-API-Key", api_key)
         .query(&[("userName", username)])
         .send()

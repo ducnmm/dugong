@@ -59,7 +59,7 @@ impl ProcessorWorker {
         }
     }
 
-    async fn process_once(&self) -> Result<ProcessOutcome> {
+    pub async fn process_once(&self) -> Result<ProcessOutcome> {
         let raw = self
             .redis
             .pop_queue_blocking(redis::QUEUE_TWEETS, 1)
@@ -858,7 +858,8 @@ struct QueueItem {
     event_id: String,
 }
 
-enum ProcessOutcome {
+#[derive(Debug)]
+pub enum ProcessOutcome {
     Empty,
     Processed { event_id: String, tweet_id: String },
 }

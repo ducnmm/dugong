@@ -31,3 +31,6 @@ base64.workspace = true
 hex.workspace = true
 
 dotenvy.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true

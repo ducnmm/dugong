@@ -3,6 +3,14 @@ name = "dugong-worker"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "dugong_worker"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dugong-worker"
+path = "src/main.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.11", features = ["json"] }
@@ -13,3 +21,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenv = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+wiremock = "0.6"

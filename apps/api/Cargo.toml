@@ -73,3 +73,6 @@ chrono.workspace = true
 regex.workspace = true
 
 [dev-dependencies]
+wiremock.workspace = true
+tower = { version = "0.4", features = ["util"] }
+http-body-util = "0.1"
