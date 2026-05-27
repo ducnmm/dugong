@@ -3,10 +3,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "set-env": "tsx railway-set-env.ts"
+    "set-env": "tsx railway-set-env.ts",
+    "test-flows": "tsx test-flows.ts"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"
   }
