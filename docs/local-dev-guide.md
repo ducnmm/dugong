@@ -64,14 +64,59 @@ Key values you must supply in `apps/api/.env`:
   processor for posting reply tweets (the indexer does not need these)
 - `TWITTER_OAUTH2_CLIENT_ID`, `TWITTER_OAUTH2_CLIENT_SECRET` — X OAuth2 from
   https://developer.twitter.com
-- `DUGONG_PACKAGE_ID`, `DUGONG_REGISTRY_ID`, `ENCLAVE_CONFIG_ID`, `ENCLAVE_ID`
-  — from the deployed Move contracts (`ENCLAVE_ID` is the Enclave shared
-  object from `register_enclave`, **not** the config object)
+- `DUGONG_PACKAGE_ID`, `DUGONG_REGISTRY_ID`, `MARKET_REGISTRY_ID`,
+  `ENCLAVE_CONFIG_ID`, `ENCLAVE_ID` — from the deployed Move contracts
+  (`ENCLAVE_ID` is the `Enclave` shared object from `register_enclave`, **not**
+  the config object)
+- `MARKET_TREASURY_ACCOUNT_ID` — shared `DugongAccount` that receives the
+  protocol fee on `markets::resolve`; created once per network via
+  `scripts/create-treasury.ts` (see below)
 - `ENOKI_API_KEY` — gas sponsorship
 - `BACKEND_SIGNER_PRIVATE_KEY` — base64-encoded BCS `SuiKeyPair`
 
 `DATABASE_URL`, `REDIS_URL`, `SUI_RPC_URL`, and `ENCLAVE_URL` already point at
 the local stack in the example file.
+
+### Deploying Move contracts
+
+`scripts/deploy-contract.ts` builds, publishes/upgrades the Move packages and
+patches the contract IDs above into `apps/api/.env`, `apps/indexer/.env`, and
+`apps/web/.env`. Run it from the repo root:
+
+```bash
+# Default — deploys only `dugong` (DugongRegistry, MarketRegistry).
+scripts/deploy-contract.ts --network testnet
+
+# All three packages in dependency order (enclave → seal-policy → dugong).
+scripts/deploy-contract.ts --package all --network testnet
+
+# Preview without touching the chain.
+scripts/deploy-contract.ts --package all --dry-run
+```
+
+Each package has its own `Published.toml`; if it contains an
+`upgrade-capability` for the target network the script runs `sui client
+upgrade`, otherwise `sui client publish`. Make sure `sui client active-env`
+matches `--network` and your active address is funded.
+
+### Creating the treasury account
+
+`MARKET_TREASURY_ACCOUNT_ID` is a regular shared `DugongAccount` — there is no
+dedicated treasury type. Create it once per network with:
+
+```bash
+# Requires DUGONG_PACKAGE_ID + DUGONG_REGISTRY_ID in apps/api/.env (i.e. run
+# the deploy script first).
+scripts/create-treasury.ts --network testnet
+```
+
+The script calls `dugong::account::init_account_no_signature`, parses the
+created `DugongAccount` from the JSON output, and records it in
+`contracts/move/dugong/Treasury.toml` keyed by network. Subsequent runs of
+`deploy-contract.ts` read that file automatically and write the id back into
+`MARKET_TREASURY_ACCOUNT_ID`. Pass `--xid` / `--handle` to customise, or
+`--force` to overwrite an existing entry. Commit `Treasury.toml` alongside
+`Published.toml`.
 
 ## 3. Run the Nautilus enclave server
 

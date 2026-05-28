@@ -899,7 +899,7 @@ impl SuiTransactionBuilder {
             .context("Invalid DUGONG_PACKAGE_ID")?;
 
         // Build type argument for Enclave<DUGONG>
-        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_package_id);
+        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_witness_package_id);
         let dugong_type_tag =
             TypeTag::from_str(&dugong_type).context("Failed to parse DUGONG type")?;
 
@@ -1073,7 +1073,7 @@ impl SuiTransactionBuilder {
         })?;
 
         // Build type argument for Enclave<DUGONG>
-        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_package_id);
+        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_witness_package_id);
         let dugong_type_tag =
             TypeTag::from_str(&dugong_type).context("Failed to parse DUGONG type")?;
 
@@ -1316,7 +1316,7 @@ impl SuiTransactionBuilder {
         })?;
 
         // Build type argument for Enclave<DUGONG>
-        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_package_id);
+        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_witness_package_id);
         let dugong_type_tag =
             TypeTag::from_str(&dugong_type).context("Failed to parse DUGONG type")?;
 

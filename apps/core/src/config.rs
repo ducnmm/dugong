@@ -29,6 +29,12 @@ pub struct Config {
     // Sui
     pub sui_rpc_url: String,
     pub dugong_package_id: String,
+    /// Package id used for the `Enclave<DUGONG>` type-argument when calling
+    /// enclave-gated entry functions (init_account, link_wallet, transfer_coin).
+    /// Defaults to `dugong_package_id`; override via DUGONG_WITNESS_PACKAGE_ID
+    /// when the on-chain Enclave was registered under a different (older)
+    /// package version than the one currently in use.
+    pub dugong_witness_package_id: String,
     pub dugong_registry_id: String,
     pub enclave_config_id: String,
     pub enclave_object_id: String,
@@ -97,6 +103,9 @@ impl Config {
                 .unwrap_or_else(|_| "https://fullnode.testnet.sui.io:443".to_string()),
             dugong_package_id: env::var("DUGONG_PACKAGE_ID")
                 .context("DUGONG_PACKAGE_ID must be set")?,
+            dugong_witness_package_id: env::var("DUGONG_WITNESS_PACKAGE_ID")
+                .or_else(|_| env::var("DUGONG_PACKAGE_ID"))
+                .context("DUGONG_WITNESS_PACKAGE_ID or DUGONG_PACKAGE_ID must be set")?,
             dugong_registry_id: env::var("DUGONG_REGISTRY_ID")
                 .context("DUGONG_REGISTRY_ID must be set")?,
             enclave_config_id: env::var("ENCLAVE_CONFIG_ID")
