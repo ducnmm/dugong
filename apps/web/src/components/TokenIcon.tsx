@@ -10,6 +10,7 @@ interface TokenIconProps {
   iconUrl?: string | null;
   size?: 'sm' | 'md' | 'lg';
   className?: string;
+  framed?: boolean;
 }
 
 // Known token icons by symbol
@@ -19,14 +20,15 @@ const KNOWN_ICONS: Record<string, string> = {
   USDC: usdcIcon,
 };
 
-// Generate a consistent color from a string
-function stringToColor(str: string): string {
+const FALLBACK_COLORS = ['#A6FAFF', '#B8FF9F', '#FFF59F', '#FFA6F6', '#A8A6FF', '#FFC29F'];
+
+// Generate a consistent neo accent from a string
+function stringToAccent(str: string): string {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     hash = str.charCodeAt(i) + ((hash << 5) - hash);
   }
-  const hue = Math.abs(hash % 360);
-  return `hsl(${hue}, 70%, 50%)`;
+  return FALLBACK_COLORS[Math.abs(hash) % FALLBACK_COLORS.length];
 }
 
 export const TokenIcon: React.FC<TokenIconProps> = ({
@@ -34,6 +36,7 @@ export const TokenIcon: React.FC<TokenIconProps> = ({
   iconUrl,
   size = 'md',
   className = '',
+  framed = true,
 }) => {
   const sizeClasses = {
     sm: 'w-6 h-6 text-xs',
@@ -49,17 +52,23 @@ export const TokenIcon: React.FC<TokenIconProps> = ({
       <img
         src={icon}
         alt={symbol}
-        className={`${sizeClasses[size]} rounded-full object-cover ${className}`}
+        className={`${sizeClasses[size]} ${
+          framed
+            ? 'rounded-md border-2 border-black bg-white object-cover shadow-neo-sm'
+            : 'object-contain'
+        } ${className}`}
       />
     );
   }
 
-  // Fallback: first letter with colored background
-  const bgColor = stringToColor(symbol);
+  // Fallback: first letter with grayscale background
+  const bgColor = stringToAccent(symbol);
 
   return (
     <div
-      className={`${sizeClasses[size]} rounded-full flex items-center justify-center font-bold text-white ${className}`}
+      className={`${sizeClasses[size]} flex items-center justify-center font-black text-black ${
+        framed ? 'rounded-md border-2 border-black shadow-neo-sm' : ''
+      } ${className}`}
       style={{ backgroundColor: bgColor }}
     >
       {symbol.charAt(0).toUpperCase()}

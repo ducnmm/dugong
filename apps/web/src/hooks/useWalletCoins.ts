@@ -169,6 +169,5 @@ export function useWalletCoins() {
       return walletCoins;
     },
     enabled: !!address,
-    refetchInterval: 10000, // Refetch every 10 seconds
   });
 }

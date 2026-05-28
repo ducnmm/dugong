@@ -1,24 +1,83 @@
 import React, { useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/useAuth';
 import { useXAuth } from '../hooks/useXAuth';
-import { useTheme } from '../contexts/useTheme';
 import {
   useCurrentAccount,
   useDisconnectWallet,
   useConnectWallet,
   useWallets,
 } from '@mysten/dapp-kit';
-import { Wallet, Copy, Check, ChevronDown, LogOut, Sun, Moon } from 'lucide-react';
+import { Wallet, Copy, Check, ChevronDown, LogOut } from 'lucide-react';
 
-// Custom Wallet Button Component
-const CustomWalletButton: React.FC = () => {
+const DUGONG_LOGO_SRC = '/android-chrome-192x192.png';
+
+const shortenAddress = (address: string) => {
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+};
+
+const DugongLogoMark: React.FC<{ size?: 'sm' | 'md' | 'lg'; rounded?: 'full' | 'xl' }> = ({
+  size = 'md',
+  rounded = 'full',
+}) => {
+  const sizeClass = {
+    sm: 'w-7 h-7 p-0.5',
+    md: 'w-8 h-8 p-1',
+    lg: 'w-10 h-10 p-1',
+  }[size];
+  const roundedClass = rounded === 'xl' ? 'rounded-md' : 'rounded-full';
+
+  return (
+    <div className={`${sizeClass} ${roundedClass} dugong-logo-mark`}>
+      <img
+        src={DUGONG_LOGO_SRC}
+        alt="Dugong"
+        className="dugong-logo-img"
+      />
+    </div>
+  );
+};
+
+const WalletIconTile: React.FC<{ icon?: string; name: string }> = ({ icon, name }) => {
+  const [hasError, setHasError] = useState(false);
+
+  return (
+    <span className="wallet-option-icon" aria-hidden="true">
+      {icon && !hasError ? (
+        <img
+          src={icon}
+          alt=""
+          className="wallet-option-icon-img"
+          onError={() => setHasError(true)}
+        />
+      ) : (
+        <Wallet className="h-5 w-5" />
+      )}
+      <span className="sr-only">{name}</span>
+    </span>
+  );
+};
+
+interface AccountMenuProps {
+  triggerClassName?: string;
+  labelClassName?: string;
+  chevronClassName?: string;
+}
+
+export const AccountMenu: React.FC<AccountMenuProps> = ({
+  triggerClassName = 'account-menu-trigger',
+  labelClassName = 'text-sm font-medium',
+  chevronClassName = 'w-4 h-4 opacity-70',
+}) => {
+  const { logout, user } = useAuth();
   const currentAccount = useCurrentAccount();
   const { mutate: disconnect } = useDisconnectWallet();
   const { mutate: connect } = useConnectWallet();
   const wallets = useWallets();
   const [showDropdown, setShowDropdown] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const displayHandle = user?.twitterHandle ? `@${user.twitterHandle}` : '@Account';
 
   const copyAddress = async () => {
     if (currentAccount?.address) {
@@ -28,79 +87,21 @@ const CustomWalletButton: React.FC = () => {
     }
   };
 
-  const shortenAddress = (address: string) => {
-    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  const handleLogout = () => {
+    logout();
+    setShowDropdown(false);
   };
 
-  if (!currentAccount) {
-    // Not connected - show connect button
-    return (
-      <div className="relative z-50">
-        <button
-          onClick={() => setShowDropdown(!showDropdown)}
-          className="btn-glass flex items-center gap-2"
-        >
-          <Wallet className="w-4 h-4" />
-          <span>Connect Wallet</span>
-          <ChevronDown className="w-4 h-4" />
-        </button>
-
-        {showDropdown && (
-          <>
-            <div
-              className="fixed inset-0 z-[998]"
-              onClick={() => setShowDropdown(false)}
-            />
-            <div className="absolute right-0 mt-2 w-64 bg-dark-800/95 backdrop-blur-xl border border-white/10 rounded-xl py-2 z-[999] shadow-glow-sm">
-              <p className="px-4 py-2 text-xs text-gray-500 uppercase tracking-wide">
-                Select Wallet
-              </p>
-              {wallets.length === 0 ? (
-                <p className="px-4 py-3 text-sm text-gray-400">
-                  No wallets found
-                </p>
-              ) : (
-                wallets.map((wallet) => (
-                  <button
-                    key={wallet.name}
-                    onClick={() => {
-                      connect({ wallet });
-                      setShowDropdown(false);
-                    }}
-                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-white/10 transition-colors"
-                  >
-                    {wallet.icon && (
-                      <img
-                        src={wallet.icon}
-                        alt={wallet.name}
-                        className="w-6 h-6 rounded"
-                      />
-                    )}
-                    <span className="text-white text-sm">{wallet.name}</span>
-                  </button>
-                ))
-              )}
-            </div>
-          </>
-        )}
-      </div>
-    );
-  }
-
-  // Connected - show address with options
   return (
     <div className="relative z-50">
       <button
         onClick={() => setShowDropdown(!showDropdown)}
-        className="glass flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-white/10 transition-colors"
+        className={triggerClassName}
       >
-        <div className="w-6 h-6 rounded-full bg-sui-gradient flex items-center justify-center">
-          <Wallet className="w-3 h-3 text-white" />
-        </div>
-        <span className="text-white text-sm font-mono">
-          {shortenAddress(currentAccount.address)}
+        <span className={labelClassName}>
+          {displayHandle}
         </span>
-        <ChevronDown className="w-4 h-4 text-gray-400" />
+        <ChevronDown className={chevronClassName} />
       </button>
 
       {showDropdown && (
@@ -109,37 +110,80 @@ const CustomWalletButton: React.FC = () => {
             className="fixed inset-0 z-[998]"
             onClick={() => setShowDropdown(false)}
           />
-          <div className="absolute right-0 mt-2 w-56 bg-dark-800/95 backdrop-blur-xl border border-white/10 rounded-xl py-2 z-[999] shadow-glow-sm">
-            {/* Address Display */}
-            <div className="px-4 py-3 border-b border-white/10">
-              <p className="text-xs text-gray-500 mb-1">Connected Address</p>
-              <div className="flex items-center justify-between">
-                <code className="text-sm text-sui-400 font-mono">
-                  {shortenAddress(currentAccount.address)}
-                </code>
-                <button
-                  onClick={copyAddress}
-                  className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
-                >
-                  {copied ? (
-                    <Check className="w-4 h-4 text-cyber-green" />
-                  ) : (
-                    <Copy className="w-4 h-4 text-gray-400" />
-                  )}
-                </button>
-              </div>
+          <div className="account-menu-dropdown">
+            <div className="account-menu-section">
+              <p className="account-menu-label">Signed in</p>
+              <span className="account-menu-value text-sm">{displayHandle}</span>
             </div>
 
-            {/* Disconnect */}
+            {currentAccount ? (
+              <>
+                <div className="account-menu-section">
+                  <p className="account-menu-label mb-2">Connected Wallet</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center">
+                      <code className="account-menu-muted truncate text-sm font-mono">
+                        {shortenAddress(currentAccount.address)}
+                      </code>
+                    </div>
+                    <button
+                      onClick={copyAddress}
+                      className="account-menu-muted shrink-0 rounded-md border-2 border-black bg-white p-1.5 shadow-neo-sm transition-colors hover:bg-cyan-200"
+                      aria-label="Copy wallet address"
+                    >
+                      {copied ? (
+                        <Check className="w-4 h-4" />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    disconnect();
+                    setShowDropdown(false);
+                  }}
+                  className="account-menu-action"
+                >
+                  <Wallet className="w-4 h-4" />
+                  <span className="text-sm">Disconnect wallet</span>
+                </button>
+              </>
+            ) : (
+              <div className="border-b-4 border-black py-2">
+                <p className="account-menu-label px-4 py-2 uppercase tracking-wide">
+                  Connect Wallet
+                </p>
+                {wallets.length === 0 ? (
+                  <p className="account-menu-muted px-4 py-3 text-sm">
+                    No wallets found
+                  </p>
+                ) : (
+                  wallets.map((wallet) => (
+                    <button
+                      key={wallet.name}
+                      onClick={() => {
+                        connect({ wallet });
+                        setShowDropdown(false);
+                      }}
+                      className="account-menu-action gap-3"
+                    >
+                      <WalletIconTile icon={wallet.icon} name={wallet.name} />
+                      <span className="text-sm">{wallet.name}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+
             <button
-              onClick={() => {
-                disconnect();
-                setShowDropdown(false);
-              }}
-              className="w-full px-4 py-3 flex items-center gap-2 text-red-400 hover:bg-red-500/10 transition-colors"
+              onClick={handleLogout}
+              className="account-menu-action"
             >
               <LogOut className="w-4 h-4" />
-              <span className="text-sm">Disconnect</span>
+              <span className="text-sm">Logout</span>
             </button>
           </div>
         </>
@@ -150,16 +194,12 @@ const CustomWalletButton: React.FC = () => {
 
 export const Header: React.FC = () => {
   const navigate = useNavigate();
-  const location = useLocation();
-  const { isAuthenticated, logout, user } = useAuth();
+  const { isAuthenticated } = useAuth();
   const { initiateLogin: initiateXLogin, isLoading: xAuthLoading } = useXAuth();
-  const { toggleTheme, isDark } = useTheme();
-
-  const isHomePage = location.pathname === '/';
 
   return (
-    <header className="glass-subtle border-b border-white/5 relative z-[100]">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+    <header className="relative z-[100] border-b-4 border-black bg-yellow-200">
+      <div className="mx-auto max-w-[1100px] px-4 py-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             {/* Logo */}
@@ -167,77 +207,22 @@ export const Header: React.FC = () => {
               onClick={() => navigate('/')}
               className="flex items-center gap-3 cursor-pointer"
             >
-              <div className="w-10 h-10 rounded-xl bg-sui-gradient flex items-center justify-center shadow-glow-sm">
-                <Wallet className="w-5 h-5 text-white" />
-              </div>
+              <DugongLogoMark size="lg" rounded="xl" />
               <div>
-                <h1 className="text-xl font-bold text-white">Dugong</h1>
-                <span className="text-xs text-gray-400">Powered by Sui</span>
+                <h1 className="hero-font text-3xl font-black leading-none text-black">Dugong</h1>
+                <span className="text-xs font-bold uppercase text-black">Built for X</span>
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Theme Toggle */}
-            <button
-              onClick={toggleTheme}
-              className="p-2 rounded-lg glass hover:bg-white/10 transition-colors"
-              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-            >
-              {isDark ? (
-                <Sun className="w-5 h-5 text-yellow-400" />
-              ) : (
-                <Moon className="w-5 h-5 text-sui-500" />
-              )}
-            </button>
-
             {isAuthenticated ? (
-              isHomePage ? (
-                <button
-                  onClick={() => navigate('/dashboard')}
-                  className="btn-sui"
-                >
-                  Dashboard
-                </button>
-              ) : (
-                <>
-                  {/* Home Button */}
-                  <button
-                    onClick={() => navigate('/')}
-                    className="btn-glass"
-                  >
-                    Home
-                  </button>
-
-                  {/* Custom Wallet Button */}
-                  <CustomWalletButton />
-
-                  {/* User Info */}
-                  {user && (
-                    <div className="flex items-center gap-3 pl-4 border-l border-white/10">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full bg-sui-gradient flex items-center justify-center text-white text-sm font-bold">
-                          {user.twitterHandle?.[0]?.toUpperCase()}
-                        </div>
-                        <span className="text-sm text-gray-300">
-                          @{user.twitterHandle}
-                        </span>
-                      </div>
-                      <button
-                        onClick={logout}
-                        className="px-3 py-1.5 text-sm glass rounded-lg text-gray-300 hover:text-white hover:bg-white/10 transition-all"
-                      >
-                        Logout
-                      </button>
-                    </div>
-                  )}
-                </>
-              )
+              <AccountMenu />
             ) : (
               <button
                 onClick={initiateXLogin}
                 disabled={xAuthLoading}
-                className="px-5 py-2.5 bg-dark-800 text-white border border-white/20 rounded-xl font-medium transition-all duration-200 hover:bg-dark-700 hover:border-white/30 hover:shadow-glow-sm flex items-center gap-2 disabled:opacity-50"
+                className="btn-glass disabled:opacity-50"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
