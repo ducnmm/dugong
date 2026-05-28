@@ -38,6 +38,33 @@ module dugong::events {
         amount: u64,
     }
 
+    // ====== Market Events ======
+
+    public struct MarketCreated has copy, drop {
+        market_tweet_id: String,
+        market_id: ID,
+        creator_xid: String,
+        question: String,
+        fee_bps: u16,
+    }
+
+    public struct BetPlaced has copy, drop {
+        market_tweet_id: String,
+        bet_tweet_id: String,
+        better_xid: String,
+        side: bool,
+        coin_type: String,
+        amount: u64,
+        timestamp: u64,
+    }
+
+    public struct MarketResolved has copy, drop {
+        market_tweet_id: String,
+        resolver_xid: String,
+        outcome: bool,
+        timestamp: u64,
+    }
+
     // ====== Transfer Events ======
 
     public struct TransferCompleted has copy, drop {
@@ -88,6 +115,45 @@ module dugong::events {
             coin_type,
             amount,
         });
+    }
+
+    public(package) fun emit_market_created(
+        market_tweet_id: String,
+        market_id: ID,
+        creator_xid: String,
+        question: String,
+        fee_bps: u16,
+    ) {
+        sui::event::emit(MarketCreated { market_tweet_id, market_id, creator_xid, question, fee_bps });
+    }
+
+    public(package) fun emit_bet_placed(
+        market_tweet_id: String,
+        bet_tweet_id: String,
+        better_xid: String,
+        side: bool,
+        coin_type: String,
+        amount: u64,
+        timestamp: u64,
+    ) {
+        sui::event::emit(BetPlaced {
+            market_tweet_id,
+            bet_tweet_id,
+            better_xid,
+            side,
+            coin_type,
+            amount,
+            timestamp,
+        });
+    }
+
+    public(package) fun emit_market_resolved(
+        market_tweet_id: String,
+        resolver_xid: String,
+        outcome: bool,
+        timestamp: u64,
+    ) {
+        sui::event::emit(MarketResolved { market_tweet_id, resolver_xid, outcome, timestamp });
     }
 
     public(package) fun emit_transfer_completed(

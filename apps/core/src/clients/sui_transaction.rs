@@ -899,7 +899,7 @@ impl SuiTransactionBuilder {
             .context("Invalid DUGONG_PACKAGE_ID")?;
 
         // Build type argument for Enclave<DUGONG>
-        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_package_id);
+        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_witness_package_id);
         let dugong_type_tag =
             TypeTag::from_str(&dugong_type).context("Failed to parse DUGONG type")?;
 
@@ -1073,7 +1073,7 @@ impl SuiTransactionBuilder {
         })?;
 
         // Build type argument for Enclave<DUGONG>
-        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_package_id);
+        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_witness_package_id);
         let dugong_type_tag =
             TypeTag::from_str(&dugong_type).context("Failed to parse DUGONG type")?;
 
@@ -1316,7 +1316,7 @@ impl SuiTransactionBuilder {
         })?;
 
         // Build type argument for Enclave<DUGONG>
-        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_package_id);
+        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_witness_package_id);
         let dugong_type_tag =
             TypeTag::from_str(&dugong_type).context("Failed to parse DUGONG type")?;
 
@@ -1354,6 +1354,397 @@ impl SuiTransactionBuilder {
         );
 
         Ok(tx_data)
+    }
+
+    // ========================================================================
+    // Prediction market PTB builders
+    // ========================================================================
+
+    /// Submit a create_market transaction
+    pub async fn submit_create_market(
+        &self,
+        creator_xid: &str,
+        market_tweet_id: &str,
+        question: &str,
+        fee_bps: u16,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<String> {
+        info!(
+            "Building create_market transaction: market_tweet_id={}, creator={}",
+            market_tweet_id, creator_xid
+        );
+
+        let registry_id = ObjectID::from_str(&self.config.market_registry_id)
+            .context("Invalid MARKET_REGISTRY_ID")?;
+        let registry_ref = self.get_object_ref(registry_id).await?;
+        let tx_data = self
+            .build_create_market_transaction(
+                registry_ref,
+                creator_xid,
+                market_tweet_id,
+                question,
+                fee_bps,
+                timestamp,
+                signature,
+            )
+            .await?;
+
+        self.sign_and_execute(tx_data).await
+    }
+
+    async fn build_create_market_transaction(
+        &self,
+        registry: ObjectRef,
+        creator_xid: &str,
+        market_tweet_id: &str,
+        question: &str,
+        fee_bps: u16,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<TransactionData> {
+        let mut ptb = ProgrammableTransactionBuilder::new();
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+
+        let registry_arg = ptb.obj(ObjectArg::SharedObject {
+            id: registry.0,
+            initial_shared_version: registry.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let creator_xid_arg = ptb.pure(creator_xid.as_bytes().to_vec())?;
+        let market_tweet_id_arg = ptb.pure(market_tweet_id.as_bytes().to_vec())?;
+        let question_arg = ptb.pure(question.as_bytes().to_vec())?;
+        let fee_bps_arg = ptb.pure(fee_bps)?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+        let sig_bytes = hex::decode(signature.trim_start_matches("0x"))
+            .context("Failed to decode create_market signature")?;
+        let sig_arg = ptb.pure(sig_bytes)?;
+
+        ptb.command(Command::move_call(
+            package_id,
+            "markets".parse()?,
+            "create_market".parse()?,
+            vec![],
+            vec![
+                registry_arg,
+                creator_xid_arg,
+                market_tweet_id_arg,
+                question_arg,
+                fee_bps_arg,
+                timestamp_arg,
+                sig_arg,
+            ],
+        ));
+
+        self.finish_ptb(ptb).await
+    }
+
+    /// Submit a place_bet<T> transaction
+    pub async fn submit_place_bet(
+        &self,
+        market_object_id: &str,
+        better_account_id: &str,
+        amount: u64,
+        side: bool,
+        bet_tweet_id: &str,
+        coin_type: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<String> {
+        info!(
+            "Building place_bet transaction: market={}, better={}, amount={}, side={}",
+            market_object_id, better_account_id, amount, side
+        );
+
+        let market_id =
+            ObjectID::from_str(market_object_id).context("Invalid market object ID")?;
+        let market_ref = self.get_object_ref(market_id).await?;
+        let better_id =
+            ObjectID::from_str(better_account_id).context("Invalid better account object ID")?;
+        let better_ref = self.get_object_ref(better_id).await?;
+
+        let tx_data = self
+            .build_place_bet_transaction(
+                market_ref,
+                better_ref,
+                amount,
+                side,
+                bet_tweet_id,
+                coin_type,
+                timestamp,
+                signature,
+            )
+            .await?;
+
+        self.sign_and_execute(tx_data).await
+    }
+
+    async fn build_place_bet_transaction(
+        &self,
+        market: ObjectRef,
+        better_account: ObjectRef,
+        amount: u64,
+        side: bool,
+        bet_tweet_id: &str,
+        coin_type: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<TransactionData> {
+        let mut ptb = ProgrammableTransactionBuilder::new();
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+        let full_coin_type = Self::expand_coin_type(coin_type);
+        let coin_type_tag =
+            TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
+        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+
+        let market_arg = ptb.obj(ObjectArg::SharedObject {
+            id: market.0,
+            initial_shared_version: market.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let better_arg = ptb.obj(ObjectArg::SharedObject {
+            id: better_account.0,
+            initial_shared_version: better_account.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let amount_arg = ptb.pure(amount)?;
+        let side_arg = ptb.pure(side)?;
+        let bet_tweet_id_arg = ptb.pure(bet_tweet_id.as_bytes().to_vec())?;
+        let coin_type_arg = ptb.pure(canonical_coin_type.into_bytes())?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+        let sig_bytes = hex::decode(signature.trim_start_matches("0x"))
+            .context("Failed to decode place_bet signature")?;
+        let sig_arg = ptb.pure(sig_bytes)?;
+
+        ptb.command(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package: package_id,
+            module: "markets".to_string(),
+            function: "place_bet".to_string(),
+            type_arguments: vec![coin_type_tag.into()],
+            arguments: vec![
+                market_arg,
+                better_arg,
+                amount_arg,
+                side_arg,
+                bet_tweet_id_arg,
+                coin_type_arg,
+                timestamp_arg,
+                sig_arg,
+            ],
+        })));
+
+        self.finish_ptb(ptb).await
+    }
+
+    /// Submit a resolve_market<T> transaction
+    pub async fn submit_resolve_market(
+        &self,
+        market_object_id: &str,
+        resolver_xid: &str,
+        outcome: bool,
+        coin_type: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<String> {
+        info!(
+            "Building resolve_market transaction: market={}, resolver={}, outcome={}",
+            market_object_id, resolver_xid, outcome
+        );
+
+        let market_id =
+            ObjectID::from_str(market_object_id).context("Invalid market object ID")?;
+        let market_ref = self.get_object_ref(market_id).await?;
+        let treasury_id = ObjectID::from_str(&self.config.market_treasury_account_id)
+            .context("Invalid MARKET_TREASURY_ACCOUNT_ID")?;
+        let treasury_ref = self.get_object_ref(treasury_id).await?;
+
+        let tx_data = self
+            .build_resolve_market_transaction(
+                market_ref,
+                treasury_ref,
+                resolver_xid,
+                outcome,
+                coin_type,
+                timestamp,
+                signature,
+            )
+            .await?;
+
+        self.sign_and_execute(tx_data).await
+    }
+
+    async fn build_resolve_market_transaction(
+        &self,
+        market: ObjectRef,
+        treasury: ObjectRef,
+        resolver_xid: &str,
+        outcome: bool,
+        coin_type: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<TransactionData> {
+        let mut ptb = ProgrammableTransactionBuilder::new();
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+        let full_coin_type = Self::expand_coin_type(coin_type);
+        let coin_type_tag =
+            TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
+
+        let market_arg = ptb.obj(ObjectArg::SharedObject {
+            id: market.0,
+            initial_shared_version: market.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let treasury_arg = ptb.obj(ObjectArg::SharedObject {
+            id: treasury.0,
+            initial_shared_version: treasury.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let resolver_xid_arg = ptb.pure(resolver_xid.as_bytes().to_vec())?;
+        let outcome_arg = ptb.pure(outcome)?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+        let sig_bytes = hex::decode(signature.trim_start_matches("0x"))
+            .context("Failed to decode resolve_market signature")?;
+        let sig_arg = ptb.pure(sig_bytes)?;
+
+        ptb.command(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package: package_id,
+            module: "markets".to_string(),
+            function: "resolve_market".to_string(),
+            type_arguments: vec![coin_type_tag.into()],
+            arguments: vec![
+                market_arg,
+                treasury_arg,
+                resolver_xid_arg,
+                outcome_arg,
+                timestamp_arg,
+                sig_arg,
+            ],
+        })));
+
+        self.finish_ptb(ptb).await
+    }
+
+    /// Submit a pay_winner<T> transaction for one winner
+    pub async fn submit_pay_winner(
+        &self,
+        market_object_id: &str,
+        winner_account_id: &str,
+        coin_type: &str,
+    ) -> Result<String> {
+        info!(
+            "Building pay_winner transaction: market={}, winner_account={}",
+            market_object_id, winner_account_id
+        );
+
+        let market_id =
+            ObjectID::from_str(market_object_id).context("Invalid market object ID")?;
+        let market_ref = self.get_object_ref(market_id).await?;
+        let winner_id =
+            ObjectID::from_str(winner_account_id).context("Invalid winner account object ID")?;
+        let winner_ref = self.get_object_ref(winner_id).await?;
+
+        let tx_data = self
+            .build_pay_winner_transaction(market_ref, winner_ref, coin_type)
+            .await?;
+
+        self.sign_and_execute(tx_data).await
+    }
+
+    async fn build_pay_winner_transaction(
+        &self,
+        market: ObjectRef,
+        winner_account: ObjectRef,
+        coin_type: &str,
+    ) -> Result<TransactionData> {
+        let mut ptb = ProgrammableTransactionBuilder::new();
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+        let full_coin_type = Self::expand_coin_type(coin_type);
+        let coin_type_tag =
+            TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
+
+        let market_arg = ptb.obj(ObjectArg::SharedObject {
+            id: market.0,
+            initial_shared_version: market.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let winner_arg = ptb.obj(ObjectArg::SharedObject {
+            id: winner_account.0,
+            initial_shared_version: winner_account.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+
+        ptb.command(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package: package_id,
+            module: "markets".to_string(),
+            function: "pay_winner".to_string(),
+            type_arguments: vec![coin_type_tag.into()],
+            arguments: vec![market_arg, winner_arg],
+        })));
+
+        self.finish_ptb(ptb).await
+    }
+
+    /// Finalize PTB into TransactionData with gas pricing
+    async fn finish_ptb(
+        &self,
+        ptb: ProgrammableTransactionBuilder,
+    ) -> Result<TransactionData> {
+        let pt = ptb.finish();
+        let gas_price = self
+            .sui_client
+            .read_api()
+            .get_reference_gas_price()
+            .await
+            .context("Failed to get gas price")?;
+        Ok(TransactionData::new_programmable(
+            self.signer,
+            vec![],
+            pt,
+            10_000_000,
+            gas_price,
+        ))
+    }
+
+    /// Sign and execute a TransactionData via Enoki sponsorship
+    async fn sign_and_execute(&self, tx_data: TransactionData) -> Result<String> {
+        let tx_kind = tx_data.kind();
+        let tx_kind_bytes =
+            bcs::to_bytes(&tx_kind).context("Failed to serialize transaction kind")?;
+        let tx_kind_base64 = BASE64.encode(&tx_kind_bytes);
+
+        let sponsored = self
+            .enoki_client
+            .create_sponsored_transaction(tx_kind_base64, self.signer.to_string(), Vec::new())
+            .await
+            .context("Failed to create sponsored transaction")?;
+
+        let tx_bytes = BASE64
+            .decode(&sponsored.bytes)
+            .context("Failed to decode sponsored transaction bytes")?;
+        let sponsored_tx_data: TransactionData = bcs::from_bytes(&tx_bytes)
+            .context("Failed to deserialize sponsored transaction data")?;
+
+        let intent = Intent::sui_transaction();
+        let intent_msg = IntentMessage::new(intent, sponsored_tx_data.clone());
+        let intent_msg_bytes = bcs::to_bytes(&intent_msg)?;
+        let mut hasher = DefaultHash::default();
+        hasher.update(&intent_msg_bytes);
+        let digest = hasher.finalize().digest;
+        let sui_signature = self.keypair.sign(&digest);
+        let signature_base64 = BASE64.encode(sui_signature.as_ref());
+
+        let result = self
+            .enoki_client
+            .execute_sponsored_transaction(sponsored.digest.clone(), signature_base64)
+            .await
+            .context("Failed to execute sponsored transaction")?;
+
+        info!("Transaction executed: {}", result.digest);
+        Ok(result.digest)
     }
 
     /// Build link_wallet_no_signature transaction (DEPRECATED - for testing only)

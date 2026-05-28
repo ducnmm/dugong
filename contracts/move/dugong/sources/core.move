@@ -20,12 +20,24 @@ module dugong::core {
     const EAlreadyLinked: u64 = 8;
     const ETweetAlreadyProcessed: u64 = 9;
 
+    // ====== Market Error Codes ======
+    const EMarketNotFound: u64 = 10;
+    const EMarketClosed: u64 = 11;
+    const EMarketAlreadyResolved: u64 = 12;
+    const ENotMarketCreator: u64 = 13;
+    const EBetAlreadyProcessed: u64 = 14;
+    const EInvalidBetSide: u64 = 15;
+    const EMarketTweetAlreadyUsed: u64 = 16;
+
     // ====== Intent Constants ======
 
     const INIT_ACCOUNT_INTENT: u8 = 0;
     const LINK_WALLET_INTENT: u8 = 1;
     const TRANSFER_COIN_INTENT: u8 = 2;
     const UPDATE_HANDLE_INTENT: u8 = 4;
+    const CREATE_MARKET_INTENT: u8 = 5;
+    const PLACE_BET_INTENT: u8 = 6;
+    const RESOLVE_MARKET_INTENT: u8 = 7;
 
     // ====== Core Structs ======
 
@@ -81,6 +93,33 @@ module dugong::core {
         new_handle: vector<u8>,
     }
 
+    // ====== Market Payload Structs ======
+
+    #[allow(unused_field)]
+    public struct CreateMarketPayload has copy, drop {
+        creator_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        question: vector<u8>,
+        fee_bps: u16,
+    }
+
+    #[allow(unused_field)]
+    public struct PlaceBetPayload has copy, drop {
+        better_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        bet_tweet_id: vector<u8>,
+        amount: u64,
+        coin_type: vector<u8>,
+        side: bool, // true = yes, false = no
+    }
+
+    #[allow(unused_field)]
+    public struct ResolveMarketPayload has copy, drop {
+        resolver_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        outcome: bool, // true = yes, false = no
+    }
+
     // ====== Init Function ======
 
     fun init(_otw: CORE, ctx: &mut TxContext) {
@@ -117,6 +156,13 @@ module dugong::core {
     public fun e_owner_not_set(): u64 { EOwnerNotSet }
     public fun e_already_linked(): u64 { EAlreadyLinked }
     public fun e_tweet_already_processed(): u64 { ETweetAlreadyProcessed }
+    public fun e_market_not_found(): u64 { EMarketNotFound }
+    public fun e_market_closed(): u64 { EMarketClosed }
+    public fun e_market_already_resolved(): u64 { EMarketAlreadyResolved }
+    public fun e_not_market_creator(): u64 { ENotMarketCreator }
+    public fun e_bet_already_processed(): u64 { EBetAlreadyProcessed }
+    public fun e_invalid_bet_side(): u64 { EInvalidBetSide }
+    public fun e_market_tweet_already_used(): u64 { EMarketTweetAlreadyUsed }
 
     // ====== Public Getter Functions for Intent Constants ======
 
@@ -124,6 +170,9 @@ module dugong::core {
     public fun link_wallet_intent(): u8 { LINK_WALLET_INTENT }
     public fun transfer_coin_intent(): u8 { TRANSFER_COIN_INTENT }
     public fun update_handle_intent(): u8 { UPDATE_HANDLE_INTENT }
+    public fun create_market_intent(): u8 { CREATE_MARKET_INTENT }
+    public fun place_bet_intent(): u8 { PLACE_BET_INTENT }
+    public fun resolve_market_intent(): u8 { RESOLVE_MARKET_INTENT }
 
     // ====== Public Functions for Registry Operations ======
 
@@ -246,6 +295,34 @@ module dugong::core {
         new_handle: vector<u8>,
     ): UpdateHandlePayload {
         UpdateHandlePayload { xid, new_handle }
+    }
+
+    public(package) fun new_create_market_payload(
+        creator_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        question: vector<u8>,
+        fee_bps: u16,
+    ): CreateMarketPayload {
+        CreateMarketPayload { creator_xid, market_tweet_id, question, fee_bps }
+    }
+
+    public(package) fun new_place_bet_payload(
+        better_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        bet_tweet_id: vector<u8>,
+        amount: u64,
+        coin_type: vector<u8>,
+        side: bool,
+    ): PlaceBetPayload {
+        PlaceBetPayload { better_xid, market_tweet_id, bet_tweet_id, amount, coin_type, side }
+    }
+
+    public(package) fun new_resolve_market_payload(
+        resolver_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        outcome: bool,
+    ): ResolveMarketPayload {
+        ResolveMarketPayload { resolver_xid, market_tweet_id, outcome }
     }
 
     // ====== Test-Only Functions ======

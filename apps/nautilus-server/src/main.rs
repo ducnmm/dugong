@@ -36,7 +36,12 @@ async fn main() -> Result<()> {
     #[cfg(feature = "seal-example")]
     let api_key = String::new();
 
-    let state = Arc::new(AppState { eph_kp, api_key });
+    let state = Arc::new(AppState {
+        eph_kp,
+        api_key,
+        twitterapi_io_base_url: nautilus_server::TWITTERAPI_IO_BASE_URL.to_string(),
+        twitter_api_base_url: nautilus_server::TWITTER_API_BASE_URL.to_string(),
+    });
 
     // Spawn host-only init server if seal-example feature is enabled
     #[cfg(feature = "seal-example")]

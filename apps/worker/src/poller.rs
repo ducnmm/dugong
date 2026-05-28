@@ -1,10 +1,30 @@
 use crate::backend_client::{BackendClient, TweetCreateEvent, WebhookPayload, WebhookUser};
 use crate::config::Config;
-use crate::twitter_client::TwitterClient;
+use crate::twitter_client::{TweetData, TwitterClient, TwitterUser};
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
+
+/// Convert searched tweets into webhook `TweetCreateEvent`s, pairing each
+/// tweet with its author from `users`. Tweets whose author is missing from
+/// `users` are dropped (the backend needs the screen name).
+pub fn tweets_to_events(data: &[TweetData], users: &[TwitterUser]) -> Vec<TweetCreateEvent> {
+    data.iter()
+        .filter_map(|tweet| {
+            let user = users.iter().find(|u| u.id == tweet.author_id)?;
+            Some(TweetCreateEvent {
+                id_str: tweet.id.clone(),
+                text: tweet.text.clone(),
+                user: WebhookUser {
+                    id_str: user.id.clone(),
+                    screen_name: user.username.clone(),
+                },
+                in_reply_to_status_id_str: None,
+            })
+        })
+        .collect()
+}
 
 pub struct PollerService {
     twitter_client: TwitterClient,
@@ -108,30 +128,7 @@ impl PollerService {
             .unwrap_or_default();
 
         // Convert to webhook payload
-        let mut events = Vec::new();
-
-        for tweet in &response.data {
-            let user = self.twitter_client.get_user_by_id(&tweet.author_id, &users);
-
-            if let Some(user) = user {
-                info!(
-                    "  Tweet {} from @{}: {}",
-                    tweet.id, user.username, tweet.text
-                );
-
-                events.push(TweetCreateEvent {
-                    id_str: tweet.id.clone(),
-                    text: tweet.text.clone(),
-                    user: WebhookUser {
-                        id_str: user.id.clone(),
-                        screen_name: user.username.clone(),
-                    },
-                    in_reply_to_status_id_str: None,
-                });
-            } else {
-                warn!("  Tweet {} has no user info", tweet.id);
-            }
-        }
+        let events = tweets_to_events(&response.data, &users);
 
         if !events.is_empty() {
             let payload = WebhookPayload {

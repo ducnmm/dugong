@@ -1,11 +1,6 @@
-mod backend_client;
-mod config;
-mod poller;
-mod twitter_client;
-
 use anyhow::Result;
-use config::Config;
-use poller::PollerService;
+use dugong_worker::config::Config;
+use dugong_worker::poller::PollerService;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]

@@ -1,17 +1,17 @@
-mod cursor;
-mod event_fetcher;
-mod event_processor;
-mod handlers;
-mod indexer;
-mod types;
-
 use dugong_core::config::Config;
 use dugong_core::db::{create_pool, run_migrations};
 
-use crate::indexer::Indexer;
+use dugong_indexer::indexer::Indexer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load this crate's own apps/indexer/.env. Resolved relative to the crate
+    // (CARGO_MANIFEST_DIR) so `cargo run -p dugong-indexer` works from any
+    // directory, not just apps/indexer. dotenvy is non-overriding here, so real
+    // environment variables win: in the container / on Railway this path does
+    // not exist and injected vars are used, making the absent file harmless.
+    dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/.env")).ok();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

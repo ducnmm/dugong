@@ -556,6 +556,170 @@ impl Transfer {
     }
 }
 
+/// Prediction market row
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Market {
+    pub id: i32,
+    pub market_tweet_id: String,
+    pub sui_object_id: String,
+    pub creator_xid: String,
+    pub question: String,
+    pub status: String, // "open" | "resolved"
+    pub outcome: Option<bool>,
+    pub fee_bps: i16,
+    pub tx_digest: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Bet placed on a market
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct MarketBet {
+    pub id: i32,
+    pub market_tweet_id: String,
+    pub bet_tweet_id: String,
+    pub better_xid: String,
+    pub side: bool,
+    pub coin_type: String,
+    pub amount: i64,
+    pub tx_digest: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl Market {
+    pub async fn upsert(
+        pool: &sqlx::PgPool,
+        market_tweet_id: &str,
+        sui_object_id: &str,
+        creator_xid: &str,
+        question: &str,
+        fee_bps: i16,
+        tx_digest: Option<&str>,
+    ) -> Result<Self, sqlx::Error> {
+        sqlx::query_as::<_, Market>(
+            r#"
+            INSERT INTO markets (market_tweet_id, sui_object_id, creator_xid, question, fee_bps, tx_digest)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (market_tweet_id) DO UPDATE SET
+                sui_object_id = EXCLUDED.sui_object_id,
+                updated_at = NOW()
+            RETURNING id, market_tweet_id, sui_object_id, creator_xid, question, status, outcome, fee_bps, tx_digest, created_at, updated_at
+            "#,
+        )
+        .bind(market_tweet_id)
+        .bind(sui_object_id)
+        .bind(creator_xid)
+        .bind(question)
+        .bind(fee_bps)
+        .bind(tx_digest)
+        .fetch_one(pool)
+        .await
+    }
+
+    pub async fn find_by_market_tweet_id(
+        pool: &sqlx::PgPool,
+        market_tweet_id: &str,
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query_as::<_, Market>(
+            r#"
+            SELECT id, market_tweet_id, sui_object_id, creator_xid, question, status, outcome, fee_bps, tx_digest, created_at, updated_at
+            FROM markets
+            WHERE market_tweet_id = $1
+            "#,
+        )
+        .bind(market_tweet_id)
+        .fetch_optional(pool)
+        .await
+    }
+
+    pub async fn set_resolved(
+        pool: &sqlx::PgPool,
+        market_tweet_id: &str,
+        outcome: bool,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE markets
+            SET status = 'resolved', outcome = $2, updated_at = NOW()
+            WHERE market_tweet_id = $1
+            "#,
+        )
+        .bind(market_tweet_id)
+        .bind(outcome)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Return distinct coin types and winning side bettors for a resolved market
+    pub async fn find_winners(
+        pool: &sqlx::PgPool,
+        market_tweet_id: &str,
+        outcome: bool,
+    ) -> Result<Vec<(String, String)>, sqlx::Error> {
+        // Returns (better_xid, coin_type) for each unique better on the winning side
+        sqlx::query_as::<_, (String, String)>(
+            r#"
+            SELECT better_xid, coin_type
+            FROM market_bets
+            WHERE market_tweet_id = $1 AND side = $2
+            GROUP BY better_xid, coin_type
+            "#,
+        )
+        .bind(market_tweet_id)
+        .bind(outcome)
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Return distinct coin types that have bets in a market
+    pub async fn find_bet_coin_types(
+        pool: &sqlx::PgPool,
+        market_tweet_id: &str,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT DISTINCT coin_type FROM market_bets WHERE market_tweet_id = $1
+            "#,
+        )
+        .bind(market_tweet_id)
+        .fetch_all(pool)
+        .await
+    }
+}
+
+impl MarketBet {
+    pub async fn upsert(
+        pool: &sqlx::PgPool,
+        market_tweet_id: &str,
+        bet_tweet_id: &str,
+        better_xid: &str,
+        side: bool,
+        coin_type: &str,
+        amount: i64,
+        tx_digest: Option<&str>,
+    ) -> Result<Self, sqlx::Error> {
+        sqlx::query_as::<_, MarketBet>(
+            r#"
+            INSERT INTO market_bets (market_tweet_id, bet_tweet_id, better_xid, side, coin_type, amount, tx_digest)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (bet_tweet_id) DO UPDATE SET
+                tx_digest = EXCLUDED.tx_digest
+            RETURNING id, market_tweet_id, bet_tweet_id, better_xid, side, coin_type, amount, tx_digest, created_at
+            "#,
+        )
+        .bind(market_tweet_id)
+        .bind(bet_tweet_id)
+        .bind(better_xid)
+        .bind(side)
+        .bind(coin_type)
+        .bind(amount)
+        .bind(tx_digest)
+        .fetch_one(pool)
+        .await
+    }
+}
+
 impl IndexerState {
     pub async fn get_by_name(pool: &sqlx::PgPool, name: &str) -> Result<Option<Self>, sqlx::Error> {
         sqlx::query_as::<_, IndexerState>(

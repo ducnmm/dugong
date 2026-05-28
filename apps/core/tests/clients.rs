@@ -1,0 +1,291 @@
+//! HTTP client tests for dugong-core, exercised against a local wiremock
+//! server so no live network calls are made.
+
+mod common;
+
+use common::test_config;
+use dugong_core::clients::enclave::EnclaveClient;
+use dugong_core::clients::enoki::EnokiClient;
+use dugong_core::clients::sui_client::SuiClient;
+use dugong_core::clients::twitter::{TwitterClient, TwitterOAuth2Client};
+use serde_json::json;
+use wiremock::matchers::{header, method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+// ============================ SuiClient ============================
+
+#[tokio::test]
+async fn sui_get_coin_metadata_parses_result() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {
+                "decimals": 9,
+                "name": "Sui",
+                "symbol": "SUI",
+                "description": "Native token",
+                "iconUrl": null,
+                "id": "0xabc"
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SuiClient::new(server.uri());
+    let meta = client
+        .get_coin_metadata("0x2::sui::SUI")
+        .await
+        .expect("request should succeed")
+        .expect("metadata should be present");
+
+    assert_eq!(meta.decimals, 9);
+    assert_eq!(meta.symbol, "SUI");
+}
+
+#[tokio::test]
+async fn sui_rpc_error_is_surfaced() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "error": { "code": -32602, "message": "invalid params" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SuiClient::new(server.uri());
+    let err = client
+        .get_coin_metadata("bad")
+        .await
+        .expect_err("RPC error should map to Err");
+    assert!(err.to_string().contains("invalid params"));
+}
+
+#[tokio::test]
+async fn sui_query_events_parses_page() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {
+                "data": [{
+                    "id": { "txDigest": "DIGEST1", "eventSeq": "0" },
+                    "packageId": "0x9",
+                    "transactionModule": "events",
+                    "sender": "0xsender",
+                    "type": "0x9::events::AccountCreated",
+                    "parsedJson": { "xid": "42" },
+                    "bcs": null,
+                    "timestampMs": "1700000000000"
+                }],
+                "nextCursor": { "txDigest": "DIGEST1", "eventSeq": "0" },
+                "hasNextPage": false
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SuiClient::new(server.uri());
+    let page = client
+        .query_events("0x9", "events", None, 50)
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(page.data.len(), 1);
+    assert!(!page.has_next_page);
+    assert_eq!(page.data[0].event_type, "0x9::events::AccountCreated");
+    assert_eq!(page.next_cursor.unwrap().to_cursor(), "DIGEST1:0");
+}
+
+// ============================ EnokiClient ============================
+
+#[tokio::test]
+async fn enoki_create_sponsored_transaction_unwraps_data() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/transaction-blocks/sponsor"))
+        .and(header("Authorization", "Bearer test-enoki-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "bytes": "AAAA", "digest": "0xdigest" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        EnokiClient::with_base_url("test-enoki-key".to_string(), "testnet".to_string(), server.uri());
+    let resp = client
+        .create_sponsored_transaction("KIND".to_string(), "0xsender".to_string(), vec![])
+        .await
+        .expect("sponsor should succeed");
+
+    assert_eq!(resp.bytes, "AAAA");
+    assert_eq!(resp.digest, "0xdigest");
+}
+
+#[tokio::test]
+async fn enoki_error_status_is_surfaced() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
+        .mount(&server)
+        .await;
+
+    let client =
+        EnokiClient::with_base_url("k".to_string(), "testnet".to_string(), server.uri());
+    let err = client
+        .create_sponsored_transaction("KIND".to_string(), "0xs".to_string(), vec![])
+        .await
+        .expect_err("non-2xx should be Err");
+    assert!(err.to_string().contains("bad request"));
+}
+
+// ============================ EnclaveClient ============================
+
+#[tokio::test]
+async fn enclave_process_tweet_parses_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/process_tweet"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "command_type": "transfer",
+            "intent": 3,
+            "timestamp_ms": 1700000000000u64,
+            "signature": "c2ln",
+            "common": {
+                "tweet_id": "111",
+                "author_xid": "222",
+                "author_handle": "alice"
+            },
+            "data": {
+                "from_xid": "222",
+                "from_handle": "alice",
+                "to_xid": "333",
+                "to_handle": "bob",
+                "amount": 1000,
+                "coin_type": "0x2::sui::SUI"
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = EnclaveClient::new(server.uri());
+    let resp = client
+        .process_tweet("https://x.com/alice/status/111")
+        .await
+        .expect("process_tweet should succeed");
+
+    let transfer = EnclaveClient::parse_transfer_data(&resp).expect("transfer data parses");
+    assert_eq!(transfer.to_handle, "bob");
+    assert_eq!(transfer.amount, 1000);
+}
+
+#[tokio::test]
+async fn enclave_non_success_is_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/process_tweet"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("enclave boom"))
+        .mount(&server)
+        .await;
+
+    let client = EnclaveClient::new(server.uri());
+    let err = client
+        .process_tweet("https://x.com/a/status/1")
+        .await
+        .expect_err("500 should be Err");
+    assert!(err.to_string().contains("enclave boom"));
+}
+
+// ============================ TwitterClient ============================
+
+#[tokio::test]
+async fn twitter_get_user_by_username_parses() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/twitter/user/info"))
+        .and(query_param("userName", "alice"))
+        .and(header("X-API-Key", "test-twitterapi-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "success",
+            "msg": null,
+            "data": { "id": "42", "userName": "alice", "name": "Alice" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = TwitterClient::with_base_url(&test_config(), server.uri());
+    let user = client
+        .get_user_by_username("@alice")
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(user.id, "42");
+    assert_eq!(user.username, "alice");
+}
+
+#[tokio::test]
+async fn twitter_api_error_status_is_surfaced() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/twitter/user/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "error",
+            "msg": "user not found",
+            "data": { "id": "", "userName": "", "name": "" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = TwitterClient::with_base_url(&test_config(), server.uri());
+    let err = client
+        .get_user_by_username("ghost")
+        .await
+        .expect_err("api status error should be Err");
+    assert!(err.to_string().contains("user not found"));
+}
+
+// ============================ TwitterOAuth2Client ============================
+
+#[tokio::test]
+async fn oauth2_exchange_code_parses_token() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/2/oauth2/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "tok123",
+            "token_type": "bearer",
+            "expires_in": 7200,
+            "refresh_token": "ref456",
+            "scope": "tweet.read users.read"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = TwitterOAuth2Client::with_base_url(&test_config(), server.uri());
+    let token = client
+        .exchange_code("code", "verifier", "http://localhost/callback")
+        .await
+        .expect("exchange should succeed");
+    assert_eq!(token.access_token, "tok123");
+    assert_eq!(token.refresh_token.as_deref(), Some("ref456"));
+}
+
+#[tokio::test]
+async fn oauth2_get_user_info_parses() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/2/users/me"))
+        .and(header("Authorization", "Bearer tok123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "id": "9", "name": "Alice", "username": "alice" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = TwitterOAuth2Client::with_base_url(&test_config(), server.uri());
+    let info = client.get_user_info("tok123").await.expect("me should succeed");
+    assert_eq!(info.username, "alice");
+}

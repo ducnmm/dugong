@@ -2,12 +2,14 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-const ENOKI_API_BASE_URL: &str = "https://api.enoki.mystenlabs.com/v1";
+/// Default production base URL for the Enoki API.
+pub const ENOKI_API_BASE_URL: &str = "https://api.enoki.mystenlabs.com/v1";
 
 #[derive(Clone)]
 pub struct EnokiClient {
     api_key: String,
     network: String,
+    base_url: String,
     http: Client,
 }
 
@@ -49,9 +51,15 @@ pub struct ExecuteSponsoredTransactionResponse {
 
 impl EnokiClient {
     pub fn new(api_key: String, network: String) -> Self {
+        Self::with_base_url(api_key, network, ENOKI_API_BASE_URL.to_string())
+    }
+
+    /// Construct a client pointed at a custom base URL (used in tests).
+    pub fn with_base_url(api_key: String, network: String, base_url: String) -> Self {
         Self {
             api_key,
             network,
+            base_url,
             http: Client::new(),
         }
     }
@@ -66,7 +74,7 @@ impl EnokiClient {
         sender: String,
         allowed_addresses: Vec<String>,
     ) -> Result<CreateSponsoredTransactionResponse> {
-        let url = format!("{}/transaction-blocks/sponsor", ENOKI_API_BASE_URL);
+        let url = format!("{}/transaction-blocks/sponsor", self.base_url);
 
         let request = CreateSponsoredTransactionRequest {
             network: self.network.clone(),
@@ -130,10 +138,7 @@ impl EnokiClient {
         digest: String,
         signature: String,
     ) -> Result<ExecuteSponsoredTransactionResponse> {
-        let url = format!(
-            "{}/transaction-blocks/sponsor/{}",
-            ENOKI_API_BASE_URL, digest
-        );
+        let url = format!("{}/transaction-blocks/sponsor/{}", self.base_url, digest);
 
         let request = ExecuteSponsoredTransactionRequest {
             digest: digest.clone(),

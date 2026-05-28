@@ -1,8 +1,11 @@
 pub mod account_created;
+pub mod bet_placed;
 pub mod coin_deposited;
 pub mod coin_transferred;
 pub mod coin_withdrawn;
 pub mod handle_updated;
+pub mod market_created;
+pub mod market_resolved;
 pub mod wallet_linked;
 
 use anyhow::Result;

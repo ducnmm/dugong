@@ -633,7 +633,8 @@ pub async fn exchange_twitter_token(
     tracing::info!("Token exchange request received");
 
     // 1. Create OAuth2 client and exchange code
-    let oauth2_client = TwitterOAuth2Client::new(&state.config);
+    let oauth2_client =
+        TwitterOAuth2Client::with_base_url(&state.config, state.config.twitter_api_base.clone());
 
     let token_response = oauth2_client
         .exchange_code(&request.code, &request.code_verifier, &request.redirect_uri)
@@ -750,8 +751,11 @@ pub async fn sponsor_transaction(
     );
 
     // Create Enoki client
-    let enoki_client =
-        EnokiClient::new(state.config.enoki_api_key.clone(), request.network.clone());
+    let enoki_client = EnokiClient::with_base_url(
+        state.config.enoki_api_key.clone(),
+        request.network.clone(),
+        state.config.enoki_base_url.clone(),
+    );
 
     // Create sponsored transaction
     match enoki_client
@@ -805,9 +809,10 @@ pub async fn execute_sponsored_transaction(
     );
 
     // Create Enoki client - use configured network
-    let enoki_client = EnokiClient::new(
+    let enoki_client = EnokiClient::with_base_url(
         state.config.enoki_api_key.clone(),
         state.config.enoki_network.clone(),
+        state.config.enoki_base_url.clone(),
     );
 
     // Execute sponsored transaction

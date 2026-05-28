@@ -1,19 +1,11 @@
-mod error;
-mod processor;
-mod routes;
-mod webhook;
-
-use axum::{routing::get, Router};
+use dugong_api::build_router;
+use dugong_api::processor::ProcessorWorker;
+use dugong_api::webhook::handler::AppState;
 use dugong_core::clients::redis_client::RedisClient;
 use dugong_core::config::Config;
 use dugong_core::db::{create_pool, run_migrations};
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
 use tracing::info;
-
-use crate::processor::ProcessorWorker;
-use crate::webhook::handler::{handle_crc_challenge, handle_webhook, health_check, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -52,53 +44,7 @@ async fn main() -> anyhow::Result<()> {
         ProcessorWorker::new(processor_state).run().await;
     });
 
-    let app = Router::new()
-        .route("/", get(health_check))
-        .route("/webhook", get(handle_crc_challenge).post(handle_webhook))
-        .route(
-            "/api/account/by-wallet/:address",
-            get(crate::routes::get_account_by_wallet),
-        )
-        .route(
-            "/api/account/:sui_object_id/balance",
-            get(crate::routes::get_account_balance),
-        )
-        .route(
-            "/api/account/:sui_object_id/transactions",
-            get(crate::routes::get_transactions_by_account),
-        )
-        .route("/api/accounts/search", get(crate::routes::search_accounts))
-        .route(
-            "/api/accounts/:twitter_user_id",
-            get(crate::routes::get_account_by_twitter_id),
-        )
-        .route(
-            "/api/accounts/:twitter_user_id/transactions",
-            get(crate::routes::get_account_transactions),
-        )
-        .route(
-            "/api/link-wallet/generate-message",
-            axum::routing::post(crate::routes::generate_link_message),
-        )
-        .route(
-            "/api/link-wallet/submit",
-            axum::routing::post(crate::routes::secure_link_wallet),
-        )
-        .route(
-            "/api/auth/twitter/token",
-            axum::routing::post(crate::routes::exchange_twitter_token),
-        )
-        .route(
-            "/api/sponsor",
-            axum::routing::post(crate::routes::sponsor_transaction),
-        )
-        .route(
-            "/api/execute",
-            axum::routing::post(crate::routes::execute_sponsored_transaction),
-        )
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    let app = build_router(state);
 
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

@@ -55,9 +55,8 @@ type Service = {
   rewrite?: (key: string, val: string, ctx: Ctx) => string | null;
 };
 
-// api + indexer share apps/api/.env. They also share the same DB/Redis/Sui
-// rewrites — only the keep-list differs (indexer has no reply / OAuth code
-// path so it doesn't need those secrets).
+// The api reads apps/api/.env; the indexer reads its own apps/indexer/.env
+// (a trimmed copy of the shared dugong-core Config — see apps/indexer/.env.example).
 const apiDrop = (key: string) => key === "PORT";
 
 function makeApiRewrite(dbRef: string, redisRef: string) {
@@ -84,18 +83,17 @@ function makeApiRewrite(dbRef: string, redisRef: string) {
 const apiRewrite    = makeApiRewrite("${{Postgres.DATABASE_URL}}", "${{Redis.REDIS_URL}}");
 const apiDevRewrite = makeApiRewrite("${{postgres-dev.DATABASE_URL}}", "${{redis-dev.REDIS_URL}}");
 
-// Variables the indexer binary does not read. Dropping them keeps the
-// Railway env panel honest about what the service actually needs.
-const INDEXER_UNUSED = new Set([
-  "TWITTERAPI_IO_LOGIN_COOKIES",
-  "TWITTERAPI_IO_PROXY",
-  "TWITTER_WEBHOOK_SECRET",
-  "TWITTER_OAUTH2_CLIENT_ID",
-  "TWITTER_OAUTH2_CLIENT_SECRET",
-  "TWITTER_OAUTH2_REDIRECT_URI",
-  "ENOKI_API_KEY",
-  "ENOKI_NETWORK",
-]);
+// The indexer reads apps/indexer/.env, which only carries what it needs plus the
+// placeholder vars the shared Config requires to boot. The sole Railway override
+// is DATABASE_URL → the Postgres plugin ref (it must point at the same DB as the
+// api). Everything else (SUI RPC, contract IDs, placeholders) passes through; we
+// deliberately do NOT drop the required-but-unused vars or Config::from_env fails.
+function makeIndexerRewrite(dbRef: string): Service["rewrite"] {
+  return (key, val) => (key === "DATABASE_URL" ? dbRef : val);
+}
+
+const indexerRewrite    = makeIndexerRewrite("${{Postgres.DATABASE_URL}}");
+const indexerDevRewrite = makeIndexerRewrite("${{postgres-dev.DATABASE_URL}}");
 
 function makeWebRewrite(): Service["rewrite"] {
   return (key, val, ctx) => {
@@ -149,9 +147,9 @@ const services: Record<string, Service> = {
   },
   indexer: {
     name: "indexer",
-    envFile: "apps/api/.env",
-    drop: (k) => apiDrop(k) || INDEXER_UNUSED.has(k),
-    rewrite: apiRewrite,
+    envFile: "apps/indexer/.env",
+    drop: apiDrop,
+    rewrite: indexerRewrite,
   },
   worker: {
     name: "worker",
@@ -179,9 +177,8 @@ const services: Record<string, Service> = {
   },
   "indexer-dev": {
     name: "indexer-dev",
-    envFile: "apps/api/.env",
-    drop: (k) => INDEXER_UNUSED.has(k),
-    rewrite: apiDevRewrite,
+    envFile: "apps/indexer/.env",
+    rewrite: indexerDevRewrite,
   },
   "worker-dev": {
     name: "worker-dev",

@@ -74,3 +74,6 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Regex
 regex = "1"
+
+# Test-only (dev-dependencies)
+wiremock = "0.6"
