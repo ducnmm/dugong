@@ -2,11 +2,24 @@
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::config::Config;
+
+/// Max candidates fetched from TwitterAPI.io advanced search per campaign resolution.
+const MAX_CAMPAIGN_SEARCH_RESULTS: usize = 50;
+
+/// A candidate winner discovered for a reward campaign (a reply author or hashtag tweeter).
+#[derive(Debug, Clone)]
+pub struct RewardCampaignCandidate {
+    pub tweet_id: String,
+    pub author_xid: String,
+    pub author_handle: String,
+    pub created_at: DateTime<Utc>,
+}
 
 /// Default production base URL for Twitter's official API (api.twitter.com).
 pub const TWITTER_API_BASE_URL: &str = "https://api.twitter.com";
@@ -521,6 +534,190 @@ impl TwitterClient {
         self.reply_to_tweet(tweet_id, &message).await
     }
 
+    /// Reply confirming a reward campaign was created
+    pub async fn reply_campaign_created(
+        &self,
+        tweet_id: &str,
+        reward_display: &str,
+        max_winners: u64,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let message = format!(
+            "🎁 Reward campaign created!\n\n\
+            💰 {} each for up to {} winner(s).\n\n\
+            Winners will be chosen by the creator. When ready, the creator resolves with:\n\
+            @DugongWallet solve!\n\n\
+            Winners then claim with:\n\
+            @DugongWallet claim\n\n\
+            🔗 https://suiscan.xyz/testnet/tx/{}",
+            reward_display, max_winners, tx_digest
+        );
+        info!(tweet_id = %tweet_id, "Replying with campaign created message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply with reward campaign resolution summary
+    pub async fn reply_campaign_resolved(
+        &self,
+        tweet_id: &str,
+        winner_count: u64,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let message = format!(
+            "🏁 Campaign resolved!\n\n\
+            🏆 {} winner(s) selected. Reply to the campaign tweet with @DugongWallet claim to collect your reward.\n\n\
+            🔗 https://suiscan.xyz/testnet/tx/{}",
+            winner_count, tx_digest
+        );
+        info!(tweet_id = %tweet_id, "Replying with campaign resolved message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply confirming a reward was claimed
+    pub async fn reply_reward_claimed(
+        &self,
+        tweet_id: &str,
+        handle: &str,
+        reward_display: &str,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let message = format!(
+            "✅ Reward claimed, @{}!\n\n\
+            💸 {} has been credited to your @DugongWallet account.\n\n\
+            🔗 https://suiscan.xyz/testnet/tx/{}",
+            handle, reward_display, tx_digest
+        );
+        info!(tweet_id = %tweet_id, handle = %handle, "Replying with reward claimed message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when a campaign already exists for this tweet
+    pub async fn reply_campaign_already_exists(&self, tweet_id: &str) -> Result<String> {
+        let message = "ℹ️ A reward campaign already exists for this tweet.".to_string();
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when resolver is not the campaign creator
+    pub async fn reply_unauthorized_campaign_resolve(
+        &self,
+        tweet_id: &str,
+        handle: &str,
+    ) -> Result<String> {
+        let message = format!(
+            "❌ @{} — only the campaign creator can resolve this campaign.",
+            handle
+        );
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when a claimant has no entitlement / nothing to claim
+    pub async fn reply_nothing_to_claim(&self, tweet_id: &str, handle: &str) -> Result<String> {
+        let message = format!(
+            "❌ @{} — nothing to claim here.\n\n\
+            You can only claim a reward or payout you are entitled to, after the creator resolves.",
+            handle
+        );
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Fetch top reply authors to a campaign tweet (campaign_type = top replies).
+    pub async fn fetch_top_reply_candidates(
+        &self,
+        campaign_tweet_id: &str,
+        max_winners: usize,
+    ) -> Result<Vec<RewardCampaignCandidate>> {
+        let query = format!("conversation_id:{}", campaign_tweet_id);
+        let mut candidates = self
+            .search_campaign_candidates(&query, "Top", max_winners)
+            .await
+            .with_context(|| format!("Failed to search replies for {}", campaign_tweet_id))?;
+
+        candidates.retain(|candidate| candidate.tweet_id != campaign_tweet_id);
+        dedupe_candidates(candidates, max_winners)
+    }
+
+    /// Fetch the first users who tweeted a hashtag (campaign_type = first hashtag).
+    pub async fn fetch_first_hashtag_candidates(
+        &self,
+        hashtag: &str,
+        max_winners: usize,
+    ) -> Result<Vec<RewardCampaignCandidate>> {
+        let query = hashtag.trim().to_string();
+        let mut candidates = self
+            .search_campaign_candidates(&query, "Latest", max_winners)
+            .await
+            .with_context(|| format!("Failed to search hashtag candidates for {}", hashtag))?;
+
+        candidates.sort_by_key(|candidate| candidate.created_at);
+        dedupe_candidates(candidates, max_winners)
+    }
+
+    async fn search_campaign_candidates(
+        &self,
+        query: &str,
+        query_type: &str,
+        max_results: usize,
+    ) -> Result<Vec<RewardCampaignCandidate>> {
+        let max_results = max_results.clamp(1, MAX_CAMPAIGN_SEARCH_RESULTS);
+        let url = format!("{}/twitter/tweet/advanced_search", self.twitterapi_io_base);
+        let mut cursor: Option<String> = None;
+        let mut candidates = Vec::new();
+
+        while candidates.len() < max_results {
+            let mut params = vec![("query", query), ("queryType", query_type)];
+            if let Some(cursor) = cursor.as_deref() {
+                params.push(("cursor", cursor));
+            }
+
+            let response = self
+                .http_client
+                .get(&url)
+                .header("X-API-Key", &self.twitterapi_io_api_key)
+                .query(&params)
+                .send()
+                .await
+                .context("Failed to call TwitterAPI.io advanced search")?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                anyhow::bail!("TwitterAPI.io advanced search error {}: {}", status, text);
+            }
+
+            let response = response
+                .json::<TwitterApiSearchResponse>()
+                .await
+                .context("Failed to parse TwitterAPI.io advanced search response")?;
+            let has_next_page = response.has_next_page;
+            let next_cursor = response.next_cursor.filter(|cursor| !cursor.is_empty());
+
+            candidates.extend(response.tweets.into_iter().filter_map(|tweet| {
+                DateTime::parse_from_str(&tweet.created_at, "%a %b %d %H:%M:%S %z %Y")
+                    .ok()
+                    .map(|created_at| RewardCampaignCandidate {
+                        tweet_id: tweet.id,
+                        author_xid: tweet.author.id,
+                        author_handle: tweet.author.username,
+                        created_at: created_at.with_timezone(&Utc),
+                    })
+            }));
+
+            if !has_next_page || candidates.len() >= max_results {
+                break;
+            }
+            if next_cursor.as_ref() == cursor.as_ref() {
+                break;
+            }
+            match next_cursor {
+                Some(next_cursor) => cursor = Some(next_cursor),
+                None => break,
+            }
+        }
+
+        candidates.truncate(max_results);
+        Ok(candidates)
+    }
+
     /// Reply to a tweet with error message
     #[allow(dead_code)]
     pub async fn reply_error(&self, tweet_id: &str, error_message: &str) -> Result<String> {
@@ -631,4 +828,53 @@ impl TwitterClient {
 
         Ok(reply_tweet_id)
     }
+}
+
+// ====== Reward Campaign Candidate Search Types ======
+
+#[derive(Debug, Deserialize)]
+struct TwitterApiSearchResponse {
+    #[serde(default)]
+    tweets: Vec<TwitterApiTweet>,
+    #[serde(default, rename = "has_next_page", alias = "hasNextPage")]
+    has_next_page: bool,
+    #[serde(default, rename = "next_cursor", alias = "nextCursor")]
+    next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TwitterApiTweet {
+    id: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    author: TwitterApiAuthor,
+}
+
+#[derive(Debug, Deserialize)]
+struct TwitterApiAuthor {
+    id: String,
+    #[serde(rename = "userName")]
+    username: String,
+}
+
+/// Keep at most one candidate per author (first occurrence wins), up to `max_winners`.
+fn dedupe_candidates(
+    candidates: Vec<RewardCampaignCandidate>,
+    max_winners: usize,
+) -> Result<Vec<RewardCampaignCandidate>> {
+    let mut seen = Vec::<String>::new();
+    let mut deduped = Vec::new();
+
+    for candidate in candidates {
+        if seen.contains(&candidate.author_xid) {
+            continue;
+        }
+        seen.push(candidate.author_xid.clone());
+        deduped.push(candidate);
+        if deduped.len() >= max_winners {
+            break;
+        }
+    }
+
+    Ok(deduped)
 }

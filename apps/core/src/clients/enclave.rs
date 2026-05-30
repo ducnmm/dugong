@@ -20,6 +20,9 @@ pub enum CommandType {
     CreateMarket,
     PlaceBet,
     ResolveMarket,
+    CreateRewardCampaign,
+    ResolveRewardCampaign,
+    Claim,
 }
 
 /// Common tweet metadata
@@ -77,6 +80,37 @@ pub struct ResolveMarketData {
     pub resolver_handle: String,
     pub market_tweet_id: String,
     pub outcome: bool,
+}
+
+/// Data for create_reward_campaign command
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateRewardCampaignData {
+    pub creator_xid: String,
+    pub creator_handle: String,
+    pub campaign_tweet_id: String,
+    pub campaign_type: u8,
+    pub target: String,
+    pub reward_amount: u64,
+    pub max_winners: u64,
+    pub coin_type: String,
+}
+
+/// Data for resolve_reward_campaign command
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResolveRewardCampaignData {
+    pub resolver_xid: String,
+    pub resolver_handle: String,
+    pub campaign_tweet_id: String,
+    pub solve_tweet_id: String,
+}
+
+/// Data for claim command (market payout or campaign reward)
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClaimData {
+    pub claimant_xid: String,
+    pub claimant_handle: String,
+    pub target_tweet_id: String,
+    pub claim_tweet_id: String,
 }
 
 /// Unified response from /process_tweet endpoint
@@ -184,6 +218,28 @@ impl EnclaveClient {
     pub fn parse_resolve_market_data(response: &ProcessTweetResponse) -> Result<ResolveMarketData> {
         serde_json::from_value(response.data.clone())
             .context("Failed to parse resolve market data from process_tweet response")
+    }
+
+    /// Parse create reward campaign data from ProcessTweetResponse
+    pub fn parse_create_reward_campaign_data(
+        response: &ProcessTweetResponse,
+    ) -> Result<CreateRewardCampaignData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse create reward campaign data from process_tweet response")
+    }
+
+    /// Parse resolve reward campaign data from ProcessTweetResponse
+    pub fn parse_resolve_reward_campaign_data(
+        response: &ProcessTweetResponse,
+    ) -> Result<ResolveRewardCampaignData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse resolve reward campaign data from process_tweet response")
+    }
+
+    /// Parse claim data from ProcessTweetResponse
+    pub fn parse_claim_data(response: &ProcessTweetResponse) -> Result<ClaimData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse claim data from process_tweet response")
     }
 
     // ========================================================================

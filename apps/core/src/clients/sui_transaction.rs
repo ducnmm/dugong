@@ -1688,6 +1688,200 @@ impl SuiTransactionBuilder {
         self.finish_ptb(ptb).await
     }
 
+    /// Submit a create_campaign<T> transaction
+    #[allow(clippy::too_many_arguments)]
+    pub async fn submit_create_reward_campaign(
+        &self,
+        creator_account_id: &str,
+        campaign_tweet_id: &str,
+        campaign_type: u8,
+        target: &str,
+        reward_amount: u64,
+        max_winners: u64,
+        coin_type: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<String> {
+        info!(
+            "Building create_campaign transaction: campaign_tweet_id={}, creator={}, type={}",
+            campaign_tweet_id, creator_account_id, campaign_type
+        );
+
+        let creator_id =
+            ObjectID::from_str(creator_account_id).context("Invalid creator account object ID")?;
+        let creator_ref = self.get_object_ref(creator_id).await?;
+
+        let mut ptb = ProgrammableTransactionBuilder::new();
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+        let full_coin_type = Self::expand_coin_type(coin_type);
+        let coin_type_tag =
+            TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
+        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+
+        let creator_arg = ptb.obj(ObjectArg::SharedObject {
+            id: creator_ref.0,
+            initial_shared_version: creator_ref.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let campaign_tweet_id_arg = ptb.pure(campaign_tweet_id.as_bytes().to_vec())?;
+        let campaign_type_arg = ptb.pure(campaign_type)?;
+        let target_arg = ptb.pure(target.as_bytes().to_vec())?;
+        let reward_amount_arg = ptb.pure(reward_amount)?;
+        let max_winners_arg = ptb.pure(max_winners)?;
+        let coin_type_arg = ptb.pure(canonical_coin_type.into_bytes())?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+        let sig_bytes = hex::decode(signature.trim_start_matches("0x"))
+            .context("Failed to decode create_campaign signature")?;
+        let sig_arg = ptb.pure(sig_bytes)?;
+
+        ptb.command(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package: package_id,
+            module: "reward_campaigns".to_string(),
+            function: "create_campaign".to_string(),
+            type_arguments: vec![coin_type_tag.into()],
+            arguments: vec![
+                creator_arg,
+                campaign_tweet_id_arg,
+                campaign_type_arg,
+                target_arg,
+                reward_amount_arg,
+                max_winners_arg,
+                coin_type_arg,
+                timestamp_arg,
+                sig_arg,
+            ],
+        })));
+
+        let tx_data = self.finish_ptb(ptb).await?;
+        self.sign_and_execute(tx_data).await
+    }
+
+    /// Submit a resolve_campaign<T> transaction
+    #[allow(clippy::too_many_arguments)]
+    pub async fn submit_resolve_reward_campaign(
+        &self,
+        campaign_object_id: &str,
+        creator_account_id: &str,
+        winner_xids: &[String],
+        coin_type: &str,
+        solve_tweet_id: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<String> {
+        info!(
+            "Building resolve_campaign transaction: campaign={}, winners={}",
+            campaign_object_id,
+            winner_xids.len()
+        );
+
+        let campaign_id =
+            ObjectID::from_str(campaign_object_id).context("Invalid campaign object ID")?;
+        let campaign_ref = self.get_object_ref(campaign_id).await?;
+        let creator_id =
+            ObjectID::from_str(creator_account_id).context("Invalid creator account object ID")?;
+        let creator_ref = self.get_object_ref(creator_id).await?;
+
+        let mut ptb = ProgrammableTransactionBuilder::new();
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+        let full_coin_type = Self::expand_coin_type(coin_type);
+        let coin_type_tag =
+            TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
+        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+
+        let campaign_arg = ptb.obj(ObjectArg::SharedObject {
+            id: campaign_ref.0,
+            initial_shared_version: campaign_ref.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let creator_arg = ptb.obj(ObjectArg::SharedObject {
+            id: creator_ref.0,
+            initial_shared_version: creator_ref.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let winners: Vec<Vec<u8>> = winner_xids.iter().map(|x| x.as_bytes().to_vec()).collect();
+        let winners_arg = ptb.pure(winners)?;
+        let coin_type_arg = ptb.pure(canonical_coin_type.into_bytes())?;
+        let solve_tweet_id_arg = ptb.pure(solve_tweet_id.as_bytes().to_vec())?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+        let sig_bytes = hex::decode(signature.trim_start_matches("0x"))
+            .context("Failed to decode resolve_campaign signature")?;
+        let sig_arg = ptb.pure(sig_bytes)?;
+
+        ptb.command(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package: package_id,
+            module: "reward_campaigns".to_string(),
+            function: "resolve_campaign".to_string(),
+            type_arguments: vec![coin_type_tag.into()],
+            arguments: vec![
+                campaign_arg,
+                creator_arg,
+                winners_arg,
+                coin_type_arg,
+                solve_tweet_id_arg,
+                timestamp_arg,
+                sig_arg,
+            ],
+        })));
+
+        let tx_data = self.finish_ptb(ptb).await?;
+        self.sign_and_execute(tx_data).await
+    }
+
+    /// Submit a claim_reward<T> transaction (no signature; gated by on-chain entitlement)
+    pub async fn submit_claim_reward(
+        &self,
+        campaign_object_id: &str,
+        winner_account_id: &str,
+        coin_type: &str,
+        timestamp: u64,
+    ) -> Result<String> {
+        info!(
+            "Building claim_reward transaction: campaign={}, winner_account={}",
+            campaign_object_id, winner_account_id
+        );
+
+        let campaign_id =
+            ObjectID::from_str(campaign_object_id).context("Invalid campaign object ID")?;
+        let campaign_ref = self.get_object_ref(campaign_id).await?;
+        let winner_id =
+            ObjectID::from_str(winner_account_id).context("Invalid winner account object ID")?;
+        let winner_ref = self.get_object_ref(winner_id).await?;
+
+        let mut ptb = ProgrammableTransactionBuilder::new();
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+        let full_coin_type = Self::expand_coin_type(coin_type);
+        let coin_type_tag =
+            TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
+        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+
+        let campaign_arg = ptb.obj(ObjectArg::SharedObject {
+            id: campaign_ref.0,
+            initial_shared_version: campaign_ref.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let winner_arg = ptb.obj(ObjectArg::SharedObject {
+            id: winner_ref.0,
+            initial_shared_version: winner_ref.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let coin_type_arg = ptb.pure(canonical_coin_type.into_bytes())?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+
+        ptb.command(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package: package_id,
+            module: "reward_campaigns".to_string(),
+            function: "claim_reward".to_string(),
+            type_arguments: vec![coin_type_tag.into()],
+            arguments: vec![campaign_arg, winner_arg, coin_type_arg, timestamp_arg],
+        })));
+
+        let tx_data = self.finish_ptb(ptb).await?;
+        self.sign_and_execute(tx_data).await
+    }
+
     /// Finalize PTB into TransactionData with gas pricing
     async fn finish_ptb(
         &self,

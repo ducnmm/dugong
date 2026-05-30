@@ -76,6 +76,43 @@ pub struct MarketResolvedEvent {
     pub timestamp: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewardCampaignCreatedEvent {
+    pub campaign_id: String,
+    pub campaign_tweet_id: String,
+    pub creator_xid: String,
+    pub campaign_type: u8,
+    pub target: String,
+    pub coin_type: String,
+    pub reward_amount: String,
+    pub max_winners: String,
+    pub total_budget: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewardCampaignResolvedEvent {
+    pub campaign_id: String,
+    pub campaign_tweet_id: String,
+    pub solve_tweet_id: String,
+    pub creator_xid: String,
+    pub winner_xids: Vec<String>,
+    pub winner_count: String,
+    pub unallocated_refund: String,
+    pub coin_type: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewardCampaignClaimedEvent {
+    pub campaign_id: String,
+    pub campaign_tweet_id: String,
+    pub winner_xid: String,
+    pub coin_type: String,
+    pub amount: String,
+    pub timestamp: String,
+}
+
 /// Parse event type from full event type string
 pub fn parse_event_type(full_type: &str) -> Option<&str> {
     // Example: 0x...::events::AccountCreated -> AccountCreated

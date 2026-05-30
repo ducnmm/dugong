@@ -6,9 +6,11 @@ use tracing::{error, info, warn};
 
 use dugong_core::clients::enclave::{CommandType, EnclaveClient, ProcessTweetResponse};
 use dugong_core::clients::redis_client::RedisClient;
-use dugong_core::clients::twitter::{TransactionResult, TwitterClient};
+use dugong_core::clients::twitter::{RewardCampaignCandidate, TransactionResult, TwitterClient};
 use dugong_core::constants::redis;
-use dugong_core::db::models::{DugongAccount, Market, MarketBet, WebhookEvent};
+use dugong_core::db::models::{
+    DugongAccount, Market, MarketBet, RewardCampaign, RewardCampaignWinner, WebhookEvent,
+};
 
 use crate::webhook::handler::AppState;
 
@@ -145,6 +147,18 @@ impl ProcessorWorker {
             }
             CommandType::ResolveMarket => {
                 self.handle_resolve_market(&process_result, &item.tweet_id, &item.event_id)
+                    .await
+            }
+            CommandType::CreateRewardCampaign => {
+                self.handle_create_reward_campaign(&process_result, &item.tweet_id, &item.event_id)
+                    .await
+            }
+            CommandType::ResolveRewardCampaign => {
+                self.handle_resolve_reward_campaign(&process_result, &item.tweet_id, &item.event_id)
+                    .await
+            }
+            CommandType::Claim => {
+                self.handle_claim(&process_result, &item.tweet_id, &item.event_id)
                     .await
             }
         };
@@ -784,6 +798,439 @@ impl ProcessorWorker {
         Ok(())
     }
 
+    /// Handle create_reward_campaign command
+    async fn handle_create_reward_campaign(
+        &self,
+        response: &ProcessTweetResponse,
+        tweet_id: &str,
+        event_id: &str,
+    ) -> Result<()> {
+        let data = EnclaveClient::parse_create_reward_campaign_data(response)
+            .context("Failed to parse create reward campaign data")?;
+
+        info!(
+            creator_xid = %data.creator_xid,
+            campaign_tweet_id = %data.campaign_tweet_id,
+            campaign_type = data.campaign_type,
+            reward_amount = data.reward_amount,
+            max_winners = data.max_winners,
+            "Handling create_reward_campaign command"
+        );
+
+        // Idempotency: campaign already mirrored for this tweet
+        if RewardCampaign::find_by_campaign_tweet_id(&self.state.db, &data.campaign_tweet_id)
+            .await
+            .context("Failed to query reward campaign")?
+            .is_some()
+        {
+            if let Err(e) = self.twitter.reply_campaign_already_exists(tweet_id).await {
+                warn!(error = %e, "Failed to reply campaign_already_exists");
+            }
+            WebhookEvent::set_completed(&self.state.db, event_id)
+                .await
+                .context("Failed to set event to completed")?;
+            return Ok(());
+        }
+
+        // Auto-create the creator's account if missing
+        if DugongAccount::find_by_x_user_id(&self.state.db, &data.creator_xid)
+            .await
+            .context("Failed to check creator account")?
+            .is_none()
+        {
+            self.auto_create_recipient_account(&data.creator_xid)
+                .await
+                .context("Failed to auto-create creator account")?;
+        }
+        let creator_account = DugongAccount::find_by_x_user_id(&self.state.db, &data.creator_xid)
+            .await
+            .context("Failed to fetch creator account")?
+            .ok_or_else(|| anyhow!("Creator account missing after auto-create"))?;
+
+        WebhookEvent::set_submitting(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to submitting")?;
+
+        let tx_builder = dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(
+            self.state.config.clone(),
+        )
+        .await
+        .context("Failed to initialize Sui transaction builder")?;
+
+        let digest = match tx_builder
+            .submit_create_reward_campaign(
+                &creator_account.sui_object_id,
+                &data.campaign_tweet_id,
+                data.campaign_type,
+                &data.target,
+                data.reward_amount,
+                data.max_winners,
+                &data.coin_type,
+                response.timestamp_ms,
+                &response.signature,
+            )
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => {
+                WebhookEvent::set_failed(&self.state.db, event_id, &e.to_string())
+                    .await
+                    .context("Failed to set event to failed")?;
+                if let Err(re) = self.twitter.reply_error(tweet_id, &e.to_string()).await {
+                    warn!(error = %re, "Failed to reply with error for create_campaign");
+                }
+                return Err(e).context("Failed to submit create_campaign transaction");
+            }
+        };
+
+        info!(tx_digest = %digest, "create_campaign transaction submitted");
+
+        WebhookEvent::set_replying(&self.state.db, event_id, &digest)
+            .await
+            .context("Failed to set event to replying")?;
+
+        let reward_display = format_amount_display(data.reward_amount, &data.coin_type);
+        if let Err(e) = self
+            .twitter
+            .reply_campaign_created(tweet_id, &reward_display, data.max_winners, &digest)
+            .await
+        {
+            warn!(error = %e, "Failed to reply campaign_created");
+        }
+
+        WebhookEvent::set_completed(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to completed")?;
+
+        Ok(())
+    }
+
+    /// Handle resolve_reward_campaign command: select winners off-chain and submit resolve.
+    async fn handle_resolve_reward_campaign(
+        &self,
+        response: &ProcessTweetResponse,
+        tweet_id: &str,
+        event_id: &str,
+    ) -> Result<()> {
+        let data = EnclaveClient::parse_resolve_reward_campaign_data(response)
+            .context("Failed to parse resolve reward campaign data")?;
+
+        info!(
+            resolver_xid = %data.resolver_xid,
+            campaign_tweet_id = %data.campaign_tweet_id,
+            "Handling resolve_reward_campaign command"
+        );
+
+        let campaign =
+            match RewardCampaign::find_by_campaign_tweet_id(&self.state.db, &data.campaign_tweet_id)
+                .await
+                .context("Failed to query reward campaign")?
+            {
+                Some(c) => c,
+                None => {
+                    WebhookEvent::set_failed(&self.state.db, event_id, "Reward campaign not found")
+                        .await
+                        .context("Failed to set event to failed")?;
+                    if let Err(e) = self
+                        .twitter
+                        .reply_nothing_to_claim(tweet_id, &data.resolver_handle)
+                        .await
+                    {
+                        warn!(error = %e, "Failed to reply campaign not found");
+                    }
+                    return Ok(());
+                }
+            };
+
+        if campaign.status != "open" {
+            WebhookEvent::set_failed(&self.state.db, event_id, "Campaign already resolved")
+                .await
+                .context("Failed to set event to failed")?;
+            return Ok(());
+        }
+
+        // Authorization: resolver must be the campaign creator
+        if campaign.creator_xid != data.resolver_xid {
+            WebhookEvent::set_failed(&self.state.db, event_id, "Unauthorized campaign resolver")
+                .await
+                .context("Failed to set event to failed")?;
+            if let Err(e) = self
+                .twitter
+                .reply_unauthorized_campaign_resolve(tweet_id, &data.resolver_handle)
+                .await
+            {
+                warn!(error = %e, "Failed to reply unauthorized_campaign_resolve");
+            }
+            return Ok(());
+        }
+
+        let max_winners = usize::try_from(campaign.max_winners.max(0)).unwrap_or(0);
+
+        // Select winners off-chain from replies / hashtag tweeters (creator excluded).
+        let candidates = match campaign.campaign_type {
+            1 => self
+                .twitter
+                .fetch_top_reply_candidates(&campaign.campaign_tweet_id, max_winners)
+                .await
+                .context("Failed to fetch top reply candidates")?,
+            2 => self
+                .twitter
+                .fetch_first_hashtag_candidates(&campaign.target, max_winners)
+                .await
+                .context("Failed to fetch first hashtag candidates")?,
+            other => {
+                return Err(anyhow!("Unknown campaign_type {}", other));
+            }
+        };
+        let winners = select_reward_winners(candidates, &campaign.creator_xid, max_winners);
+        let winner_xids: Vec<String> = winners.iter().map(|w| w.author_xid.clone()).collect();
+
+        // Need the creator's account object for the unallocated refund.
+        let creator_account = DugongAccount::find_by_x_user_id(&self.state.db, &campaign.creator_xid)
+            .await
+            .context("Failed to fetch creator account")?
+            .ok_or_else(|| anyhow!("Creator account missing for campaign resolve"))?;
+
+        WebhookEvent::set_submitting(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to submitting")?;
+
+        let tx_builder = dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(
+            self.state.config.clone(),
+        )
+        .await
+        .context("Failed to initialize Sui transaction builder")?;
+
+        let digest = match tx_builder
+            .submit_resolve_reward_campaign(
+                &campaign.sui_object_id,
+                &creator_account.sui_object_id,
+                &winner_xids,
+                &campaign.coin_type,
+                &data.solve_tweet_id,
+                response.timestamp_ms,
+                &response.signature,
+            )
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => {
+                WebhookEvent::set_failed(&self.state.db, event_id, &e.to_string())
+                    .await
+                    .context("Failed to set event to failed")?;
+                if let Err(re) = self.twitter.reply_error(tweet_id, &e.to_string()).await {
+                    warn!(error = %re, "Failed to reply with error for resolve_campaign");
+                }
+                return Err(e).context("Failed to submit resolve_campaign transaction");
+            }
+        };
+
+        info!(tx_digest = %digest, winners = winner_xids.len(), "resolve_campaign submitted");
+
+        // Mirror winners + resolution off-chain
+        for winner in &winners {
+            if let Err(e) = RewardCampaignWinner::upsert(
+                &self.state.db,
+                &campaign.campaign_tweet_id,
+                &winner.author_xid,
+                campaign.reward_amount,
+            )
+            .await
+            {
+                warn!(error = %e, winner_xid = %winner.author_xid, "Failed to mirror campaign winner");
+            }
+        }
+        let selected = winner_xids.len() as i64;
+        let unallocated_refund =
+            (campaign.max_winners - selected).max(0) * campaign.reward_amount;
+        if let Err(e) = RewardCampaign::mark_resolved(
+            &self.state.db,
+            &campaign.campaign_tweet_id,
+            selected,
+            unallocated_refund,
+        )
+        .await
+        {
+            warn!(error = %e, "Failed to mark campaign resolved in DB");
+        }
+
+        WebhookEvent::set_replying(&self.state.db, event_id, &digest)
+            .await
+            .context("Failed to set event to replying")?;
+
+        if let Err(e) = self
+            .twitter
+            .reply_campaign_resolved(tweet_id, winner_xids.len() as u64, &digest)
+            .await
+        {
+            warn!(error = %e, "Failed to reply campaign_resolved");
+        }
+
+        WebhookEvent::set_completed(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to completed")?;
+
+        Ok(())
+    }
+
+    /// Handle claim command. In dev's model markets auto-pay at resolve, so claim
+    /// targets a reward campaign; the parent tweet identifies it.
+    async fn handle_claim(
+        &self,
+        response: &ProcessTweetResponse,
+        tweet_id: &str,
+        event_id: &str,
+    ) -> Result<()> {
+        let data = EnclaveClient::parse_claim_data(response)
+            .context("Failed to parse claim data")?;
+
+        info!(
+            claimant_xid = %data.claimant_xid,
+            target_tweet_id = %data.target_tweet_id,
+            "Handling claim command"
+        );
+
+        let campaign =
+            match RewardCampaign::find_by_campaign_tweet_id(&self.state.db, &data.target_tweet_id)
+                .await
+                .context("Failed to query reward campaign")?
+            {
+                Some(c) => c,
+                None => {
+                    // Not a campaign — markets pay out automatically, so nothing to claim.
+                    WebhookEvent::set_completed(&self.state.db, event_id)
+                        .await
+                        .context("Failed to set event to completed")?;
+                    if let Err(e) = self
+                        .twitter
+                        .reply_nothing_to_claim(tweet_id, &data.claimant_handle)
+                        .await
+                    {
+                        warn!(error = %e, "Failed to reply nothing_to_claim");
+                    }
+                    return Ok(());
+                }
+            };
+
+        if campaign.status != "resolved" {
+            WebhookEvent::set_completed(&self.state.db, event_id)
+                .await
+                .context("Failed to set event to completed")?;
+            if let Err(e) = self
+                .twitter
+                .reply_nothing_to_claim(tweet_id, &data.claimant_handle)
+                .await
+            {
+                warn!(error = %e, "Failed to reply campaign not resolved");
+            }
+            return Ok(());
+        }
+
+        // Must hold an unclaimed entitlement
+        let entitlement = RewardCampaignWinner::find(
+            &self.state.db,
+            &campaign.campaign_tweet_id,
+            &data.claimant_xid,
+        )
+        .await
+        .context("Failed to query entitlement")?;
+        match &entitlement {
+            Some(w) if !w.claimed => {}
+            _ => {
+                WebhookEvent::set_completed(&self.state.db, event_id)
+                    .await
+                    .context("Failed to set event to completed")?;
+                if let Err(e) = self
+                    .twitter
+                    .reply_nothing_to_claim(tweet_id, &data.claimant_handle)
+                    .await
+                {
+                    warn!(error = %e, "Failed to reply nothing_to_claim");
+                }
+                return Ok(());
+            }
+        }
+
+        // Auto-create claimant account if missing
+        if DugongAccount::find_by_x_user_id(&self.state.db, &data.claimant_xid)
+            .await
+            .context("Failed to check claimant account")?
+            .is_none()
+        {
+            self.auto_create_recipient_account(&data.claimant_xid)
+                .await
+                .context("Failed to auto-create claimant account")?;
+        }
+        let claimant_account = DugongAccount::find_by_x_user_id(&self.state.db, &data.claimant_xid)
+            .await
+            .context("Failed to fetch claimant account")?
+            .ok_or_else(|| anyhow!("Claimant account missing after auto-create"))?;
+
+        WebhookEvent::set_submitting(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to submitting")?;
+
+        let tx_builder = dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(
+            self.state.config.clone(),
+        )
+        .await
+        .context("Failed to initialize Sui transaction builder")?;
+
+        let digest = match tx_builder
+            .submit_claim_reward(
+                &campaign.sui_object_id,
+                &claimant_account.sui_object_id,
+                &campaign.coin_type,
+                response.timestamp_ms,
+            )
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => {
+                WebhookEvent::set_failed(&self.state.db, event_id, &e.to_string())
+                    .await
+                    .context("Failed to set event to failed")?;
+                if let Err(re) = self.twitter.reply_error(tweet_id, &e.to_string()).await {
+                    warn!(error = %re, "Failed to reply with error for claim");
+                }
+                return Err(e).context("Failed to submit claim_reward transaction");
+            }
+        };
+
+        info!(tx_digest = %digest, "claim_reward submitted");
+
+        if let Err(e) = RewardCampaignWinner::mark_claimed(
+            &self.state.db,
+            &campaign.campaign_tweet_id,
+            &data.claimant_xid,
+            tweet_id,
+            Some(&digest),
+        )
+        .await
+        {
+            warn!(error = %e, "Failed to mark entitlement claimed in DB");
+        }
+
+        WebhookEvent::set_replying(&self.state.db, event_id, &digest)
+            .await
+            .context("Failed to set event to replying")?;
+
+        let reward_display = format_amount_display(campaign.reward_amount as u64, &campaign.coin_type);
+        if let Err(e) = self
+            .twitter
+            .reply_reward_claimed(tweet_id, &data.claimant_handle, &reward_display, &digest)
+            .await
+        {
+            warn!(error = %e, "Failed to reply reward_claimed");
+        }
+
+        WebhookEvent::set_completed(&self.state.db, event_id)
+            .await
+            .context("Failed to set event to completed")?;
+
+        Ok(())
+    }
+
     /// Get Twitter handle from database or return XID as fallback
     /// Note: This is kept for potential future use but currently unused
     /// since handles come from ProcessTweetResponse
@@ -869,6 +1316,47 @@ fn is_xid_already_exists_error(err: &anyhow::Error) -> bool {
     message.contains("function_name: Some(\"init_account\")")
         && message.contains("MoveAbort")
         && (message.contains("}, 0) in command") || message.contains(", 0) in command"))
+}
+
+/// Human-readable token amount, e.g. (5_000_000_000, "...::sui::SUI") -> "5 SUI".
+fn format_amount_display(amount: u64, coin_type: &str) -> String {
+    let decimals: u32 = match coin_type.to_uppercase().as_str() {
+        c if c.contains("usdc") => 6,
+        _ => 9,
+    };
+    let symbol = coin_type.split("::").last().unwrap_or(coin_type);
+    format!(
+        "{:.prec$} {}",
+        amount as f64 / 10_u64.pow(decimals) as f64,
+        symbol,
+        prec = decimals as usize
+    )
+    .trim_end_matches('0')
+    .trim_end_matches('.')
+    .to_string()
+}
+
+/// Pick winners from ranked candidates, skipping the creator and de-duplicating by author.
+fn select_reward_winners(
+    candidates: Vec<RewardCampaignCandidate>,
+    creator_xid: &str,
+    max_winners: usize,
+) -> Vec<RewardCampaignCandidate> {
+    let mut seen = Vec::<String>::new();
+    let mut winners = Vec::new();
+
+    for candidate in candidates {
+        if candidate.author_xid == creator_xid || seen.contains(&candidate.author_xid) {
+            continue;
+        }
+        seen.push(candidate.author_xid.clone());
+        winners.push(candidate);
+        if winners.len() >= max_winners {
+            break;
+        }
+    }
+
+    winners
 }
 
 // NOTE: parse_tweet_command has been REMOVED

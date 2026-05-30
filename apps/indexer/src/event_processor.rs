@@ -69,6 +69,15 @@ impl EventProcessor {
             "MarketResolved" => {
                 self.handle_market_resolved(event).await?;
             }
+            "RewardCampaignCreated" => {
+                self.handle_reward_campaign_created(event).await?;
+            }
+            "RewardCampaignResolved" => {
+                self.handle_reward_campaign_resolved(event).await?;
+            }
+            "RewardCampaignClaimed" => {
+                self.handle_reward_campaign_claimed(event).await?;
+            }
             _ => {
                 warn!("Unknown event type: {}", event_type);
             }
@@ -120,5 +129,20 @@ impl EventProcessor {
     async fn handle_market_resolved(&self, event: &SuiEvent) -> Result<()> {
         use super::handlers::market_resolved::MarketResolvedHandler;
         MarketResolvedHandler::handle(&self.pool, event).await
+    }
+
+    async fn handle_reward_campaign_created(&self, event: &SuiEvent) -> Result<()> {
+        use super::handlers::reward_campaign_created::RewardCampaignCreatedHandler;
+        RewardCampaignCreatedHandler::handle(&self.pool, event).await
+    }
+
+    async fn handle_reward_campaign_resolved(&self, event: &SuiEvent) -> Result<()> {
+        use super::handlers::reward_campaign_resolved::RewardCampaignResolvedHandler;
+        RewardCampaignResolvedHandler::handle(&self.pool, event).await
+    }
+
+    async fn handle_reward_campaign_claimed(&self, event: &SuiEvent) -> Result<()> {
+        use super::handlers::reward_campaign_claimed::RewardCampaignClaimedHandler;
+        RewardCampaignClaimedHandler::handle(&self.pool, event).await
     }
 }

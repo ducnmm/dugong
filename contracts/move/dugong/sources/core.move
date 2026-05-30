@@ -29,6 +29,16 @@ module dugong::core {
     const EInvalidBetSide: u64 = 15;
     const EMarketTweetAlreadyUsed: u64 = 16;
 
+    // ====== Reward Campaign Error Codes ======
+    const ECampaignClosed: u64 = 20;
+    const ECampaignNotResolved: u64 = 21;
+    const EInvalidCampaignType: u64 = 22;
+    const EInvalidRewardAmount: u64 = 23;
+    const ETooManyWinners: u64 = 24;
+    const ENotCampaignCreator: u64 = 25;
+    const ENoRewardEntitlement: u64 = 26;
+    const ERewardAlreadyClaimed: u64 = 27;
+
     // ====== Intent Constants ======
 
     const INIT_ACCOUNT_INTENT: u8 = 0;
@@ -38,6 +48,9 @@ module dugong::core {
     const CREATE_MARKET_INTENT: u8 = 5;
     const PLACE_BET_INTENT: u8 = 6;
     const RESOLVE_MARKET_INTENT: u8 = 7;
+    const CREATE_REWARD_CAMPAIGN_INTENT: u8 = 8;
+    const RESOLVE_REWARD_CAMPAIGN_INTENT: u8 = 9;
+    const CLAIM_INTENT: u8 = 10;
 
     // ====== Core Structs ======
 
@@ -120,6 +133,33 @@ module dugong::core {
         outcome: bool, // true = yes, false = no
     }
 
+    // ====== Reward Campaign Payload Structs ======
+
+    #[allow(unused_field)]
+    public struct CreateRewardCampaignPayload has copy, drop {
+        creator_xid: vector<u8>,
+        campaign_tweet_id: vector<u8>,
+        campaign_type: u8,
+        target: vector<u8>,
+        reward_amount: u64,
+        max_winners: u64,
+        coin_type: vector<u8>,
+    }
+
+    #[allow(unused_field)]
+    public struct ResolveRewardCampaignPayload has copy, drop {
+        creator_xid: vector<u8>,
+        campaign_tweet_id: vector<u8>,
+        solve_tweet_id: vector<u8>,
+    }
+
+    #[allow(unused_field)]
+    public struct ClaimPayload has copy, drop {
+        claimant_xid: vector<u8>,
+        target_tweet_id: vector<u8>,
+        claim_tweet_id: vector<u8>,
+    }
+
     // ====== Init Function ======
 
     fun init(_otw: CORE, ctx: &mut TxContext) {
@@ -163,6 +203,14 @@ module dugong::core {
     public fun e_bet_already_processed(): u64 { EBetAlreadyProcessed }
     public fun e_invalid_bet_side(): u64 { EInvalidBetSide }
     public fun e_market_tweet_already_used(): u64 { EMarketTweetAlreadyUsed }
+    public fun e_campaign_closed(): u64 { ECampaignClosed }
+    public fun e_campaign_not_resolved(): u64 { ECampaignNotResolved }
+    public fun e_invalid_campaign_type(): u64 { EInvalidCampaignType }
+    public fun e_invalid_reward_amount(): u64 { EInvalidRewardAmount }
+    public fun e_too_many_winners(): u64 { ETooManyWinners }
+    public fun e_not_campaign_creator(): u64 { ENotCampaignCreator }
+    public fun e_no_reward_entitlement(): u64 { ENoRewardEntitlement }
+    public fun e_reward_already_claimed(): u64 { ERewardAlreadyClaimed }
 
     // ====== Public Getter Functions for Intent Constants ======
 
@@ -173,6 +221,9 @@ module dugong::core {
     public fun create_market_intent(): u8 { CREATE_MARKET_INTENT }
     public fun place_bet_intent(): u8 { PLACE_BET_INTENT }
     public fun resolve_market_intent(): u8 { RESOLVE_MARKET_INTENT }
+    public fun create_reward_campaign_intent(): u8 { CREATE_REWARD_CAMPAIGN_INTENT }
+    public fun resolve_reward_campaign_intent(): u8 { RESOLVE_REWARD_CAMPAIGN_INTENT }
+    public fun claim_intent(): u8 { CLAIM_INTENT }
 
     // ====== Public Functions for Registry Operations ======
 
@@ -323,6 +374,42 @@ module dugong::core {
         outcome: bool,
     ): ResolveMarketPayload {
         ResolveMarketPayload { resolver_xid, market_tweet_id, outcome }
+    }
+
+    public(package) fun new_create_reward_campaign_payload(
+        creator_xid: vector<u8>,
+        campaign_tweet_id: vector<u8>,
+        campaign_type: u8,
+        target: vector<u8>,
+        reward_amount: u64,
+        max_winners: u64,
+        coin_type: vector<u8>,
+    ): CreateRewardCampaignPayload {
+        CreateRewardCampaignPayload {
+            creator_xid,
+            campaign_tweet_id,
+            campaign_type,
+            target,
+            reward_amount,
+            max_winners,
+            coin_type,
+        }
+    }
+
+    public(package) fun new_resolve_reward_campaign_payload(
+        creator_xid: vector<u8>,
+        campaign_tweet_id: vector<u8>,
+        solve_tweet_id: vector<u8>,
+    ): ResolveRewardCampaignPayload {
+        ResolveRewardCampaignPayload { creator_xid, campaign_tweet_id, solve_tweet_id }
+    }
+
+    public(package) fun new_claim_payload(
+        claimant_xid: vector<u8>,
+        target_tweet_id: vector<u8>,
+        claim_tweet_id: vector<u8>,
+    ): ClaimPayload {
+        ClaimPayload { claimant_xid, target_tweet_id, claim_tweet_id }
     }
 
     // ====== Test-Only Functions ======

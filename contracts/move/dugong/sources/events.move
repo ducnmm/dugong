@@ -65,6 +65,42 @@ module dugong::events {
         timestamp: u64,
     }
 
+    // ====== Reward Campaign Events ======
+
+    public struct RewardCampaignCreated has copy, drop {
+        campaign_id: ID,
+        campaign_tweet_id: String,
+        creator_xid: String,
+        campaign_type: u8,
+        target: String,
+        coin_type: String,
+        reward_amount: u64,
+        max_winners: u64,
+        total_budget: u64,
+        timestamp: u64,
+    }
+
+    public struct RewardCampaignResolved has copy, drop {
+        campaign_id: ID,
+        campaign_tweet_id: String,
+        solve_tweet_id: String,
+        creator_xid: String,
+        winner_xids: vector<String>,
+        winner_count: u64,
+        unallocated_refund: u64,
+        coin_type: String,
+        timestamp: u64,
+    }
+
+    public struct RewardCampaignClaimed has copy, drop {
+        campaign_id: ID,
+        campaign_tweet_id: String,
+        winner_xid: String,
+        coin_type: String,
+        amount: u64,
+        timestamp: u64,
+    }
+
     // ====== Transfer Events ======
 
     public struct TransferCompleted has copy, drop {
@@ -154,6 +190,74 @@ module dugong::events {
         timestamp: u64,
     ) {
         sui::event::emit(MarketResolved { market_tweet_id, resolver_xid, outcome, timestamp });
+    }
+
+    public(package) fun emit_reward_campaign_created(
+        campaign_id: ID,
+        campaign_tweet_id: String,
+        creator_xid: String,
+        campaign_type: u8,
+        target: String,
+        coin_type: String,
+        reward_amount: u64,
+        max_winners: u64,
+        total_budget: u64,
+        timestamp: u64,
+    ) {
+        sui::event::emit(RewardCampaignCreated {
+            campaign_id,
+            campaign_tweet_id,
+            creator_xid,
+            campaign_type,
+            target,
+            coin_type,
+            reward_amount,
+            max_winners,
+            total_budget,
+            timestamp,
+        });
+    }
+
+    public(package) fun emit_reward_campaign_resolved(
+        campaign_id: ID,
+        campaign_tweet_id: String,
+        solve_tweet_id: String,
+        creator_xid: String,
+        winner_xids: vector<String>,
+        winner_count: u64,
+        unallocated_refund: u64,
+        coin_type: String,
+        timestamp: u64,
+    ) {
+        sui::event::emit(RewardCampaignResolved {
+            campaign_id,
+            campaign_tweet_id,
+            solve_tweet_id,
+            creator_xid,
+            winner_xids,
+            winner_count,
+            unallocated_refund,
+            coin_type,
+            timestamp,
+        });
+    }
+
+    public(package) fun emit_reward_campaign_claimed(
+        campaign_id: ID,
+        campaign_tweet_id: String,
+        winner_xid: String,
+        coin_type: String,
+        amount: u64,
+        timestamp: u64,
+    ) {
+        sui::event::emit(RewardCampaignClaimed {
+            campaign_id,
+            campaign_tweet_id,
+            winner_xid,
+            coin_type,
+            amount,
+            timestamp,
+        });
     }
 
     public(package) fun emit_transfer_completed(

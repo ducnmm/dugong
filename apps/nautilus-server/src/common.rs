@@ -44,6 +44,9 @@ pub enum IntentScope {
     CreateMarket = 5,   // CREATE_MARKET_INTENT
     PlaceBet = 6,       // PLACE_BET_INTENT
     ResolveMarket = 7,  // RESOLVE_MARKET_INTENT
+    CreateRewardCampaign = 8,  // CREATE_REWARD_CAMPAIGN_INTENT
+    ResolveRewardCampaign = 9, // RESOLVE_REWARD_CAMPAIGN_INTENT
+    Claim = 10,                // CLAIM_INTENT
 }
 
 impl<T: Serialize + Debug> IntentMessage<T> {
