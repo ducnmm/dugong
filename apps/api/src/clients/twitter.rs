@@ -2,11 +2,14 @@
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::config::Config;
+
+const MAX_CAMPAIGN_SEARCH_RESULTS: usize = 50;
 
 // ====== OAuth 2.0 Types ======
 
@@ -147,6 +150,7 @@ pub struct TwitterClient {
     twitterapi_io_api_key: String,
     twitterapi_io_login_cookies: Option<String>,
     twitterapi_io_proxy: Option<String>,
+    replies_enabled: bool,
 }
 
 /// Request body for creating a tweet through TwitterAPI.io.
@@ -202,6 +206,14 @@ pub struct TransactionResult {
     pub original_tweet_id: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct RewardCampaignCandidate {
+    pub tweet_id: String,
+    pub author_xid: String,
+    pub author_handle: String,
+    pub created_at: DateTime<Utc>,
+}
+
 impl TwitterClient {
     pub fn new(config: &Config) -> Self {
         Self {
@@ -209,7 +221,145 @@ impl TwitterClient {
             twitterapi_io_api_key: config.twitterapi_io_api_key.clone(),
             twitterapi_io_login_cookies: config.twitterapi_io_login_cookies.clone(),
             twitterapi_io_proxy: config.twitterapi_io_proxy.clone(),
+            replies_enabled: config.enable_twitter_replies,
         }
+    }
+
+    fn format_token_amount(amount: u64, coin_type: &str) -> String {
+        let (decimals, coin_symbol) =
+            if coin_type.to_uppercase() == "SUI" || coin_type.contains("sui::SUI") {
+                (9, "SUI")
+            } else if coin_type.to_uppercase() == "USDC" || coin_type.contains("usdc::USDC") {
+                (6, "USDC")
+            } else if coin_type.to_uppercase() == "WAL" || coin_type.contains("wal::WAL") {
+                (9, "WAL")
+            } else {
+                let symbol = coin_type.split("::").last().unwrap_or(coin_type);
+                (9, symbol)
+            };
+
+        let divisor = 10_u64.pow(decimals);
+        let amount_float = amount as f64 / divisor as f64;
+        format!(
+            "{:.precision$} {}",
+            amount_float,
+            coin_symbol,
+            precision = decimals as usize
+        )
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+    }
+
+    fn short_text(value: &str, max_chars: usize) -> String {
+        if value.chars().count() <= max_chars {
+            return value.to_string();
+        }
+
+        let mut truncated = value
+            .chars()
+            .take(max_chars.saturating_sub(3))
+            .collect::<String>();
+        truncated.push_str("...");
+        truncated
+    }
+
+    pub async fn fetch_top_reply_candidates(
+        &self,
+        campaign_tweet_id: &str,
+        max_winners: usize,
+    ) -> Result<Vec<RewardCampaignCandidate>> {
+        let query = format!("conversation_id:{}", campaign_tweet_id);
+        let mut candidates = self
+            .search_campaign_candidates(&query, "Top", max_winners)
+            .await
+            .with_context(|| format!("Failed to search replies for {}", campaign_tweet_id))?;
+
+        candidates.retain(|candidate| candidate.tweet_id != campaign_tweet_id);
+        dedupe_candidates(candidates, max_winners)
+    }
+
+    pub async fn fetch_first_hashtag_candidates(
+        &self,
+        hashtag: &str,
+        max_winners: usize,
+    ) -> Result<Vec<RewardCampaignCandidate>> {
+        let query = hashtag.trim().to_string();
+        let mut candidates = self
+            .search_campaign_candidates(&query, "Latest", max_winners)
+            .await
+            .with_context(|| format!("Failed to search hashtag candidates for {}", hashtag))?;
+
+        candidates.sort_by_key(|candidate| candidate.created_at);
+        dedupe_candidates(candidates, max_winners)
+    }
+
+    async fn search_campaign_candidates(
+        &self,
+        query: &str,
+        query_type: &str,
+        max_results: usize,
+    ) -> Result<Vec<RewardCampaignCandidate>> {
+        let max_results = max_results.clamp(1, MAX_CAMPAIGN_SEARCH_RESULTS);
+        let mut cursor: Option<String> = None;
+        let mut candidates = Vec::new();
+
+        while candidates.len() < max_results {
+            let mut params = vec![("query", query), ("queryType", query_type)];
+            if let Some(cursor) = cursor.as_deref() {
+                params.push(("cursor", cursor));
+            }
+
+            let response = self
+                .http_client
+                .get("https://api.twitterapi.io/twitter/tweet/advanced_search")
+                .header("X-API-Key", &self.twitterapi_io_api_key)
+                .query(&params)
+                .send()
+                .await
+                .context("Failed to call TwitterAPI.io advanced search")?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                anyhow::bail!("TwitterAPI.io advanced search error {}: {}", status, text);
+            }
+
+            let response = response
+                .json::<TwitterApiSearchResponse>()
+                .await
+                .context("Failed to parse TwitterAPI.io advanced search response")?;
+            let has_next_page = response.has_next_page;
+            let next_cursor = response.next_cursor.filter(|cursor| !cursor.is_empty());
+
+            candidates.extend(response.tweets.into_iter().filter_map(|tweet| {
+                DateTime::parse_from_str(&tweet.created_at, "%a %b %d %H:%M:%S %z %Y")
+                    .ok()
+                    .map(|created_at| RewardCampaignCandidate {
+                        tweet_id: tweet.id,
+                        author_xid: tweet.author.id,
+                        author_handle: tweet.author.username,
+                        created_at: created_at.with_timezone(&Utc),
+                    })
+            }));
+
+            if !has_next_page || candidates.len() >= max_results {
+                break;
+            }
+
+            if next_cursor.as_ref() == cursor.as_ref() {
+                break;
+            }
+
+            match next_cursor {
+                Some(next_cursor) => cursor = Some(next_cursor),
+                None => break,
+            }
+        }
+
+        candidates.truncate(max_results);
+
+        Ok(candidates)
     }
 
     /// Reply to a tweet with transaction success message
@@ -250,9 +400,9 @@ impl TwitterClient {
 
         // Build success message
         let message = format!(
-            "✅ Transaction successful!\n\n\
-            💸 Sent {} from @{} to @{}\n\n\
-            🔗 View on Suiscan:\n\
+            "Transaction successful!\n\n\
+            Sent {} from @{} to @{}\n\n\
+            View on Suiscan:\n\
             https://suiscan.xyz/testnet/tx/{}",
             display_amount, result.from_handle, result.to_handle, result.tx_digest
         );
@@ -267,6 +417,271 @@ impl TwitterClient {
             .await
     }
 
+    pub async fn reply_prediction_market_created(
+        &self,
+        tweet_id: &str,
+        creator_handle: &str,
+        question: &str,
+    ) -> Result<String> {
+        let question = Self::short_text(question, 140);
+        let message = format!(
+            "Prediction market opened by @{}.\n\n{}\n\nReply with:\n@DugongWallet bet 5 SUI with yes/no",
+            creator_handle, question
+        );
+
+        info!(
+            tweet_id = %tweet_id,
+            creator = %creator_handle,
+            "Replying with prediction market created message"
+        );
+
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_prediction_market_already_exists(
+        &self,
+        tweet_id: &str,
+        question: &str,
+    ) -> Result<String> {
+        let question = Self::short_text(question, 160);
+        let message = format!("Prediction market already exists.\n\n{}", question);
+
+        info!(
+            tweet_id = %tweet_id,
+            "Replying with prediction market already exists message"
+        );
+
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_prediction_bet_placed(
+        &self,
+        tweet_id: &str,
+        question: &str,
+        bettor_handle: &str,
+        choice: &str,
+        amount: u64,
+        coin_type: &str,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let question = Self::short_text(question, 90);
+        let display_amount = Self::format_token_amount(amount, coin_type);
+        let message = format!(
+            "Bet placed: @{} {} on {}\n\n{}\n\nhttps://suiscan.xyz/testnet/tx/{}",
+            bettor_handle, display_amount, choice, question, tx_digest
+        );
+
+        info!(
+            tweet_id = %tweet_id,
+            bettor = %bettor_handle,
+            choice = %choice,
+            tx_digest = %tx_digest,
+            "Replying with prediction bet placed message"
+        );
+
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_prediction_bet_insufficient_balance(
+        &self,
+        tweet_id: &str,
+        bettor_handle: &str,
+        requested_amount: u64,
+        available_amount: u64,
+        coin_type: &str,
+    ) -> Result<String> {
+        let requested = Self::format_token_amount(requested_amount, coin_type);
+        let available = Self::format_token_amount(available_amount, coin_type);
+        let message = format!(
+            "@{} your Dugong account is ready, but it only has {} available.\n\nBet requested: {}.\nDeposit funds in the dApp, then send a new bet reply.",
+            bettor_handle, available, requested
+        );
+
+        info!(
+            tweet_id = %tweet_id,
+            bettor = %bettor_handle,
+            requested = %requested,
+            available = %available,
+            "Replying with insufficient prediction bet balance message"
+        );
+
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_prediction_market_resolved(
+        &self,
+        tweet_id: &str,
+        question: &str,
+        outcome: &str,
+        winner_count: usize,
+        total_pot: u64,
+        coin_type: &str,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let question = Self::short_text(question, 80);
+        let display_pot = Self::format_token_amount(total_pot, coin_type);
+        let message = format!(
+            "Market resolved: {}\n\n{}\n\n{} winner(s) can claim from the {} pool by replying @DugongWallet claim to the market tweet.\n\nhttps://suiscan.xyz/testnet/tx/{}",
+            outcome, question, winner_count, display_pot, tx_digest
+        );
+
+        info!(
+            tweet_id = %tweet_id,
+            outcome = %outcome,
+            tx_digest = %tx_digest,
+            "Replying with prediction market resolved message"
+        );
+
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_prediction_market_resolved_no_bets(
+        &self,
+        tweet_id: &str,
+        question: &str,
+        outcome: &str,
+    ) -> Result<String> {
+        let question = Self::short_text(question, 140);
+        let message = format!(
+            "Market resolved: {}\n\n{}\n\nNo bets were placed.",
+            outcome, question
+        );
+
+        info!(
+            tweet_id = %tweet_id,
+            outcome = %outcome,
+            "Replying with no-bets prediction resolve message"
+        );
+
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_prediction_market_resolved_no_winners(
+        &self,
+        tweet_id: &str,
+        question: &str,
+        outcome: &str,
+        total_pot: u64,
+        coin_type: &str,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let question = Self::short_text(question, 100);
+        let display_pot = Self::format_token_amount(total_pot, coin_type);
+        let message = format!(
+            "Market resolved: {}\n\n{}\n\nNo winning bets. Bettors can claim refunds from the {} pool by replying @DugongWallet claim to the market tweet.\n\nhttps://suiscan.xyz/testnet/tx/{}",
+            outcome, question, display_pot, tx_digest
+        );
+
+        info!(
+            tweet_id = %tweet_id,
+            outcome = %outcome,
+            "Replying with no-winners prediction resolve message"
+        );
+
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_prediction_payout_claimed(
+        &self,
+        tweet_id: &str,
+        question: &str,
+        outcome: &str,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let question = Self::short_text(question, 100);
+        let message = format!(
+            "Prediction payout claimed.\n\nMarket: {}\nOutcome: {}\n\nhttps://suiscan.xyz/testnet/tx/{}",
+            question, outcome, tx_digest
+        );
+
+        info!(tweet_id = %tweet_id, "Replying with prediction payout claimed message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_reward_campaign_created(
+        &self,
+        tweet_id: &str,
+        campaign_type: &str,
+        reward_amount: u64,
+        coin_type: &str,
+        max_winners: i64,
+    ) -> Result<String> {
+        let display_reward = Self::format_token_amount(reward_amount, coin_type);
+        let message = format!(
+            "Reward campaign created.\n\nType: {}\nReward: {} each\nMax winners: {}\n\nReply with @DugongWallet solve! to select winners.",
+            campaign_type, display_reward, max_winners
+        );
+
+        info!(tweet_id = %tweet_id, "Replying with reward campaign created message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_reward_campaign_already_exists(
+        &self,
+        tweet_id: &str,
+        campaign_type: &str,
+    ) -> Result<String> {
+        let message = format!(
+            "Reward campaign already exists for this tweet.\n\nType: {}",
+            campaign_type
+        );
+
+        info!(tweet_id = %tweet_id, "Replying with reward campaign exists message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_reward_campaign_resolved(
+        &self,
+        tweet_id: &str,
+        winner_count: usize,
+        total_budget: u64,
+        coin_type: &str,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let display_budget = Self::format_token_amount(total_budget, coin_type);
+        let message = format!(
+            "Reward campaign solved.\n\nSelected {} winner(s) from {} budget. Winners can claim by replying @DugongWallet claim to the campaign tweet.\n\nhttps://suiscan.xyz/testnet/tx/{}",
+            winner_count, display_budget, tx_digest
+        );
+
+        info!(tweet_id = %tweet_id, "Replying with reward campaign resolved message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_reward_campaign_claimed(
+        &self,
+        tweet_id: &str,
+        reward_amount: u64,
+        coin_type: &str,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let display_reward = Self::format_token_amount(reward_amount, coin_type);
+        let message = format!(
+            "Reward claimed.\n\nAmount: {}\n\nhttps://suiscan.xyz/testnet/tx/{}",
+            display_reward, tx_digest
+        );
+
+        info!(tweet_id = %tweet_id, "Replying with reward campaign claimed message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    pub async fn reply_reward_campaign_no_winners(
+        &self,
+        tweet_id: &str,
+        total_budget: u64,
+        coin_type: &str,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let display_budget = Self::format_token_amount(total_budget, coin_type);
+        let message = format!(
+            "Reward campaign solved.\n\nNo eligible winners found. {} was refunded to the creator.\n\nhttps://suiscan.xyz/testnet/tx/{}",
+            display_budget, tx_digest
+        );
+
+        info!(tweet_id = %tweet_id, "Replying with reward campaign no-winners message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
     /// Reply to a tweet with account creation success message
     pub async fn reply_account_created(
         &self,
@@ -275,10 +690,10 @@ impl TwitterClient {
         tx_digest: &str,
     ) -> Result<String> {
         let message = format!(
-            "✅ Welcome to Dugong, @{}!\n\n\
-            🎉 Your account has been created successfully.\n\n\
+            "Welcome to Dugong, @{}!\n\n\
+            Your account has been created successfully.\n\n\
             You can now receive and send crypto via tweets!\n\n\
-            🔗 View on Suiscan:\n\
+            View on Suiscan:\n\
             https://suiscan.xyz/testnet/tx/{}",
             handle, tx_digest
         );
@@ -338,11 +753,11 @@ impl TwitterClient {
         };
 
         let message = format!(
-            "✅ Wallet linked successfully, @{}!\n\n\
-            🔗 Your Dugong is now connected to:\n\
+            "Wallet linked successfully, @{}!\n\n\
+            Your Dugong is now connected to:\n\
             {}\n\n\
             You can now deposit/withdraw directly from your wallet!\n\n\
-            📜 View on Suiscan:\n\
+            View on Suiscan:\n\
             https://suiscan.xyz/testnet/tx/{}",
             handle, short_address, tx_digest
         );
@@ -413,7 +828,7 @@ impl TwitterClient {
     #[allow(dead_code)]
     pub async fn reply_error(&self, tweet_id: &str, error_message: &str) -> Result<String> {
         let message = format!(
-            "❌ Transaction failed\n\n\
+            "Transaction failed\n\n\
             Error: {}\n\n\
             Please check your command and try again.",
             error_message
@@ -430,6 +845,15 @@ impl TwitterClient {
 
     /// Post a reply to a specific tweet
     async fn reply_to_tweet(&self, tweet_id: &str, text: &str) -> Result<String> {
+        if !self.replies_enabled {
+            info!(
+                tweet_id = %tweet_id,
+                reply_text = %text,
+                "Twitter replies disabled; skipping reply post"
+            );
+            return Ok(format!("twitter-replies-disabled:{tweet_id}"));
+        }
+
         let url = "https://api.twitterapi.io/twitter/create_tweet_v2";
         let login_cookies = self.twitterapi_io_login_cookies.as_ref().ok_or_else(|| {
             warn!(
@@ -519,4 +943,51 @@ impl TwitterClient {
 
         Ok(reply_tweet_id)
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct TwitterApiSearchResponse {
+    #[serde(default)]
+    tweets: Vec<TwitterApiTweet>,
+    #[serde(default, rename = "has_next_page", alias = "hasNextPage")]
+    has_next_page: bool,
+    #[serde(default, rename = "next_cursor", alias = "nextCursor")]
+    next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TwitterApiTweet {
+    id: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    author: TwitterApiAuthor,
+}
+
+#[derive(Debug, Deserialize)]
+struct TwitterApiAuthor {
+    id: String,
+    #[serde(rename = "userName")]
+    username: String,
+}
+
+fn dedupe_candidates(
+    candidates: Vec<RewardCampaignCandidate>,
+    max_winners: usize,
+) -> Result<Vec<RewardCampaignCandidate>> {
+    let mut seen = Vec::<String>::new();
+    let mut deduped = Vec::new();
+
+    for candidate in candidates {
+        if seen.contains(&candidate.author_xid) {
+            continue;
+        }
+
+        seen.push(candidate.author_xid.clone());
+        deduped.push(candidate);
+        if deduped.len() >= max_winners {
+            break;
+        }
+    }
+
+    Ok(deduped)
 }

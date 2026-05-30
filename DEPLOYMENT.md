@@ -14,7 +14,7 @@ using the Railway CLI.
 | `Postgres` | Railway plugin | — | internal |
 | `Redis` | Railway plugin | — | internal |
 
-> **⚠️ nautilus caveat:** `nautilus-server` is built to run inside an AWS
+> **nautilus caveat:** `nautilus-server` is built to run inside an AWS
 > Nitro Enclave. On Railway it serves HTTP fine, but `/get_attestation`
 > calls the NSM driver (`/dev/nsm`), which does not exist outside an enclave
 > and will error. Deploy it here only for non-attestation endpoints or

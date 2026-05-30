@@ -19,6 +19,7 @@ pub struct Config {
     pub twitterapi_io_api_key: String,
     pub twitterapi_io_login_cookies: Option<String>,
     pub twitterapi_io_proxy: Option<String>,
+    pub enable_twitter_replies: bool,
     pub twitter_webhook_secret: Option<String>,
 
     // Twitter OAuth 2.0 (for user authentication)
@@ -72,6 +73,7 @@ impl Config {
                 .context("TWITTERAPI_IO_API_KEY must be set")?,
             twitterapi_io_login_cookies: optional_env("TWITTERAPI_IO_LOGIN_COOKIES"),
             twitterapi_io_proxy: optional_env("TWITTERAPI_IO_PROXY"),
+            enable_twitter_replies: env_flag("ENABLE_TWITTER_REPLIES", false),
             twitter_webhook_secret: optional_env("TWITTER_WEBHOOK_SECRET"),
 
             // Twitter OAuth 2.0
@@ -123,18 +125,16 @@ impl Config {
         })
     }
 
-    /// Ensure the credentials required to post reply tweets are present.
-    ///
-    /// The processor worker replies to every tweet it handles, so missing
-    /// reply credentials is an operator error that must fail loudly at
-    /// startup rather than silently dropping replies at runtime. Call this
-    /// from binaries that run the processor; the indexer binary does not
-    /// post replies and should not call it.
+    /// Ensure reply credentials are present when reply posting is enabled.
     pub fn ensure_reply_capable(&self) -> Result<()> {
+        if !self.enable_twitter_replies {
+            return Ok(());
+        }
+
         let login_cookies = self.twitterapi_io_login_cookies.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "TWITTERAPI_IO_LOGIN_COOKIES must be set to post reply tweets \
-                 (set ENABLE_INDEXER and run the indexer binary if this process should not reply)"
+                 (unset ENABLE_TWITTER_REPLIES if this process should not reply)"
             )
         })?;
         ensure_authenticated_login_cookie(login_cookies)?;
@@ -151,4 +151,16 @@ fn optional_env(name: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty() && !value.starts_with("replace_with_"))
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
 }

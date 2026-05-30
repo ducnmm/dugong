@@ -39,9 +39,9 @@ impl PollerService {
 
         // Check backend health
         match self.backend_client.health_check().await {
-            Ok(true) => info!("✓ Backend health check passed"),
-            Ok(false) => warn!("⚠ Backend health check failed (non-200 response)"),
-            Err(e) => warn!("⚠ Backend health check error: {}", e),
+            Ok(true) => info!("Backend health check passed"),
+            Ok(false) => warn!("Backend health check failed (non-200 response)"),
+            Err(e) => warn!("Backend health check error: {}", e),
         }
 
         let interval = tokio::time::Duration::from_secs(self.config.poll_interval_seconds);
@@ -126,7 +126,7 @@ impl PollerService {
                         id_str: user.id.clone(),
                         screen_name: user.username.clone(),
                     },
-                    in_reply_to_status_id_str: None,
+                    in_reply_to_status_id_str: tweet.in_reply_to_status_id_str.clone(),
                 });
             } else {
                 warn!("  Tweet {} has no user info", tweet.id);
@@ -145,9 +145,9 @@ impl PollerService {
             );
 
             match self.backend_client.send_tweets(payload).await {
-                Ok(true) => info!("✓ Successfully sent tweets to backend"),
-                Ok(false) => warn!("⚠ Backend returned non-success status"),
-                Err(e) => error!("✗ Failed to send tweets to backend: {:#}", e),
+                Ok(true) => info!("Successfully sent tweets to backend"),
+                Ok(false) => warn!("Backend returned non-success status"),
+                Err(e) => error!("Failed to send tweets to backend: {:#}", e),
             }
         }
 

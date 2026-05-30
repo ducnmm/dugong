@@ -41,6 +41,12 @@ pub enum IntentScope {
     LinkWallet = 1,   // LINK_WALLET_INTENT
     TransferCoin = 2, // TRANSFER_COIN_INTENT (explicit)
     UpdateHandle = 4, // UPDATE_HANDLE_INTENT
+    CreatePredictionMarket = 5,
+    PlacePredictionBet = 6,
+    ResolvePredictionMarket = 7,
+    CreateRewardCampaign = 8,
+    ResolveRewardCampaign = 9,
+    Claim = 10,
 }
 
 impl<T: Serialize + Debug> IntentMessage<T> {

@@ -21,8 +21,8 @@ module dugong::transfers {
         coin_type: vector<u8>,
         tweet_id: vector<u8>,
         timestamp: u64,
-        signature: &vector<u8>,
-        enclave: &Enclave<E>,
+        _signature: &vector<u8>,
+        _enclave: &Enclave<E>,
     ) {
         // Convert tweet_id to String for table lookup
         let tweet_id_str = string::utf8(tweet_id);

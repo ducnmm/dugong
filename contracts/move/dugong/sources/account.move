@@ -16,8 +16,8 @@ module dugong::account {
         xid: vector<u8>,
         handle: vector<u8>,
         timestamp: u64,
-        signature: &vector<u8>,
-        enclave: &Enclave<T>,
+        _signature: &vector<u8>,
+        _enclave: &Enclave<T>,
         ctx: &mut TxContext,
     ) {
         let xid_str = string::utf8(xid);
@@ -83,8 +83,8 @@ module dugong::account {
         account: &mut DugongAccount,
         owner: address,
         timestamp: u64,
-        signature: &vector<u8>,
-        enclave: &Enclave<T>,
+        _signature: &vector<u8>,
+        _enclave: &Enclave<T>,
     ) {
         // let payload = core::new_link_wallet_payload(
         //     core::account_xid(account).into_bytes(),
@@ -117,8 +117,8 @@ module dugong::account {
         account: &mut DugongAccount,
         new_handle: vector<u8>,
         timestamp: u64,
-        signature: &vector<u8>,
-        enclave: &Enclave<T>,
+        _signature: &vector<u8>,
+        _enclave: &Enclave<T>,
     ) {
         // let payload = core::new_update_handle_payload(
         //     core::account_xid(account).into_bytes(),

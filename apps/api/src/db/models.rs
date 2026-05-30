@@ -573,6 +573,553 @@ impl Transfer {
     }
 }
 
+/// Prediction market status enum matching PostgreSQL prediction_market_status type
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "prediction_market_status", rename_all = "lowercase")]
+pub enum PredictionMarketStatus {
+    Open,
+    Resolved,
+    Cancelled,
+}
+
+/// Prediction bet choice enum matching PostgreSQL prediction_bet_choice type
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq, Hash)]
+#[sqlx(type_name = "prediction_bet_choice", rename_all = "lowercase")]
+pub enum PredictionBetChoice {
+    Yes,
+    No,
+}
+
+impl PredictionBetChoice {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Yes => "yes",
+            Self::No => "no",
+        }
+    }
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PredictionMarket {
+    pub id: i32,
+    pub market_object_id: Option<String>,
+    pub market_tweet_id: String,
+    pub creator_xid: String,
+    pub creator_handle: String,
+    pub question: String,
+    pub create_tx_digest: Option<String>,
+    pub status: PredictionMarketStatus,
+    pub outcome: Option<PredictionBetChoice>,
+    pub resolved_by_tweet_id: Option<String>,
+    pub resolve_tx_digest: Option<String>,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl PredictionMarket {
+    pub async fn upsert_open(
+        pool: &sqlx::PgPool,
+        market_object_id: Option<&str>,
+        market_tweet_id: &str,
+        creator_xid: &str,
+        creator_handle: &str,
+        question: &str,
+        create_tx_digest: Option<&str>,
+    ) -> Result<Self, sqlx::Error> {
+        sqlx::query_as::<_, PredictionMarket>(
+            r#"
+            INSERT INTO prediction_markets (
+                market_object_id,
+                market_tweet_id,
+                creator_xid,
+                creator_handle,
+                question,
+                create_tx_digest
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (market_tweet_id)
+            DO UPDATE SET
+                market_object_id = COALESCE(EXCLUDED.market_object_id, prediction_markets.market_object_id),
+                creator_xid = EXCLUDED.creator_xid,
+                creator_handle = EXCLUDED.creator_handle,
+                question = EXCLUDED.question,
+                create_tx_digest = COALESCE(EXCLUDED.create_tx_digest, prediction_markets.create_tx_digest),
+                updated_at = NOW()
+            RETURNING id, market_object_id, market_tweet_id, creator_xid, creator_handle, question, create_tx_digest, status, outcome, resolved_by_tweet_id, resolve_tx_digest, resolved_at, created_at, updated_at
+            "#,
+        )
+        .bind(market_object_id)
+        .bind(market_tweet_id)
+        .bind(creator_xid)
+        .bind(creator_handle)
+        .bind(question)
+        .bind(create_tx_digest)
+        .fetch_one(pool)
+        .await
+    }
+
+    pub async fn find_by_market_tweet_id(
+        pool: &sqlx::PgPool,
+        market_tweet_id: &str,
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query_as::<_, PredictionMarket>(
+            r#"
+            SELECT id, market_object_id, market_tweet_id, creator_xid, creator_handle, question, create_tx_digest, status, outcome, resolved_by_tweet_id, resolve_tx_digest, resolved_at, created_at, updated_at
+            FROM prediction_markets
+            WHERE market_tweet_id = $1
+            "#,
+        )
+        .bind(market_tweet_id)
+        .fetch_optional(pool)
+        .await
+    }
+
+    pub async fn mark_resolved(
+        pool: &sqlx::PgPool,
+        id: i32,
+        outcome: PredictionBetChoice,
+        resolved_by_tweet_id: &str,
+        resolve_tx_digest: Option<&str>,
+    ) -> Result<Self, sqlx::Error> {
+        sqlx::query_as::<_, PredictionMarket>(
+            r#"
+            UPDATE prediction_markets
+            SET
+                status = 'resolved',
+                outcome = $2,
+                resolved_by_tweet_id = $3,
+                resolve_tx_digest = COALESCE($4, resolve_tx_digest),
+                resolved_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, market_object_id, market_tweet_id, creator_xid, creator_handle, question, create_tx_digest, status, outcome, resolved_by_tweet_id, resolve_tx_digest, resolved_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(outcome)
+        .bind(resolved_by_tweet_id)
+        .bind(resolve_tx_digest)
+        .fetch_one(pool)
+        .await
+    }
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PredictionBet {
+    pub id: i32,
+    pub market_id: i32,
+    pub bet_tweet_id: String,
+    pub bettor_xid: String,
+    pub bettor_handle: String,
+    pub choice: PredictionBetChoice,
+    pub coin_type: String,
+    pub amount: i64,
+    pub bet_tx_digest: String,
+    pub payout_tx_digest: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl PredictionBet {
+    pub async fn upsert(
+        pool: &sqlx::PgPool,
+        market_id: i32,
+        bet_tweet_id: &str,
+        bettor_xid: &str,
+        bettor_handle: &str,
+        choice: PredictionBetChoice,
+        coin_type: &str,
+        amount: i64,
+        bet_tx_digest: &str,
+    ) -> Result<Self, sqlx::Error> {
+        sqlx::query_as::<_, PredictionBet>(
+            r#"
+            INSERT INTO prediction_market_bets (
+                market_id,
+                bet_tweet_id,
+                bettor_xid,
+                bettor_handle,
+                choice,
+                coin_type,
+                amount,
+                bet_tx_digest
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (bet_tweet_id)
+            DO UPDATE SET
+                market_id = EXCLUDED.market_id,
+                bettor_xid = EXCLUDED.bettor_xid,
+                bettor_handle = EXCLUDED.bettor_handle,
+                choice = EXCLUDED.choice,
+                coin_type = EXCLUDED.coin_type,
+                amount = EXCLUDED.amount,
+                bet_tx_digest = EXCLUDED.bet_tx_digest
+            RETURNING id, market_id, bet_tweet_id, bettor_xid, bettor_handle, choice, coin_type, amount, bet_tx_digest, payout_tx_digest, created_at
+            "#,
+        )
+        .bind(market_id)
+        .bind(bet_tweet_id)
+        .bind(bettor_xid)
+        .bind(bettor_handle)
+        .bind(choice)
+        .bind(coin_type)
+        .bind(amount)
+        .bind(bet_tx_digest)
+        .fetch_one(pool)
+        .await
+    }
+
+    pub async fn find_by_bet_tweet_id(
+        pool: &sqlx::PgPool,
+        bet_tweet_id: &str,
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query_as::<_, PredictionBet>(
+            r#"
+            SELECT id, market_id, bet_tweet_id, bettor_xid, bettor_handle, choice, coin_type, amount, bet_tx_digest, payout_tx_digest, created_at
+            FROM prediction_market_bets
+            WHERE bet_tweet_id = $1
+            "#,
+        )
+        .bind(bet_tweet_id)
+        .fetch_optional(pool)
+        .await
+    }
+
+    pub async fn find_by_market_id(
+        pool: &sqlx::PgPool,
+        market_id: i32,
+    ) -> Result<Vec<Self>, sqlx::Error> {
+        sqlx::query_as::<_, PredictionBet>(
+            r#"
+            SELECT id, market_id, bet_tweet_id, bettor_xid, bettor_handle, choice, coin_type, amount, bet_tx_digest, payout_tx_digest, created_at
+            FROM prediction_market_bets
+            WHERE market_id = $1
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(market_id)
+        .fetch_all(pool)
+        .await
+    }
+
+    pub async fn find_by_market_id_and_bettor_xid(
+        pool: &sqlx::PgPool,
+        market_id: i32,
+        bettor_xid: &str,
+    ) -> Result<Vec<Self>, sqlx::Error> {
+        sqlx::query_as::<_, PredictionBet>(
+            r#"
+            SELECT id, market_id, bet_tweet_id, bettor_xid, bettor_handle, choice, coin_type, amount, bet_tx_digest, payout_tx_digest, created_at
+            FROM prediction_market_bets
+            WHERE market_id = $1 AND bettor_xid = $2
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(market_id)
+        .bind(bettor_xid)
+        .fetch_all(pool)
+        .await
+    }
+
+    pub async fn set_payout_digest_for_bettor(
+        pool: &sqlx::PgPool,
+        market_id: i32,
+        bettor_xid: &str,
+        payout_tx_digest: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE prediction_market_bets
+            SET payout_tx_digest = $3
+            WHERE market_id = $1 AND bettor_xid = $2
+            "#,
+        )
+        .bind(market_id)
+        .bind(bettor_xid)
+        .bind(payout_tx_digest)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+}
+
+/// Reward campaign type enum matching PostgreSQL reward_campaign_type type
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "reward_campaign_type", rename_all = "snake_case")]
+pub enum RewardCampaignType {
+    TopReplies,
+    FirstHashtag,
+}
+
+impl RewardCampaignType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::TopReplies => "top_replies",
+            Self::FirstHashtag => "first_hashtag",
+        }
+    }
+
+    pub fn contract_value(&self) -> u8 {
+        match self {
+            Self::TopReplies => 1,
+            Self::FirstHashtag => 2,
+        }
+    }
+}
+
+/// Reward campaign status enum matching PostgreSQL reward_campaign_status type
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "reward_campaign_status", rename_all = "lowercase")]
+pub enum RewardCampaignStatus {
+    Open,
+    Resolved,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct RewardCampaign {
+    pub id: i32,
+    pub campaign_object_id: Option<String>,
+    pub campaign_tweet_id: String,
+    pub creator_xid: String,
+    pub creator_handle: String,
+    pub campaign_type: RewardCampaignType,
+    pub target: String,
+    pub coin_type: String,
+    pub reward_amount: i64,
+    pub max_winners: i64,
+    pub create_tx_digest: Option<String>,
+    pub status: RewardCampaignStatus,
+    pub resolved_by_tweet_id: Option<String>,
+    pub resolve_tx_digest: Option<String>,
+    pub selected_winner_count: i32,
+    pub paid_winner_count: i32,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl RewardCampaign {
+    pub async fn upsert_open(
+        pool: &sqlx::PgPool,
+        campaign_object_id: Option<&str>,
+        campaign_tweet_id: &str,
+        creator_xid: &str,
+        creator_handle: &str,
+        campaign_type: RewardCampaignType,
+        target: &str,
+        coin_type: &str,
+        reward_amount: i64,
+        max_winners: i64,
+        create_tx_digest: Option<&str>,
+    ) -> Result<Self, sqlx::Error> {
+        sqlx::query_as::<_, RewardCampaign>(
+            r#"
+            INSERT INTO reward_campaigns (
+                campaign_object_id,
+                campaign_tweet_id,
+                creator_xid,
+                creator_handle,
+                campaign_type,
+                target,
+                coin_type,
+                reward_amount,
+                max_winners,
+                create_tx_digest
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (campaign_tweet_id)
+            DO UPDATE SET
+                campaign_object_id = COALESCE(EXCLUDED.campaign_object_id, reward_campaigns.campaign_object_id),
+                creator_xid = EXCLUDED.creator_xid,
+                creator_handle = EXCLUDED.creator_handle,
+                campaign_type = EXCLUDED.campaign_type,
+                target = EXCLUDED.target,
+                coin_type = EXCLUDED.coin_type,
+                reward_amount = EXCLUDED.reward_amount,
+                max_winners = EXCLUDED.max_winners,
+                create_tx_digest = COALESCE(EXCLUDED.create_tx_digest, reward_campaigns.create_tx_digest),
+                updated_at = NOW()
+            RETURNING id, campaign_object_id, campaign_tweet_id, creator_xid, creator_handle, campaign_type, target, coin_type, reward_amount, max_winners, create_tx_digest, status, resolved_by_tweet_id, resolve_tx_digest, selected_winner_count, paid_winner_count, resolved_at, created_at, updated_at
+            "#,
+        )
+        .bind(campaign_object_id)
+        .bind(campaign_tweet_id)
+        .bind(creator_xid)
+        .bind(creator_handle)
+        .bind(campaign_type)
+        .bind(target)
+        .bind(coin_type)
+        .bind(reward_amount)
+        .bind(max_winners)
+        .bind(create_tx_digest)
+        .fetch_one(pool)
+        .await
+    }
+
+    pub async fn find_by_campaign_tweet_id(
+        pool: &sqlx::PgPool,
+        campaign_tweet_id: &str,
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query_as::<_, RewardCampaign>(
+            r#"
+            SELECT id, campaign_object_id, campaign_tweet_id, creator_xid, creator_handle, campaign_type, target, coin_type, reward_amount, max_winners, create_tx_digest, status, resolved_by_tweet_id, resolve_tx_digest, selected_winner_count, paid_winner_count, resolved_at, created_at, updated_at
+            FROM reward_campaigns
+            WHERE campaign_tweet_id = $1
+            "#,
+        )
+        .bind(campaign_tweet_id)
+        .fetch_optional(pool)
+        .await
+    }
+
+    pub async fn mark_resolved(
+        pool: &sqlx::PgPool,
+        id: i32,
+        resolved_by_tweet_id: &str,
+        resolve_tx_digest: Option<&str>,
+        selected_winner_count: i32,
+        paid_winner_count: i32,
+    ) -> Result<Self, sqlx::Error> {
+        sqlx::query_as::<_, RewardCampaign>(
+            r#"
+            UPDATE reward_campaigns
+            SET
+                status = 'resolved',
+                resolved_by_tweet_id = $2,
+                resolve_tx_digest = COALESCE($3, resolve_tx_digest),
+                selected_winner_count = $4,
+                paid_winner_count = $5,
+                resolved_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, campaign_object_id, campaign_tweet_id, creator_xid, creator_handle, campaign_type, target, coin_type, reward_amount, max_winners, create_tx_digest, status, resolved_by_tweet_id, resolve_tx_digest, selected_winner_count, paid_winner_count, resolved_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(resolved_by_tweet_id)
+        .bind(resolve_tx_digest)
+        .bind(selected_winner_count)
+        .bind(paid_winner_count)
+        .fetch_one(pool)
+        .await
+    }
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct RewardCampaignWinner {
+    pub id: i32,
+    pub campaign_id: i32,
+    pub winner_xid: String,
+    pub winner_handle: String,
+    pub winner_tweet_id: Option<String>,
+    pub rank: i32,
+    pub reward_amount: i64,
+    pub claim_tx_digest: Option<String>,
+    pub selected_at: DateTime<Utc>,
+    pub claimed_at: Option<DateTime<Utc>>,
+}
+
+impl RewardCampaignWinner {
+    pub async fn upsert(
+        pool: &sqlx::PgPool,
+        campaign_id: i32,
+        winner_xid: &str,
+        winner_handle: &str,
+        winner_tweet_id: Option<&str>,
+        rank: i32,
+        reward_amount: i64,
+    ) -> Result<Self, sqlx::Error> {
+        sqlx::query_as::<_, RewardCampaignWinner>(
+            r#"
+            INSERT INTO reward_campaign_winners (
+                campaign_id,
+                winner_xid,
+                winner_handle,
+                winner_tweet_id,
+                rank,
+                reward_amount
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (campaign_id, winner_xid)
+            DO UPDATE SET
+                winner_handle = EXCLUDED.winner_handle,
+                winner_tweet_id = COALESCE(EXCLUDED.winner_tweet_id, reward_campaign_winners.winner_tweet_id),
+                rank = EXCLUDED.rank,
+                reward_amount = EXCLUDED.reward_amount
+            RETURNING id, campaign_id, winner_xid, winner_handle, winner_tweet_id, rank, reward_amount, claim_tx_digest, selected_at, claimed_at
+            "#,
+        )
+        .bind(campaign_id)
+        .bind(winner_xid)
+        .bind(winner_handle)
+        .bind(winner_tweet_id)
+        .bind(rank)
+        .bind(reward_amount)
+        .fetch_one(pool)
+        .await
+    }
+
+    #[allow(dead_code)]
+    pub async fn find_by_campaign_id(
+        pool: &sqlx::PgPool,
+        campaign_id: i32,
+    ) -> Result<Vec<Self>, sqlx::Error> {
+        sqlx::query_as::<_, RewardCampaignWinner>(
+            r#"
+            SELECT id, campaign_id, winner_xid, winner_handle, winner_tweet_id, rank, reward_amount, claim_tx_digest, selected_at, claimed_at
+            FROM reward_campaign_winners
+            WHERE campaign_id = $1
+            ORDER BY rank ASC
+            "#,
+        )
+        .bind(campaign_id)
+        .fetch_all(pool)
+        .await
+    }
+
+    pub async fn find_by_campaign_id_and_winner_xid(
+        pool: &sqlx::PgPool,
+        campaign_id: i32,
+        winner_xid: &str,
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query_as::<_, RewardCampaignWinner>(
+            r#"
+            SELECT id, campaign_id, winner_xid, winner_handle, winner_tweet_id, rank, reward_amount, claim_tx_digest, selected_at, claimed_at
+            FROM reward_campaign_winners
+            WHERE campaign_id = $1 AND winner_xid = $2
+            "#,
+        )
+        .bind(campaign_id)
+        .bind(winner_xid)
+        .fetch_optional(pool)
+        .await
+    }
+
+    pub async fn set_claim_digest(
+        pool: &sqlx::PgPool,
+        campaign_id: i32,
+        winner_xid: &str,
+        claim_tx_digest: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE reward_campaign_winners
+            SET claim_tx_digest = $3, claimed_at = NOW()
+            WHERE campaign_id = $1 AND winner_xid = $2
+            "#,
+        )
+        .bind(campaign_id)
+        .bind(winner_xid)
+        .bind(claim_tx_digest)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+}
+
 impl IndexerState {
     pub async fn get_by_name(pool: &sqlx::PgPool, name: &str) -> Result<Option<Self>, sqlx::Error> {
         sqlx::query_as::<_, IndexerState>(

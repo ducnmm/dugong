@@ -38,11 +38,11 @@ impl Indexer {
 
     /// Start the indexer in real-time mode
     pub async fn start(&self) -> Result<()> {
-        info!("🚀 Starting Dugong Indexer");
+        info!("Starting Dugong Indexer");
 
         // Load last cursor from database
         let mut cursor = self.cursor_manager.load_cursor("dugong_events").await?;
-        info!("📍 Starting from cursor: {:?}", cursor);
+        info!("Starting from cursor: {:?}", cursor);
 
         let mut ticker = interval(self.poll_interval);
 
@@ -52,7 +52,7 @@ impl Indexer {
             match self.fetch_and_process_events(&mut cursor).await {
                 Ok(processed) => {
                     if processed > 0 {
-                        info!("✅ Processed {} events", processed);
+                        info!("Processed {} events", processed);
                         // Save cursor after processing
                         self.cursor_manager
                             .save_cursor("dugong_events", cursor.as_ref())
@@ -60,7 +60,7 @@ impl Indexer {
                     }
                 }
                 Err(e) => {
-                    tracing::error!("❌ Error processing events: {}", e);
+                    tracing::error!("Error processing events: {}", e);
                     // Continue processing on next tick
                 }
             }
@@ -78,7 +78,7 @@ impl Indexer {
             return Ok(0);
         }
 
-        info!("📥 Fetched {} events", page.data.len());
+        info!("Fetched {} events", page.data.len());
 
         // Process events
         let processed = self.event_processor.process_events(&page.data).await?;
@@ -92,7 +92,7 @@ impl Indexer {
     /// Sync all historical events from genesis
     #[allow(dead_code)]
     pub async fn sync_historical(&self) -> Result<()> {
-        info!("🔄 Starting historical sync");
+        info!("Starting historical sync");
 
         let mut cursor: Option<String> = None;
         let mut total_processed = 0;
@@ -111,7 +111,7 @@ impl Indexer {
             total_processed += processed;
 
             info!(
-                "📊 Historical sync progress: {} events processed",
+                "Historical sync progress: {} events processed",
                 total_processed
             );
 
@@ -131,7 +131,7 @@ impl Indexer {
         }
 
         info!(
-            "✅ Historical sync complete: {} events processed",
+            "Historical sync complete: {} events processed",
             total_processed
         );
         Ok(())

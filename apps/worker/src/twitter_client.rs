@@ -7,6 +7,7 @@ pub struct TweetData {
     pub id: String,
     pub text: String,
     pub author_id: String,
+    pub in_reply_to_status_id_str: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,7 +73,7 @@ impl TwitterClient {
         };
 
         let query = format!(
-            "{} (send OR link OR create OR update OR transfer)",
+            "{} (send OR link OR create OR created OR update OR transfer OR market OR survey OR bet OR bets OR solve OR resolve OR reward OR claim)",
             mention_query
         );
 
@@ -138,6 +139,13 @@ struct TwitterApiTweet {
     text: String,
     #[serde(rename = "createdAt")]
     created_at: String,
+    #[serde(
+        default,
+        rename = "inReplyToId",
+        alias = "inReplyToStatusId",
+        alias = "in_reply_to_status_id_str"
+    )]
+    in_reply_to_id: Option<String>,
     author: TwitterApiAuthor,
 }
 
@@ -193,6 +201,7 @@ impl TwitterApiSearchResponse {
                 id: tweet.id,
                 text: tweet.text,
                 author_id: tweet.author.id,
+                in_reply_to_status_id_str: tweet.in_reply_to_id,
             });
         }
 
