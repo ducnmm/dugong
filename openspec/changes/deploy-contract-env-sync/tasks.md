@@ -37,5 +37,11 @@
 ## 7. Validation
 
 - [x] 7.1 Run `scripts/deploy-contract.ts --dry-run --network testnet` and confirm the printed command plan — verified (build + upgrade plan printed, no mutations)
-- [ ] 7.2 Run a real testnet deploy; confirm every consuming `.env` is patched with correct keys/values — BLOCKED: requires live Sui wallet + gas; parse/mapping logic verified against synthetic output instead
-- [ ] 7.3 Confirm `Published.toml` updated and (if not skipped) Railway vars set; boot api/web against new IDs — BLOCKED: depends on 7.2 (live deploy + Railway auth)
+- [x] 7.2 Run a real testnet deploy; confirm every consuming `.env` is patched with correct keys/values — DONE 2026-05-30: live testnet upgrade v1→v2 (`0xa5545b23…`→`0x7462a994…`); patched apps/api, apps/indexer, apps/web `.env` (DUGONG_PACKAGE_ID, MARKET_TREASURY_ACCOUNT_ID)
+- [x] 7.3 Confirm `Published.toml` updated and (if not skipped) Railway vars set; boot api/web against new IDs — DONE 2026-05-30: Published.toml bumped to published-at v2/version 2; api booted on new id (create_market executed: tx wXNV…). Railway skipped (local run)
+
+## 8. Findings from the first live testnet upgrade (2026-05-30)
+
+- [ ] 8.1 **Indexer needs the ORIGINAL package id, not the latest.** The indexer filters events with `MoveEventModule` (sui_client.rs:59), which matches the event type's *defining* package — preserved at `original-id` across upgrades. The deploy synced the *new* id into `apps/indexer/.env`, so the indexer matched zero events and markets never mirrored ("Market not found" on bet/resolve). Worked around by exporting `DUGONG_PACKAGE_ID=<original-id>` for the indexer. Fix: split the concept — latest id for move-call consumers (worker/web), original id for the indexer's event filter (e.g. add `DUGONG_EVENT_PACKAGE_ID`/`DUGONG_ORIGINAL_PACKAGE_ID` to the indexer envSyncMap, sourced from `original-id`).
+- [ ] 8.2 **Deploy silently falls back to fresh publish when no upgrade-capability is recorded.** Published.toml had `original-id` but no `upgrade-capability`, so the script would have done a state-orphaning fresh publish instead of an upgrade. Had to add the cap line by hand. Fix: record the UpgradeCap id in Published.toml on first publish, and warn (or refuse) when `original-id` exists but no `upgrade-capability` is found.
+- [ ] 8.3 **Enoki sponsor allowlist is not synced by the deploy.** Every deploy/upgrade changes the move-call package id, and the new `<pkg>::<module>::<function>` targets must be re-added to the Enoki sponsored-transaction allowlist (dashboard, outside env) or all sponsored txs fail with `invalid_transaction … not allow-listed`. Document this as a required post-deploy step; consider emitting the exact target list from the deploy script.
