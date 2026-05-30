@@ -63,6 +63,6 @@
 
 ## 8. Promote to main
 
-- [ ] 8.1 Decide promotion mechanic (reconciling merge that takes the integration tree vs. reset `main` to `integrate/unify`) — see design Open Questions
-- [ ] 8.2 Promote `integrate/unify` to `main`; confirm `main` now has dev's `markets` (not `prediction_markets.move`), the campaign module, `openspec/`, `scripts/*.ts`, and `docs/`
-- [ ] 8.3 Post-promotion build/test green on `main`; archive this change
+- [x] 8.1 Promotion mechanic chosen: supersede-merge (`git merge -s ours main` on `integrate/unify`, then fast-forward `main`) — conflict-free, history preserved (main BEFORE: `74c0db3`)
+- [x] 8.2 Promoted: `main` now has dev's `markets.move` (no `prediction_markets.move`), the ported `reward_campaigns.move`, `openspec/`, `scripts/*.ts`, and `docs/`. `main` tree == `integrate/unify` tree (identical)
+- [x] 8.3 Post-promotion on `main`: `sui move build --build-env testnet` green, `cargo build --workspace` green. Ready to archive (`/opsx:archive`)
