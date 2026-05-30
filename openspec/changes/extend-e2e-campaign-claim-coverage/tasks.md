@@ -1,7 +1,7 @@
 ## 1. Resolve the mock-location fork
 
 - [ ] 1.1 Decide script-hosted ephemeral server vs. standing local-stack service (design.md Open Question 1); record the decision in design.md
-- [ ] 1.2 Confirm the enclave's Twitter base-URL env knob and whether worker + enclave share one value (Open Question 2); document required mock-mode env in `docs/local-dev-guide.md`
+- [x] 1.2 Confirm the enclave's Twitter base-URL env knob and whether worker + enclave share one value (Open Question 2). DONE: the enclave hard-coded `twitterapi_io_base_url`/`twitter_api_base_url` to the prod constants (main.rs); made both overridable via `TWITTERAPI_IO_BASE_URL` / `TWITTER_API_BASE_URL` (default unchanged), matching the worker's `dugong-core` Config. Worker + enclave now share the same env var names — a single mock URL points both. Still TODO: document required mock-mode env in `docs/local-dev-guide.md`.
 - [ ] 1.3 Decide the store control channel: admin endpoint vs. shared fixture file (Open Question 3)
 
 ## 2. Mock TwitterAPI.io seam
