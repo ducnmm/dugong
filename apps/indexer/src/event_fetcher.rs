@@ -15,7 +15,10 @@ impl EventFetcher {
 
         Ok(Self {
             client,
-            package_id: config.dugong_package_id,
+            // Event types keep their ORIGINAL (defining) package id across
+            // upgrades, so the MoveEventModule filter must use the original id,
+            // not the latest move-call id. See Config::dugong_event_package_id.
+            package_id: config.dugong_event_package_id,
         })
     }
 

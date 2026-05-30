@@ -29,6 +29,13 @@ pub struct Config {
     // Sui
     pub sui_rpc_url: String,
     pub dugong_package_id: String,
+    /// Package id the indexer uses to filter on-chain events (`MoveEventModule`).
+    /// Across a package upgrade, event type identity stays at the ORIGINAL
+    /// (defining) package id, so this must be the original id — NOT the latest
+    /// `dugong_package_id` used for move calls. Defaults to `dugong_package_id`
+    /// (correct before any upgrade); set DUGONG_EVENT_PACKAGE_ID to the
+    /// original id after an upgrade.
+    pub dugong_event_package_id: String,
     /// Package id used for the `Enclave<DUGONG>` type-argument when calling
     /// enclave-gated entry functions (init_account, link_wallet, transfer_coin).
     /// Defaults to `dugong_package_id`; override via DUGONG_WITNESS_PACKAGE_ID
@@ -103,6 +110,11 @@ impl Config {
                 .unwrap_or_else(|_| "https://fullnode.testnet.sui.io:443".to_string()),
             dugong_package_id: env::var("DUGONG_PACKAGE_ID")
                 .context("DUGONG_PACKAGE_ID must be set")?,
+            // Event-filter package id (indexer): original/defining id, preserved
+            // across upgrades. Falls back to DUGONG_PACKAGE_ID when unset.
+            dugong_event_package_id: env::var("DUGONG_EVENT_PACKAGE_ID")
+                .or_else(|_| env::var("DUGONG_PACKAGE_ID"))
+                .context("DUGONG_EVENT_PACKAGE_ID or DUGONG_PACKAGE_ID must be set")?,
             dugong_witness_package_id: env::var("DUGONG_WITNESS_PACKAGE_ID")
                 .or_else(|_| env::var("DUGONG_PACKAGE_ID"))
                 .context("DUGONG_WITNESS_PACKAGE_ID or DUGONG_PACKAGE_ID must be set")?,

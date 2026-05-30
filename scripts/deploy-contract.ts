@@ -158,6 +158,12 @@ const PACKAGE_CONFIGS: Record<PackageName, PackageConfig> = {
         { envFile: INDEXER_ENV, envKey: "DUGONG_PACKAGE_ID" },
         { envFile: WEB_ENV, envKey: "VITE_DUGONG_PACKAGE_ID" },
       ],
+      // Original (defining) package id — preserved across upgrades. The indexer
+      // filters events by their defining module (MoveEventModule), whose package
+      // stays at the original id, so it must NOT use the latest move-call id.
+      originalId: [
+        { envFile: INDEXER_ENV, envKey: "DUGONG_EVENT_PACKAGE_ID" },
+      ],
       dugongRegistryId: [
         { envFile: API_ENV, envKey: "DUGONG_REGISTRY_ID" },
         { envFile: INDEXER_ENV, envKey: "DUGONG_REGISTRY_ID" },
@@ -205,6 +211,26 @@ const PACKAGE_CONFIGS: Record<PackageName, PackageConfig> = {
     envSyncMap: {},
   },
 };
+
+// Every dugong move-call target the backend submits through Enoki gas
+// sponsorship (apps/core/src/clients/sui_transaction.rs). Each must be on the
+// Enoki sponsored-transaction allowlist for the deployed package id, or the
+// sponsor API rejects the tx as not allow-listed. Printed after a dugong deploy.
+const DUGONG_SPONSORED_TARGETS: string[] = [
+  "transfers::transfer_coin",
+  "dugong::transfer_coin_no_signature",
+  "dugong::init_account",
+  "account::init_account_no_signature",
+  "dugong::link_wallet",
+  "dugong::link_wallet_no_signature",
+  "markets::create_market",
+  "markets::place_bet",
+  "markets::resolve_market",
+  "markets::pay_winner",
+  "reward_campaigns::create_campaign",
+  "reward_campaigns::resolve_campaign",
+  "reward_campaigns::claim_reward",
+];
 
 // Deploy order when --package all is requested: enclave first because
 // seal-policy depends on it; dugong last.
@@ -390,6 +416,14 @@ function parseDeployOutput(
     if (match?.objectId) outputs[key] = match.objectId;
   }
 
+  // The UpgradeCap is created only on a fresh publish (an upgrade mutates the
+  // existing cap). Capture it so it can be recorded in Published.toml, enabling
+  // future in-place upgrades instead of state-orphaning fresh publishes.
+  const upgradeCap = changes.find(
+    (c) => c.type === "created" && c.objectType?.includes("::package::UpgradeCap")
+  );
+  if (upgradeCap?.objectId) outputs.upgradeCap = upgradeCap.objectId;
+
   return { version, outputs };
 }
 
@@ -484,6 +518,14 @@ function deployPackage(opts: {
       "--json",
     ];
   } else {
+    if (existing?.originalId) {
+      warn(
+        `Published.toml has original-id ${existing.originalId} but no upgrade-capability — ` +
+          `this will FRESH PUBLISH a NEW package (orphaning existing accounts/markets) ` +
+          `instead of upgrading in place. To upgrade, record the package's UpgradeCap id ` +
+          `as 'upgrade-capability' in ${cfg.publishedTomlPath}.`
+      );
+    }
     info("Fresh publish (no upgrade-capability found for this network)");
     suiArgs = [
       "client", "publish",
@@ -518,10 +560,19 @@ function deployPackage(opts: {
   }
 
   const packageId = outputs.packageId!;
+  // original-id is preserved across upgrades; on a fresh publish it equals the
+  // new package id. Expose it as a synced output (indexer event-filter id).
+  const originalId = existing?.originalId ?? packageId;
+  outputs.originalId = originalId;
+  // Prefer the existing recorded cap (an upgrade reuses the same cap object);
+  // on a fresh publish, fall back to the cap just parsed from the output.
+  const capToRecord = existing?.upgradeCap ?? outputs.upgradeCap;
   info(`Package ID:        ${packageId}`);
+  info(`Original ID:       ${originalId}`);
   for (const key of Object.keys(cfg.objectTypeMatch)) {
     info(`${key.padEnd(18)} ${outputs[key] ?? "(absent — preserved)"}`);
   }
+  info(`Upgrade cap:       ${capToRecord ?? "(none recorded — see warning above)"}`);
   info(`Version:           ${version}`);
 
   // 5. Update Published.toml.
@@ -532,9 +583,9 @@ function deployPackage(opts: {
   writePublishedToml(cfg.publishedTomlPath, network, {
     chainId: existing?.chainId ?? chainIds[network] ?? network,
     publishedAt: packageId,
-    originalId: existing?.originalId ?? packageId,
+    originalId,
     version,
-    upgradeCap: existing?.upgradeCap,
+    upgradeCap: capToRecord,
   });
 
   // 6. Sync IDs into every consuming service's .env, driven by this package's
@@ -553,6 +604,21 @@ function deployPackage(opts: {
   for (const [envFile, patches] of patchesByFile) {
     patchEnvFile(envFile, patches);
     patchedFiles.add(envFile);
+  }
+
+  // 7. Print the Enoki sponsored-transaction allowlist for the new package id.
+  //    Enoki is an external dashboard (outside .env), so a deploy can't sync it;
+  //    every move-call target below must be allow-listed or sponsored txs fail
+  //    with `invalid_transaction … not allow-listed`. Move calls always target
+  //    the LATEST package id (the one in DUGONG_PACKAGE_ID), so we prefix with
+  //    packageId, not originalId.
+  if (pkg === "dugong") {
+    info("");
+    info("Enoki: allow-list these move-call targets for the new package id:");
+    for (const target of DUGONG_SPONSORED_TARGETS) {
+      info(`  ${packageId}::${target}`);
+    }
+    info("(Enoki dashboard → sponsored transaction allowlist; see §8.3.)");
   }
 
   return patchedFiles;

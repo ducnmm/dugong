@@ -56,13 +56,34 @@ The script SHALL maintain a single declarative mapping from each deployed output
 - **WHEN** a mapped `.env` file does not exist on disk
 - **THEN** the script warns and skips that file without aborting the rest of the sync
 
+#### Scenario: Indexer event-filter id uses the original package id
+- **WHEN** a dugong deploy completes
+- **THEN** the script syncs the package's `original-id` (not the latest move-call id) into the indexer's `DUGONG_EVENT_PACKAGE_ID`
+- **AND** the indexer filters on-chain events by that id, because Move event-type identity stays at the original/defining package across upgrades
+
 ### Requirement: Update Published.toml after deploy
-The script SHALL update the `[published.<network>]` section of `contracts/move/dugong/Published.toml` with the new `published-at` package ID and incremented version while preserving the original ID, chain ID, and upgrade capability.
+The script SHALL update the `[published.<network>]` section of `contracts/move/dugong/Published.toml` with the new `published-at` package ID and incremented version while preserving the original ID, chain ID, and upgrade capability. On a fresh publish the script SHALL record the newly created `UpgradeCap` object id as `upgrade-capability` so later deploys upgrade in place rather than re-publishing.
 
 #### Scenario: Published.toml reflects latest deploy
 - **WHEN** a deploy succeeds
 - **THEN** the `[published.<network>]` section's `published-at` equals the new package ID
 - **AND** the `original-id` and `upgrade-capability` from the prior entry are preserved when present
+
+#### Scenario: Fresh publish records the UpgradeCap
+- **WHEN** a fresh publish completes and the Sui output contains a created `UpgradeCap`
+- **THEN** the script writes that object id as `upgrade-capability` in `Published.toml`
+
+#### Scenario: Warn when a republish would orphan state
+- **WHEN** `Published.toml` has an `original-id` for the network but no `upgrade-capability`
+- **THEN** the script warns that it will fresh-publish a new package (orphaning existing on-chain state) instead of upgrading in place
+
+### Requirement: Emit the Enoki sponsored-transaction allowlist
+After a successful dugong deploy the script SHALL print every move-call target the backend submits through Enoki gas sponsorship, prefixed with the new package id, so the operator can update the Enoki allowlist (an external dashboard the deploy cannot sync). Targets SHALL use the latest move-call package id.
+
+#### Scenario: Allowlist printed after dugong deploy
+- **WHEN** a dugong deploy completes successfully
+- **THEN** the script prints each `<packageId>::<module>::<function>` target (transfer, account, market, and reward-campaign entry functions)
+- **AND** notes that these must be added to the Enoki sponsored-transaction allowlist
 
 ### Requirement: Propagate synced vars to Railway
 The Railway push SHALL be opt-in via a `--railway` flag and OFF by default; local `.env` files are always patched regardless. When enabled, the script SHALL push to every Railway service backed by a patched env file, accounting for env files shared by multiple services (e.g. `apps/api/.env` feeds both `api` and `indexer`).
