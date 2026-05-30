@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
@@ -22,6 +22,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useLinkWallet } from '../hooks/useLinkWallet';
 import { useWalletCoins, type WalletCoin } from '../hooks/useWalletCoins';
 import {
+  ensureDugongAccount,
   getAccountBalance,
   getAccountByTwitterId,
   getExplorerUrl,
@@ -65,14 +66,13 @@ export const Dashboard: React.FC = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { tab, twitter_id: publicTwitterId } = useParams<{ tab?: string; twitter_id?: string }>();
-  const { user } = useAuth();
+  const { user, accessToken, login, logout } = useAuth();
   const currentAccount = useCurrentAccount();
 
   const isPublicDashboard = !!publicTwitterId;
   const activeTab: DashboardTab = tab === 'overview' ? 'overview' : 'activity';
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5;
+  const transactionsPageSize = 10;
 
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [depositType, setDepositType] = useState<ModalMode>('select');
@@ -95,6 +95,38 @@ export const Dashboard: React.FC = () => {
   const { linkWallet, isLinking, error: linkError } = useLinkWallet();
   const { data: walletCoins = [], isLoading: isLoadingWalletCoins } = useWalletCoins();
 
+  const shouldFetchOwnAccount = !isPublicDashboard && !!user?.twitterUserId;
+
+  const {
+    data: ownAccountData,
+    isLoading: isLoadingOwnAccount,
+    isFetched: hasFetchedOwnAccount,
+  } = useQuery({
+    queryKey: ['own-dugong-account', user?.twitterUserId],
+    queryFn: () => getAccountByTwitterId(user!.twitterUserId),
+    enabled: shouldFetchOwnAccount,
+    retry: 1,
+    staleTime: 60_000,
+  });
+
+  const ownAccount = ownAccountData?.account ?? null;
+  const hasConfirmedMissingOwnAccount =
+    shouldFetchOwnAccount && hasFetchedOwnAccount && !ownAccount;
+  const shouldEnsureOwnAccount = hasConfirmedMissingOwnAccount && !!accessToken;
+
+  const {
+    data: ensuredAccountData,
+    isLoading: isEnsuringOwnAccount,
+    isError: hasEnsureOwnAccountError,
+    error: ensureOwnAccountError,
+  } = useQuery({
+    queryKey: ['ensure-dugong-account', user?.twitterUserId],
+    queryFn: () => ensureDugongAccount(accessToken!),
+    enabled: shouldEnsureOwnAccount,
+    retry: 1,
+    staleTime: 60_000,
+  });
+
   const {
     data: publicAccountData,
     isLoading: isLoadingPublicAccount,
@@ -105,12 +137,35 @@ export const Dashboard: React.FC = () => {
     enabled: isPublicDashboard,
   });
 
+  useEffect(() => {
+    if (!ensuredAccountData?.dugongAccount) return;
+
+    login(
+      {
+        twitterUserId: ensuredAccountData.user.id,
+        twitterHandle: ensuredAccountData.user.username,
+        suiObjectId: ensuredAccountData.dugongAccount.sui_object_id,
+        linkedWalletAddress: ensuredAccountData.dugongAccount.owner_address ?? null,
+      },
+      ensuredAccountData.accessToken
+    );
+    queryClient.invalidateQueries({ queryKey: ['own-dugong-account', ensuredAccountData.user.id] });
+  }, [ensuredAccountData, login, queryClient]);
+
   const publicAccount = publicAccountData?.account ?? null;
-  const viewedTwitterHandle = isPublicDashboard ? publicAccount?.x_handle : user?.twitterHandle;
-  const suiObjectId = isPublicDashboard ? publicAccount?.sui_object_id : user?.suiObjectId;
+  const ensuredAccount = ensuredAccountData?.dugongAccount ?? null;
+  const currentOwnAccount = ensuredAccount ?? ownAccount;
+  const viewedTwitterHandle = isPublicDashboard
+    ? publicAccount?.x_handle
+    : currentOwnAccount?.x_handle ?? user?.twitterHandle;
+  const suiObjectId = isPublicDashboard
+    ? publicAccount?.sui_object_id
+    : hasConfirmedMissingOwnAccount && !ensuredAccount
+      ? null
+      : currentOwnAccount?.sui_object_id ?? user?.suiObjectId;
   const linkedWalletAddress = isPublicDashboard
     ? publicAccount?.owner_address ?? null
-    : user?.linkedWalletAddress ?? null;
+    : currentOwnAccount?.owner_address ?? user?.linkedWalletAddress ?? null;
   const isWalletLinked = !!linkedWalletAddress;
   const isWalletMatched =
     !isPublicDashboard &&
@@ -136,14 +191,23 @@ export const Dashboard: React.FC = () => {
     enabled: !!suiObjectId,
   });
 
-  const { data: transactionsData, isLoading: isLoadingTxns } =
-    useQuery<PaginatedTransactionsResponse>({
-      queryKey: ['dugong-transactions', suiObjectId, currentPage],
-      queryFn: () => getTransactionHistory(suiObjectId!, currentPage, itemsPerPage),
-      enabled: !!suiObjectId,
-    });
+  const {
+    data: transactionsData,
+    isLoading: isLoadingTxns,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery<PaginatedTransactionsResponse>({
+    queryKey: ['dugong-transactions', suiObjectId],
+    queryFn: ({ pageParam }) =>
+      getTransactionHistory(suiObjectId!, Number(pageParam), transactionsPageSize),
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) =>
+      lastPage.page < lastPage.total_pages ? lastPage.page + 1 : undefined,
+    enabled: !!suiObjectId,
+  });
 
-  const transactions = transactionsData?.data ?? [];
+  const transactions = transactionsData?.pages.flatMap((page) => page.data) ?? [];
 
   const copyToClipboard = async (text: string, field: string) => {
     if (copyResetTimeoutRef.current) {
@@ -156,6 +220,15 @@ export const Dashboard: React.FC = () => {
       setCopiedField(null);
       copyResetTimeoutRef.current = null;
     }, 3000);
+  };
+
+  const handleActivityScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 80;
+
+    if (isNearBottom && hasNextPage && !isFetchingNextPage) {
+      void fetchNextPage();
+    }
   };
 
   const resetDepositModal = () => {
@@ -264,6 +337,10 @@ export const Dashboard: React.FC = () => {
 
   const canMoveFunds = !isPublicDashboard && !!suiObjectId && !!currentAccount && !!isWalletMatched;
   const balances = balanceData?.balances ?? [];
+  const isCheckingOwnAccount =
+    !isPublicDashboard && shouldFetchOwnAccount && isLoadingOwnAccount && !user?.suiObjectId;
+  const isPreparingOwnAccount =
+    !isPublicDashboard && hasConfirmedMissingOwnAccount && isEnsuringOwnAccount;
   const primaryBalance =
     balances.find((token) => token.symbol.toUpperCase() === 'SUI') ?? balances[0] ?? null;
   const displayedBalance = {
@@ -362,6 +439,44 @@ export const Dashboard: React.FC = () => {
     );
   }
 
+  if (isPreparingOwnAccount) {
+    return (
+      <div className="neo-page flex min-h-screen items-center justify-center p-4 text-black">
+        <div className="neo-card-strong w-full max-w-md bg-white p-6 text-center">
+          <div className="mx-auto mb-5 h-14 w-14 animate-spin rounded-full border-4 border-black border-t-cyan-300 bg-white shadow-neo-md" />
+          <h2 className="mb-3 text-2xl font-black text-black">Initializing your Dugong account</h2>
+          <p className="text-sm font-bold text-gray-700">
+            @{user?.twitterHandle || 'account'} is being registered on-chain. This usually takes a few seconds.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isPublicDashboard && hasEnsureOwnAccountError) {
+    return (
+      <div className="neo-page flex min-h-screen items-center justify-center p-4 text-black">
+        <div className="neo-card-strong w-full max-w-md bg-red-200 p-6 text-center">
+          <h2 className="mb-3 text-2xl font-black text-black">Account setup failed</h2>
+          <p className="mb-5 break-words text-sm font-bold text-gray-800">
+            {ensureOwnAccountError instanceof Error
+              ? ensureOwnAccountError.message
+              : 'Unable to initialize your Dugong account.'}
+          </p>
+          <button
+            onClick={() => {
+              logout();
+              navigate('/', { replace: true });
+            }}
+            className="rounded-md border-2 border-black bg-white px-4 py-2 text-sm font-black text-black shadow-neo-sm transition-colors hover:bg-cyan-200"
+          >
+            Sign in again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="neo-page text-black">
       <main className="mx-auto flex h-full min-h-0 w-full items-center justify-center overflow-y-auto px-3 py-4 sm:px-4 sm:py-5">
@@ -385,7 +500,7 @@ export const Dashboard: React.FC = () => {
               }`}
             >
               <div className="flex min-h-[88px] min-w-0 flex-col justify-center pl-1 sm:pl-4 md:pl-7">
-                {isLoadingBalance ? (
+                {isLoadingBalance || isCheckingOwnAccount ? (
                   <p className="animate-pulse text-3xl font-black text-black">Loading...</p>
                 ) : (
                   <div className="flex min-w-0 items-center gap-4 sm:gap-8 md:gap-10">
@@ -533,7 +648,7 @@ export const Dashboard: React.FC = () => {
 
             {activeTab === 'activity' && (
               <div className="flex h-full min-h-0 flex-col justify-start">
-                {isLoadingTxns ? (
+                {isLoadingTxns || isCheckingOwnAccount ? (
                   <div className="text-center py-12">
                     <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-black border-t-transparent" />
                     <p className="font-bold text-black">Loading activities...</p>
@@ -544,15 +659,18 @@ export const Dashboard: React.FC = () => {
                   </div>
                 ) : (
                   <>
-                    <div className="-m-1 min-h-0 flex-1 space-y-3 overflow-y-auto p-1">
+                    <div
+                      onScroll={handleActivityScroll}
+                      className="-m-1 min-h-0 flex-1 space-y-2.5 overflow-y-auto p-1"
+                    >
                       {transactions.map((tx) => (
                         <button
                           key={tx.tx_digest}
                           onClick={() => navigate(`/tx/${encodeURIComponent(tx.tx_digest)}`, { state: { transaction: tx } })}
-                          className={`flex w-full flex-col gap-3 rounded-md border-2 border-black p-3 text-left shadow-neo-sm transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-md sm:flex-row sm:items-center sm:justify-between sm:p-4 ${getTxColor(tx.tx_type)}`}
+                          className={`flex min-h-[64px] w-full flex-col gap-2 rounded-md border-2 border-black p-2.5 text-left shadow-neo-sm transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-md sm:min-h-[68px] sm:flex-row sm:items-center sm:justify-between sm:p-3 ${getTxColor(tx.tx_type)}`}
                         >
                           <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border-2 border-black bg-white shadow-neo-sm">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border-2 border-black bg-white shadow-neo-sm">
                               {getTxIcon(tx.tx_type)}
                             </div>
                             <div className="min-w-0">
@@ -570,31 +688,12 @@ export const Dashboard: React.FC = () => {
                           </div>
                         </button>
                       ))}
-                    </div>
-
-                    {(transactionsData?.total ?? 0) > itemsPerPage && (
-                      <div className="mt-6 flex flex-col gap-3 border-t-2 border-black pt-4 sm:flex-row sm:items-center sm:justify-between">
-                        <p className="text-sm font-bold text-gray-700">
-                          Page {currentPage} of {transactionsData?.total_pages ?? 1}
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-                            disabled={currentPage === 1}
-                            className="flex-1 rounded-lg border-2 border-black bg-white px-4 py-2 text-sm font-black text-black shadow-neo-sm transition-colors hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
-                          >
-                            Previous
-                          </button>
-                          <button
-                            onClick={() => setCurrentPage((page) => page + 1)}
-                            disabled={currentPage >= (transactionsData?.total_pages ?? 1)}
-                            className="flex-1 rounded-lg border-2 border-black bg-white px-4 py-2 text-sm font-black text-black shadow-neo-sm transition-colors hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
-                          >
-                            Next
-                          </button>
+                      {isFetchingNextPage && (
+                        <div className="py-2 text-center text-sm font-black text-gray-700">
+                          Loading more...
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </>
                 )}
               </div>
@@ -937,7 +1036,7 @@ interface TokenOptionProps {
 
 const TokenOption: React.FC<TokenOptionProps> = ({ symbol, name, iconUrl, hasUnknownDecimals }) => (
   <div className="flex items-center gap-3 text-left">
-    <TokenIcon symbol={symbol} iconUrl={iconUrl || undefined} size="sm" />
+    <TokenIcon symbol={symbol} iconUrl={iconUrl || undefined} size="sm" framed={false} />
     <div>
       <div className="flex items-center gap-1.5">
         <p className="font-black text-black">{symbol}</p>

@@ -26,6 +26,12 @@ module dugong::core {
     const LINK_WALLET_INTENT: u8 = 1;
     const TRANSFER_COIN_INTENT: u8 = 2;
     const UPDATE_HANDLE_INTENT: u8 = 4;
+    const CREATE_PREDICTION_MARKET_INTENT: u8 = 5;
+    const PLACE_PREDICTION_BET_INTENT: u8 = 6;
+    const RESOLVE_PREDICTION_MARKET_INTENT: u8 = 7;
+    const CREATE_REWARD_CAMPAIGN_INTENT: u8 = 8;
+    const RESOLVE_REWARD_CAMPAIGN_INTENT: u8 = 9;
+    const CLAIM_INTENT: u8 = 10;
 
     // ====== Core Structs ======
 
@@ -81,6 +87,56 @@ module dugong::core {
         new_handle: vector<u8>,
     }
 
+    #[allow(unused_field)]
+    public struct CreatePredictionMarketPayload has copy, drop {
+        creator_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        question: vector<u8>,
+    }
+
+    #[allow(unused_field)]
+    public struct PlacePredictionBetPayload has copy, drop {
+        bettor_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        bet_tweet_id: vector<u8>,
+        choice: u8,
+        amount: u64,
+        coin_type: vector<u8>,
+    }
+
+    #[allow(unused_field)]
+    public struct ResolvePredictionMarketPayload has copy, drop {
+        creator_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        solve_tweet_id: vector<u8>,
+        outcome: u8,
+    }
+
+    #[allow(unused_field)]
+    public struct CreateRewardCampaignPayload has copy, drop {
+        creator_xid: vector<u8>,
+        campaign_tweet_id: vector<u8>,
+        campaign_type: u8,
+        target: vector<u8>,
+        reward_amount: u64,
+        max_winners: u64,
+        coin_type: vector<u8>,
+    }
+
+    #[allow(unused_field)]
+    public struct ResolveRewardCampaignPayload has copy, drop {
+        creator_xid: vector<u8>,
+        campaign_tweet_id: vector<u8>,
+        solve_tweet_id: vector<u8>,
+    }
+
+    #[allow(unused_field)]
+    public struct ClaimPayload has copy, drop {
+        claimant_xid: vector<u8>,
+        target_tweet_id: vector<u8>,
+        claim_tweet_id: vector<u8>,
+    }
+
     // ====== Init Function ======
 
     fun init(_otw: CORE, ctx: &mut TxContext) {
@@ -124,6 +180,12 @@ module dugong::core {
     public fun link_wallet_intent(): u8 { LINK_WALLET_INTENT }
     public fun transfer_coin_intent(): u8 { TRANSFER_COIN_INTENT }
     public fun update_handle_intent(): u8 { UPDATE_HANDLE_INTENT }
+    public fun create_prediction_market_intent(): u8 { CREATE_PREDICTION_MARKET_INTENT }
+    public fun place_prediction_bet_intent(): u8 { PLACE_PREDICTION_BET_INTENT }
+    public fun resolve_prediction_market_intent(): u8 { RESOLVE_PREDICTION_MARKET_INTENT }
+    public fun create_reward_campaign_intent(): u8 { CREATE_REWARD_CAMPAIGN_INTENT }
+    public fun resolve_reward_campaign_intent(): u8 { RESOLVE_REWARD_CAMPAIGN_INTENT }
+    public fun claim_intent(): u8 { CLAIM_INTENT }
 
     // ====== Public Functions for Registry Operations ======
 
@@ -246,6 +308,70 @@ module dugong::core {
         new_handle: vector<u8>,
     ): UpdateHandlePayload {
         UpdateHandlePayload { xid, new_handle }
+    }
+
+    public(package) fun new_create_prediction_market_payload(
+        creator_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        question: vector<u8>,
+    ): CreatePredictionMarketPayload {
+        CreatePredictionMarketPayload { creator_xid, market_tweet_id, question }
+    }
+
+    public(package) fun new_place_prediction_bet_payload(
+        bettor_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        bet_tweet_id: vector<u8>,
+        choice: u8,
+        amount: u64,
+        coin_type: vector<u8>,
+    ): PlacePredictionBetPayload {
+        PlacePredictionBetPayload { bettor_xid, market_tweet_id, bet_tweet_id, choice, amount, coin_type }
+    }
+
+    public(package) fun new_resolve_prediction_market_payload(
+        creator_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        solve_tweet_id: vector<u8>,
+        outcome: u8,
+    ): ResolvePredictionMarketPayload {
+        ResolvePredictionMarketPayload { creator_xid, market_tweet_id, solve_tweet_id, outcome }
+    }
+
+    public(package) fun new_create_reward_campaign_payload(
+        creator_xid: vector<u8>,
+        campaign_tweet_id: vector<u8>,
+        campaign_type: u8,
+        target: vector<u8>,
+        reward_amount: u64,
+        max_winners: u64,
+        coin_type: vector<u8>,
+    ): CreateRewardCampaignPayload {
+        CreateRewardCampaignPayload {
+            creator_xid,
+            campaign_tweet_id,
+            campaign_type,
+            target,
+            reward_amount,
+            max_winners,
+            coin_type,
+        }
+    }
+
+    public(package) fun new_resolve_reward_campaign_payload(
+        creator_xid: vector<u8>,
+        campaign_tweet_id: vector<u8>,
+        solve_tweet_id: vector<u8>,
+    ): ResolveRewardCampaignPayload {
+        ResolveRewardCampaignPayload { creator_xid, campaign_tweet_id, solve_tweet_id }
+    }
+
+    public(package) fun new_claim_payload(
+        claimant_xid: vector<u8>,
+        target_tweet_id: vector<u8>,
+        claim_tweet_id: vector<u8>,
+    ): ClaimPayload {
+        ClaimPayload { claimant_xid, target_tweet_id, claim_tweet_id }
     }
 
     // ====== Test-Only Functions ======

@@ -40,16 +40,6 @@ impl SuiTransactionBuilder {
         let enoki_client =
             EnokiClient::new(config.enoki_api_key.clone(), config.enoki_network.clone());
 
-        // Validate enclave object id early (must be the shared Enclave, not the config)
-        let _ = ObjectID::from_str(&config.enclave_object_id).with_context(|| {
-            "ENCLAVE_ID must be the enclave shared object id (output of register_enclave)"
-        })?;
-        if config.enclave_object_id == config.enclave_config_id {
-            return Err(anyhow!(
-                "ENCLAVE_ID matches ENCLAVE_CONFIG_ID; set ENCLAVE_ID to the Enclave shared object id from register_enclave"
-            ));
-        }
-
         // Parse backend signer private key
         // Support both formats:
         // 1. Sui private key format: suiprivkey1q... (bech32)
@@ -188,6 +178,255 @@ impl SuiTransactionBuilder {
         info!("Transaction executed successfully: {}", result.digest);
 
         Ok(result.digest)
+    }
+
+    pub async fn submit_create_prediction_market(
+        &self,
+        creator_xid: &str,
+        market_tweet_id: &str,
+        question: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<String> {
+        info!(
+            "Building prediction market create transaction: creator={}, tweet_id={}",
+            creator_xid, market_tweet_id
+        );
+
+        let creator_ref = self.get_account_ref_by_xid(creator_xid).await?;
+        let enclave_id = ObjectID::from_str(&self.config.enclave_object_id)
+            .context("Invalid ENCLAVE_ID (expected enclave shared object)")?;
+        let enclave_ref = self
+            .get_object_ref(enclave_id)
+            .await
+            .context("Failed to get enclave object ref")?;
+
+        let tx_data = self
+            .build_create_prediction_market_transaction(
+                creator_ref,
+                enclave_ref,
+                market_tweet_id,
+                question,
+                timestamp,
+                signature,
+            )
+            .await?;
+
+        self.execute_sponsored_transaction(tx_data, "prediction market create")
+            .await
+    }
+
+    pub async fn submit_prediction_bet(
+        &self,
+        market_object_id: &str,
+        bettor_xid: &str,
+        choice: u8,
+        amount: u64,
+        coin_type: &str,
+        bet_tweet_id: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<String> {
+        info!(
+            "Building prediction bet transaction: market={}, bettor={}, amount={}",
+            market_object_id, bettor_xid, amount
+        );
+
+        let market_id =
+            ObjectID::from_str(market_object_id).context("Invalid prediction market object id")?;
+        let market_ref = self.get_object_ref(market_id).await?;
+        let bettor_ref = self.get_account_ref_by_xid(bettor_xid).await?;
+        let enclave_id = ObjectID::from_str(&self.config.enclave_object_id)
+            .context("Invalid ENCLAVE_ID (expected enclave shared object)")?;
+        let enclave_ref = self.get_object_ref(enclave_id).await?;
+
+        let tx_data = self
+            .build_prediction_bet_transaction(
+                market_ref,
+                bettor_ref,
+                enclave_ref,
+                choice,
+                amount,
+                coin_type,
+                bet_tweet_id,
+                timestamp,
+                signature,
+            )
+            .await?;
+
+        self.execute_sponsored_transaction(tx_data, "prediction bet")
+            .await
+    }
+
+    pub async fn submit_resolve_prediction_market(
+        &self,
+        market_object_id: &str,
+        creator_xid: &str,
+        outcome: u8,
+        solve_tweet_id: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<String> {
+        info!(
+            "Building prediction market resolve transaction: market={}, creator={}",
+            market_object_id, creator_xid
+        );
+
+        let market_id =
+            ObjectID::from_str(market_object_id).context("Invalid prediction market object id")?;
+        let market_ref = self.get_object_ref(market_id).await?;
+        let creator_ref = self.get_account_ref_by_xid(creator_xid).await?;
+        let enclave_id = ObjectID::from_str(&self.config.enclave_object_id)
+            .context("Invalid ENCLAVE_ID (expected enclave shared object)")?;
+        let enclave_ref = self.get_object_ref(enclave_id).await?;
+
+        let tx_data = self
+            .build_resolve_prediction_market_transaction(
+                market_ref,
+                creator_ref,
+                enclave_ref,
+                outcome,
+                solve_tweet_id,
+                timestamp,
+                signature,
+            )
+            .await?;
+
+        self.execute_sponsored_transaction(tx_data, "prediction market resolve")
+            .await
+    }
+
+    pub async fn submit_claim_prediction_payout(
+        &self,
+        market_object_id: &str,
+        bettor_xid: &str,
+        coin_type: &str,
+        timestamp: u64,
+    ) -> Result<String> {
+        info!(
+            "Building prediction market claim transaction: market={}, bettor={}",
+            market_object_id, bettor_xid
+        );
+
+        let market_id =
+            ObjectID::from_str(market_object_id).context("Invalid prediction market object id")?;
+        let market_ref = self.get_object_ref(market_id).await?;
+        let bettor_ref = self.get_account_ref_by_xid(bettor_xid).await?;
+
+        let tx_data = self
+            .build_claim_prediction_payout_transaction(market_ref, bettor_ref, coin_type, timestamp)
+            .await?;
+
+        self.execute_sponsored_transaction(tx_data, "prediction market claim")
+            .await
+    }
+
+    pub async fn submit_create_reward_campaign(
+        &self,
+        creator_xid: &str,
+        campaign_tweet_id: &str,
+        campaign_type: u8,
+        target: &str,
+        reward_amount: u64,
+        max_winners: u64,
+        coin_type: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<String> {
+        info!(
+            "Building reward campaign create transaction: creator={}, tweet_id={}, winners={}",
+            creator_xid, campaign_tweet_id, max_winners
+        );
+
+        let creator_ref = self.get_account_ref_by_xid(creator_xid).await?;
+        let enclave_id = ObjectID::from_str(&self.config.enclave_object_id)
+            .context("Invalid ENCLAVE_ID (expected enclave shared object)")?;
+        let enclave_ref = self.get_object_ref(enclave_id).await?;
+
+        let tx_data = self
+            .build_create_reward_campaign_transaction(
+                creator_ref,
+                enclave_ref,
+                campaign_tweet_id,
+                campaign_type,
+                target,
+                reward_amount,
+                max_winners,
+                coin_type,
+                timestamp,
+                signature,
+            )
+            .await?;
+
+        self.execute_sponsored_transaction(tx_data, "reward campaign create")
+            .await
+    }
+
+    pub async fn submit_resolve_reward_campaign(
+        &self,
+        campaign_object_id: &str,
+        creator_xid: &str,
+        winner_xids: &[String],
+        coin_type: &str,
+        solve_tweet_id: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<String> {
+        info!(
+            "Building reward campaign resolve transaction: campaign={}, creator={}, winners={}",
+            campaign_object_id,
+            creator_xid,
+            winner_xids.len()
+        );
+
+        let campaign_id =
+            ObjectID::from_str(campaign_object_id).context("Invalid reward campaign object id")?;
+        let campaign_ref = self.get_object_ref(campaign_id).await?;
+        let creator_ref = self.get_account_ref_by_xid(creator_xid).await?;
+        let enclave_id = ObjectID::from_str(&self.config.enclave_object_id)
+            .context("Invalid ENCLAVE_ID (expected enclave shared object)")?;
+        let enclave_ref = self.get_object_ref(enclave_id).await?;
+
+        let tx_data = self
+            .build_resolve_reward_campaign_transaction(
+                campaign_ref,
+                creator_ref,
+                enclave_ref,
+                winner_xids,
+                coin_type,
+                solve_tweet_id,
+                timestamp,
+                signature,
+            )
+            .await?;
+
+        self.execute_sponsored_transaction(tx_data, "reward campaign resolve")
+            .await
+    }
+
+    pub async fn submit_claim_reward_campaign(
+        &self,
+        campaign_object_id: &str,
+        winner_xid: &str,
+        coin_type: &str,
+        timestamp: u64,
+    ) -> Result<String> {
+        info!(
+            "Building reward campaign claim transaction: campaign={}, winner={}",
+            campaign_object_id, winner_xid
+        );
+
+        let campaign_id =
+            ObjectID::from_str(campaign_object_id).context("Invalid reward campaign object id")?;
+        let campaign_ref = self.get_object_ref(campaign_id).await?;
+        let winner_ref = self.get_account_ref_by_xid(winner_xid).await?;
+
+        let tx_data = self
+            .build_claim_reward_campaign_transaction(campaign_ref, winner_ref, coin_type, timestamp)
+            .await?;
+
+        self.execute_sponsored_transaction(tx_data, "reward campaign claim")
+            .await
     }
 
     /// Initialize a new Dugong account with enclave signature
@@ -706,6 +945,12 @@ impl SuiTransactionBuilder {
         self.get_account_ref_by_xid(xid).await.is_ok()
     }
 
+    /// Get the shared DugongAccount object ID registered for an XID.
+    pub async fn get_account_object_id_by_xid(&self, xid: &str) -> Result<String> {
+        let account_ref = self.get_account_ref_by_xid(xid).await?;
+        Ok(account_ref.0.to_string())
+    }
+
     /// Extract the Table object's ID from the registry Move content
     fn extract_table_id(content: &SuiParsedData) -> Result<ObjectID> {
         let move_obj = match content {
@@ -773,7 +1018,7 @@ impl SuiTransactionBuilder {
     ///
     /// Note: Testnet addresses - update these for mainnet deployment
     fn expand_coin_type(coin_type: &str) -> String {
-        match coin_type.to_uppercase().as_str() {
+        let expanded = match coin_type.to_uppercase().as_str() {
             "SUI" => "0x2::sui::SUI".to_string(),
             "USDC" => {
                 "0xa1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC"
@@ -793,7 +1038,21 @@ impl SuiTransactionBuilder {
                     coin_type.to_string()
                 }
             }
+        };
+
+        Self::ensure_type_tag_address_prefix(&expanded)
+    }
+
+    fn ensure_type_tag_address_prefix(coin_type: &str) -> String {
+        let Some((address, rest)) = coin_type.split_once("::") else {
+            return coin_type.to_string();
+        };
+
+        if address.starts_with("0x") || !address.chars().all(|c| c.is_ascii_hexdigit()) {
+            return coin_type.to_string();
         }
+
+        format!("0x{}::{}", address, rest)
     }
 
     /// Convert coin type to canonical format expected by Move's type_name
@@ -944,6 +1203,507 @@ impl SuiTransactionBuilder {
         );
 
         Ok(tx_data)
+    }
+
+    async fn build_create_prediction_market_transaction(
+        &self,
+        creator: ObjectRef,
+        enclave: ObjectRef,
+        market_tweet_id: &str,
+        question: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<TransactionData> {
+        let mut ptb = ProgrammableTransactionBuilder::new();
+
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+
+        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_package_id);
+        let dugong_type_tag =
+            TypeTag::from_str(&dugong_type).context("Failed to parse DUGONG type")?;
+
+        let creator_arg = ptb.obj(ObjectArg::SharedObject {
+            id: creator.0,
+            initial_shared_version: creator.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let market_tweet_id_arg = ptb.pure(market_tweet_id.as_bytes().to_vec())?;
+        let question_arg = ptb.pure(question.as_bytes().to_vec())?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+        let signature_bytes = hex::decode(signature.trim_start_matches("0x"))
+            .context("Failed to decode enclave signature (hex)")?;
+        let signature_arg = ptb.pure(signature_bytes)?;
+        let enclave_arg = ptb.obj(ObjectArg::SharedObject {
+            id: enclave.0,
+            initial_shared_version: enclave.1,
+            mutability: SharedObjectMutability::Immutable,
+        })?;
+
+        ptb.command(Command::move_call(
+            package_id,
+            "prediction_markets".parse()?,
+            "create_market".parse()?,
+            vec![dugong_type_tag.into()],
+            vec![
+                creator_arg,
+                market_tweet_id_arg,
+                question_arg,
+                timestamp_arg,
+                signature_arg,
+                enclave_arg,
+            ],
+        ));
+
+        self.finish_transaction(ptb, 15_000_000).await
+    }
+
+    async fn build_prediction_bet_transaction(
+        &self,
+        market: ObjectRef,
+        bettor: ObjectRef,
+        enclave: ObjectRef,
+        choice: u8,
+        amount: u64,
+        coin_type: &str,
+        bet_tweet_id: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<TransactionData> {
+        let mut ptb = ProgrammableTransactionBuilder::new();
+
+        let full_coin_type = Self::expand_coin_type(coin_type);
+        let coin_type_tag = TypeTag::from_str(&full_coin_type).with_context(|| {
+            format!(
+                "Failed to parse coin type: {} (expanded from {})",
+                full_coin_type, coin_type
+            )
+        })?;
+
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_package_id);
+        let dugong_type_tag =
+            TypeTag::from_str(&dugong_type).context("Failed to parse DUGONG type")?;
+
+        let market_arg = ptb.obj(ObjectArg::SharedObject {
+            id: market.0,
+            initial_shared_version: market.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let bettor_arg = ptb.obj(ObjectArg::SharedObject {
+            id: bettor.0,
+            initial_shared_version: bettor.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let choice_arg = ptb.pure(choice)?;
+        let amount_arg = ptb.pure(amount)?;
+        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+        let coin_type_arg = ptb.pure(canonical_coin_type.as_bytes().to_vec())?;
+        let bet_tweet_id_arg = ptb.pure(bet_tweet_id.as_bytes().to_vec())?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+        let signature_bytes = hex::decode(signature.trim_start_matches("0x"))
+            .context("Failed to decode enclave signature (hex)")?;
+        let signature_arg = ptb.pure(signature_bytes)?;
+        let enclave_arg = ptb.obj(ObjectArg::SharedObject {
+            id: enclave.0,
+            initial_shared_version: enclave.1,
+            mutability: SharedObjectMutability::Immutable,
+        })?;
+
+        ptb.command(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package: package_id,
+            module: "prediction_markets".to_string(),
+            function: "place_bet".to_string(),
+            type_arguments: vec![coin_type_tag.into(), dugong_type_tag.into()],
+            arguments: vec![
+                market_arg,
+                bettor_arg,
+                choice_arg,
+                amount_arg,
+                coin_type_arg,
+                bet_tweet_id_arg,
+                timestamp_arg,
+                signature_arg,
+                enclave_arg,
+            ],
+        })));
+
+        self.finish_transaction(ptb, 15_000_000).await
+    }
+
+    async fn build_resolve_prediction_market_transaction(
+        &self,
+        market: ObjectRef,
+        creator: ObjectRef,
+        enclave: ObjectRef,
+        outcome: u8,
+        solve_tweet_id: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<TransactionData> {
+        let mut ptb = ProgrammableTransactionBuilder::new();
+
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_package_id);
+        let dugong_type_tag =
+            TypeTag::from_str(&dugong_type).context("Failed to parse DUGONG type")?;
+
+        let market_arg = ptb.obj(ObjectArg::SharedObject {
+            id: market.0,
+            initial_shared_version: market.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let creator_arg = ptb.obj(ObjectArg::SharedObject {
+            id: creator.0,
+            initial_shared_version: creator.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let outcome_arg = ptb.pure(outcome)?;
+        let solve_tweet_id_arg = ptb.pure(solve_tweet_id.as_bytes().to_vec())?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+        let signature_bytes = hex::decode(signature.trim_start_matches("0x"))
+            .context("Failed to decode enclave signature (hex)")?;
+        let signature_arg = ptb.pure(signature_bytes)?;
+        let enclave_arg = ptb.obj(ObjectArg::SharedObject {
+            id: enclave.0,
+            initial_shared_version: enclave.1,
+            mutability: SharedObjectMutability::Immutable,
+        })?;
+
+        ptb.command(Command::move_call(
+            package_id,
+            "prediction_markets".parse()?,
+            "resolve_market".parse()?,
+            vec![dugong_type_tag.into()],
+            vec![
+                market_arg,
+                creator_arg,
+                outcome_arg,
+                solve_tweet_id_arg,
+                timestamp_arg,
+                signature_arg,
+                enclave_arg,
+            ],
+        ));
+
+        self.finish_transaction(ptb, 20_000_000).await
+    }
+
+    async fn build_claim_prediction_payout_transaction(
+        &self,
+        market: ObjectRef,
+        bettor: ObjectRef,
+        coin_type: &str,
+        timestamp: u64,
+    ) -> Result<TransactionData> {
+        let mut ptb = ProgrammableTransactionBuilder::new();
+
+        let full_coin_type = Self::expand_coin_type(coin_type);
+        let coin_type_tag = TypeTag::from_str(&full_coin_type).with_context(|| {
+            format!(
+                "Failed to parse coin type: {} (expanded from {})",
+                full_coin_type, coin_type
+            )
+        })?;
+
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+
+        let market_arg = ptb.obj(ObjectArg::SharedObject {
+            id: market.0,
+            initial_shared_version: market.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let bettor_arg = ptb.obj(ObjectArg::SharedObject {
+            id: bettor.0,
+            initial_shared_version: bettor.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+        let coin_type_arg = ptb.pure(canonical_coin_type.as_bytes().to_vec())?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+
+        ptb.command(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package: package_id,
+            module: "prediction_markets".to_string(),
+            function: "claim_winnings".to_string(),
+            type_arguments: vec![coin_type_tag.into()],
+            arguments: vec![market_arg, bettor_arg, coin_type_arg, timestamp_arg],
+        })));
+
+        self.finish_transaction(ptb, 20_000_000).await
+    }
+
+    async fn build_create_reward_campaign_transaction(
+        &self,
+        creator: ObjectRef,
+        enclave: ObjectRef,
+        campaign_tweet_id: &str,
+        campaign_type: u8,
+        target: &str,
+        reward_amount: u64,
+        max_winners: u64,
+        coin_type: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<TransactionData> {
+        let mut ptb = ProgrammableTransactionBuilder::new();
+
+        let full_coin_type = Self::expand_coin_type(coin_type);
+        let coin_type_tag = TypeTag::from_str(&full_coin_type).with_context(|| {
+            format!(
+                "Failed to parse coin type: {} (expanded from {})",
+                full_coin_type, coin_type
+            )
+        })?;
+
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_package_id);
+        let dugong_type_tag =
+            TypeTag::from_str(&dugong_type).context("Failed to parse DUGONG type")?;
+
+        let creator_arg = ptb.obj(ObjectArg::SharedObject {
+            id: creator.0,
+            initial_shared_version: creator.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let campaign_tweet_id_arg = ptb.pure(campaign_tweet_id.as_bytes().to_vec())?;
+        let campaign_type_arg = ptb.pure(campaign_type)?;
+        let target_arg = ptb.pure(target.as_bytes().to_vec())?;
+        let reward_amount_arg = ptb.pure(reward_amount)?;
+        let max_winners_arg = ptb.pure(max_winners)?;
+        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+        let coin_type_arg = ptb.pure(canonical_coin_type.as_bytes().to_vec())?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+        let signature_bytes = hex::decode(signature.trim_start_matches("0x"))
+            .context("Failed to decode enclave signature (hex)")?;
+        let signature_arg = ptb.pure(signature_bytes)?;
+        let enclave_arg = ptb.obj(ObjectArg::SharedObject {
+            id: enclave.0,
+            initial_shared_version: enclave.1,
+            mutability: SharedObjectMutability::Immutable,
+        })?;
+
+        ptb.command(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package: package_id,
+            module: "reward_campaigns".to_string(),
+            function: "create_campaign".to_string(),
+            type_arguments: vec![coin_type_tag.into(), dugong_type_tag.into()],
+            arguments: vec![
+                creator_arg,
+                campaign_tweet_id_arg,
+                campaign_type_arg,
+                target_arg,
+                reward_amount_arg,
+                max_winners_arg,
+                coin_type_arg,
+                timestamp_arg,
+                signature_arg,
+                enclave_arg,
+            ],
+        })));
+
+        self.finish_transaction(ptb, 20_000_000).await
+    }
+
+    async fn build_resolve_reward_campaign_transaction(
+        &self,
+        campaign: ObjectRef,
+        creator: ObjectRef,
+        enclave: ObjectRef,
+        winner_xids: &[String],
+        coin_type: &str,
+        solve_tweet_id: &str,
+        timestamp: u64,
+        signature: &str,
+    ) -> Result<TransactionData> {
+        let mut ptb = ProgrammableTransactionBuilder::new();
+
+        let full_coin_type = Self::expand_coin_type(coin_type);
+        let coin_type_tag = TypeTag::from_str(&full_coin_type).with_context(|| {
+            format!(
+                "Failed to parse coin type: {} (expanded from {})",
+                full_coin_type, coin_type
+            )
+        })?;
+
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+        let dugong_type = format!("{}::core::DUGONG", self.config.dugong_package_id);
+        let dugong_type_tag =
+            TypeTag::from_str(&dugong_type).context("Failed to parse DUGONG type")?;
+
+        let campaign_arg = ptb.obj(ObjectArg::SharedObject {
+            id: campaign.0,
+            initial_shared_version: campaign.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let creator_arg = ptb.obj(ObjectArg::SharedObject {
+            id: creator.0,
+            initial_shared_version: creator.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let winner_xids_arg = ptb.pure(
+            winner_xids
+                .iter()
+                .map(|xid| xid.as_bytes().to_vec())
+                .collect::<Vec<Vec<u8>>>(),
+        )?;
+        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+        let coin_type_arg = ptb.pure(canonical_coin_type.as_bytes().to_vec())?;
+        let solve_tweet_id_arg = ptb.pure(solve_tweet_id.as_bytes().to_vec())?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+        let signature_bytes = hex::decode(signature.trim_start_matches("0x"))
+            .context("Failed to decode enclave signature (hex)")?;
+        let signature_arg = ptb.pure(signature_bytes)?;
+        let enclave_arg = ptb.obj(ObjectArg::SharedObject {
+            id: enclave.0,
+            initial_shared_version: enclave.1,
+            mutability: SharedObjectMutability::Immutable,
+        })?;
+
+        ptb.command(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package: package_id,
+            module: "reward_campaigns".to_string(),
+            function: "resolve_campaign".to_string(),
+            type_arguments: vec![coin_type_tag.clone().into(), dugong_type_tag.into()],
+            arguments: vec![
+                campaign_arg.clone(),
+                creator_arg,
+                winner_xids_arg,
+                coin_type_arg,
+                solve_tweet_id_arg,
+                timestamp_arg,
+                signature_arg,
+                enclave_arg,
+            ],
+        })));
+
+        self.finish_transaction(ptb, 25_000_000).await
+    }
+
+    async fn build_claim_reward_campaign_transaction(
+        &self,
+        campaign: ObjectRef,
+        winner: ObjectRef,
+        coin_type: &str,
+        timestamp: u64,
+    ) -> Result<TransactionData> {
+        let mut ptb = ProgrammableTransactionBuilder::new();
+
+        let full_coin_type = Self::expand_coin_type(coin_type);
+        let coin_type_tag = TypeTag::from_str(&full_coin_type).with_context(|| {
+            format!(
+                "Failed to parse coin type: {} (expanded from {})",
+                full_coin_type, coin_type
+            )
+        })?;
+
+        let package_id = ObjectID::from_str(&self.config.dugong_package_id)
+            .context("Invalid DUGONG_PACKAGE_ID")?;
+
+        let campaign_arg = ptb.obj(ObjectArg::SharedObject {
+            id: campaign.0,
+            initial_shared_version: campaign.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let winner_arg = ptb.obj(ObjectArg::SharedObject {
+            id: winner.0,
+            initial_shared_version: winner.1,
+            mutability: SharedObjectMutability::Mutable,
+        })?;
+        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+        let coin_type_arg = ptb.pure(canonical_coin_type.as_bytes().to_vec())?;
+        let timestamp_arg = ptb.pure(timestamp)?;
+
+        ptb.command(Command::MoveCall(Box::new(ProgrammableMoveCall {
+            package: package_id,
+            module: "reward_campaigns".to_string(),
+            function: "claim_reward".to_string(),
+            type_arguments: vec![coin_type_tag.into()],
+            arguments: vec![campaign_arg, winner_arg, coin_type_arg, timestamp_arg],
+        })));
+
+        self.finish_transaction(ptb, 20_000_000).await
+    }
+
+    async fn finish_transaction(
+        &self,
+        ptb: ProgrammableTransactionBuilder,
+        gas_budget: u64,
+    ) -> Result<TransactionData> {
+        let pt = ptb.finish();
+        let gas_price = self
+            .sui_client
+            .read_api()
+            .get_reference_gas_price()
+            .await
+            .context("Failed to get gas price")?;
+
+        Ok(TransactionData::new_programmable(
+            self.signer,
+            vec![],
+            pt,
+            gas_budget,
+            gas_price,
+        ))
+    }
+
+    async fn execute_sponsored_transaction(
+        &self,
+        tx_data: TransactionData,
+        label: &str,
+    ) -> Result<String> {
+        let tx_kind = tx_data.kind();
+        let tx_kind_bytes =
+            bcs::to_bytes(&tx_kind).context("Failed to serialize transaction kind")?;
+        let tx_kind_base64 = BASE64.encode(&tx_kind_bytes);
+
+        info!(
+            "{} transaction kind bytes length: {}",
+            label,
+            tx_kind_bytes.len()
+        );
+
+        let sponsored = self
+            .enoki_client
+            .create_sponsored_transaction(tx_kind_base64, self.signer.to_string(), Vec::new())
+            .await
+            .with_context(|| format!("Failed to create sponsored {} transaction", label))?;
+
+        let tx_bytes = BASE64
+            .decode(&sponsored.bytes)
+            .with_context(|| format!("Failed to decode sponsored {} transaction bytes", label))?;
+        let sponsored_tx_data: TransactionData = bcs::from_bytes(&tx_bytes).with_context(|| {
+            format!("Failed to deserialize sponsored {} transaction data", label)
+        })?;
+
+        let intent = Intent::sui_transaction();
+        let intent_msg = IntentMessage::new(intent, sponsored_tx_data.clone());
+        let intent_msg_bytes = bcs::to_bytes(&intent_msg)?;
+
+        let mut hasher = DefaultHash::default();
+        hasher.update(&intent_msg_bytes);
+        let digest = hasher.finalize().digest;
+
+        let sui_signature = self.keypair.sign(&digest);
+        let signature_base64 = BASE64.encode(sui_signature.as_ref());
+
+        let result = self
+            .enoki_client
+            .execute_sponsored_transaction(sponsored.digest.clone(), signature_base64)
+            .await
+            .with_context(|| format!("Failed to execute sponsored {} transaction", label))?;
+
+        info!(
+            "{} transaction executed successfully: {}",
+            label, result.digest
+        );
+
+        Ok(result.digest)
     }
 
     /// Build transfer_coin_no_signature transaction (DEPRECATED - for testing only)
@@ -1410,5 +2170,34 @@ impl SuiTransactionBuilder {
         );
 
         Ok(tx_data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SuiTransactionBuilder;
+
+    #[test]
+    fn expand_coin_type_accepts_canonical_without_0x() {
+        assert_eq!(
+            SuiTransactionBuilder::expand_coin_type(
+                "a1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC"
+            ),
+            "0xa1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC"
+        );
+    }
+
+    #[test]
+    fn canonical_coin_type_key_still_omits_0x() {
+        assert_eq!(
+            SuiTransactionBuilder::to_canonical_coin_type("USDC"),
+            "a1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC"
+        );
+        assert_eq!(
+            SuiTransactionBuilder::to_canonical_coin_type(
+                "a1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC"
+            ),
+            "a1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC"
+        );
     }
 }

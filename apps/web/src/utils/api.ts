@@ -57,6 +57,26 @@ export interface AccountDetailResponse {
   balances: TokenBalance[];
 }
 
+export interface XAuthUserResponse {
+  id: string;
+  username: string;
+  name: string;
+}
+
+export interface DugongAccountAuthResponse {
+  sui_object_id: string;
+  x_user_id: string;
+  x_handle: string;
+  owner_address?: string | null;
+}
+
+export interface EnsureDugongAccountResponse {
+  user: XAuthUserResponse;
+  accessToken: string;
+  dugongAccount: DugongAccountAuthResponse;
+  createdAccountTxDigest?: string;
+}
+
 // API Functions
 
 /**
@@ -89,6 +109,28 @@ export async function getAccountByTwitterId(twitterUserId: string): Promise<Acco
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
   }
+  return await response.json();
+}
+
+/**
+ * Ensure the authenticated X user has a Dugong account.
+ */
+export async function ensureDugongAccount(accessToken: string): Promise<EnsureDugongAccountResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/auth/twitter/ensure-account`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      access_token: accessToken,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+  }
+
   return await response.json();
 }
 

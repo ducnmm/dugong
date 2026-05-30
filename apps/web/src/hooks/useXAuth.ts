@@ -33,6 +33,7 @@ export interface XUser {
 export interface XAuthResult {
   user: XUser;
   accessToken: string;
+  createdAccountTxDigest?: string;
   dugongAccount?: {
     sui_object_id: string;
     x_user_id: string;

@@ -17,6 +17,12 @@ pub enum CommandType {
     CreateAccount,
     Transfer,
     UpdateHandle,
+    CreatePredictionMarket,
+    PlacePredictionBet,
+    ResolvePredictionMarket,
+    CreateRewardCampaign,
+    ResolveRewardCampaign,
+    Claim,
 }
 
 /// Common tweet metadata
@@ -43,6 +49,58 @@ pub struct TransferData {
     pub to_handle: String,
     pub amount: u64,
     pub coin_type: String,
+}
+
+/// Data for create_prediction_market command
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreatePredictionMarketData {
+    pub creator_xid: String,
+    pub creator_handle: String,
+    pub question: String,
+}
+
+/// Data for place_prediction_bet command
+#[derive(Debug, Clone, Deserialize)]
+pub struct PredictionBetData {
+    pub bettor_xid: String,
+    pub bettor_handle: String,
+    pub choice: String,
+    pub amount: u64,
+    pub coin_type: String,
+}
+
+/// Data for resolve_prediction_market command
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResolvePredictionMarketData {
+    pub resolver_xid: String,
+    pub resolver_handle: String,
+    pub outcome: String,
+}
+
+/// Data for create_reward_campaign command
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateRewardCampaignData {
+    pub creator_xid: String,
+    pub creator_handle: String,
+    pub campaign_type: String,
+    pub target: String,
+    pub reward_amount: u64,
+    pub max_winners: u64,
+    pub coin_type: String,
+}
+
+/// Data for resolve_reward_campaign command
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResolveRewardCampaignData {
+    pub resolver_xid: String,
+    pub resolver_handle: String,
+}
+
+/// Data for claim command
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClaimData {
+    pub claimant_xid: String,
+    pub claimant_handle: String,
 }
 
 /// Unified response from /process_tweet endpoint
@@ -134,17 +192,83 @@ impl EnclaveClient {
             .context("Failed to parse create account data from process_tweet response")
     }
 
+    /// Parse create prediction market data from ProcessTweetResponse
+    pub fn parse_create_prediction_market_data(
+        response: &ProcessTweetResponse,
+    ) -> Result<CreatePredictionMarketData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse create prediction market data from process_tweet response")
+    }
+
+    /// Parse prediction bet data from ProcessTweetResponse
+    pub fn parse_prediction_bet_data(response: &ProcessTweetResponse) -> Result<PredictionBetData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse prediction bet data from process_tweet response")
+    }
+
+    /// Parse resolve prediction market data from ProcessTweetResponse
+    pub fn parse_resolve_prediction_market_data(
+        response: &ProcessTweetResponse,
+    ) -> Result<ResolvePredictionMarketData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse resolve prediction market data from process_tweet response")
+    }
+
+    /// Parse create reward campaign data from ProcessTweetResponse
+    pub fn parse_create_reward_campaign_data(
+        response: &ProcessTweetResponse,
+    ) -> Result<CreateRewardCampaignData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse create reward campaign data from process_tweet response")
+    }
+
+    /// Parse resolve reward campaign data from ProcessTweetResponse
+    pub fn parse_resolve_reward_campaign_data(
+        response: &ProcessTweetResponse,
+    ) -> Result<ResolveRewardCampaignData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse resolve reward campaign data from process_tweet response")
+    }
+
+    /// Parse claim data from ProcessTweetResponse
+    pub fn parse_claim_data(response: &ProcessTweetResponse) -> Result<ClaimData> {
+        serde_json::from_value(response.data.clone())
+            .context("Failed to parse claim data from process_tweet response")
+    }
+
     // ========================================================================
     // Non-tweet methods (still needed for specific flows)
     // ========================================================================
 
     /// Sign init account by XID (for auto-creating recipient accounts)
     pub async fn sign_init_account(&self, xid: &str) -> Result<SignedIntent<InitAccountPayload>> {
+        self.sign_init_account_with_handle(xid, None).await
+    }
+
+    /// Sign init account by XID with a known X handle.
+    pub async fn sign_init_account_with_handle(
+        &self,
+        xid: &str,
+        handle: Option<&str>,
+    ) -> Result<SignedIntent<InitAccountPayload>> {
+        self.sign_init_account_with_handle_and_timestamp(xid, handle, None)
+            .await
+    }
+
+    /// Sign init account with an optional timestamp override.
+    pub async fn sign_init_account_with_handle_and_timestamp(
+        &self,
+        xid: &str,
+        handle: Option<&str>,
+        timestamp_ms: Option<u64>,
+    ) -> Result<SignedIntent<InitAccountPayload>> {
         self.post(
             enclave::PROCESS_INIT_ACCOUNT_ENDPOINT,
             &ProcessDataRequest {
                 payload: InitAccountRequest {
                     xid: xid.to_string(),
+                    handle: handle.map(|value| value.to_string()),
+                    timestamp_ms,
                 },
             },
             "process_init_account",
@@ -239,6 +363,10 @@ pub struct ProcessDataRequest<T> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InitAccountRequest {
     pub xid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp_ms: Option<u64>,
 }
 
 /// Secure link wallet request - verifies both Twitter token and wallet signature

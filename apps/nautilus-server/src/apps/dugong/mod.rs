@@ -103,6 +103,8 @@ pub struct InitAccountPayload {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InitAccountRequest {
     pub xid: String, // Twitter user ID
+    pub handle: Option<String>,
+    pub timestamp_ms: Option<u64>,
 }
 
 /// Link wallet payload that will be signed and sent to Sui blockchain
@@ -136,6 +138,62 @@ pub struct UpdateHandlePayload {
     pub new_handle: Vec<u8>, // New Twitter handle as bytes
 }
 
+/// Prediction market create payload. Must match core.move::CreatePredictionMarketPayload.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CreatePredictionMarketPayload {
+    pub creator_xid: Vec<u8>,
+    pub market_tweet_id: Vec<u8>,
+    pub question: Vec<u8>,
+}
+
+/// Prediction bet payload. Must match core.move::PlacePredictionBetPayload.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PlacePredictionBetPayload {
+    pub bettor_xid: Vec<u8>,
+    pub market_tweet_id: Vec<u8>,
+    pub bet_tweet_id: Vec<u8>,
+    pub choice: u8,
+    pub amount: u64,
+    pub coin_type: Vec<u8>,
+}
+
+/// Prediction market resolve payload. Must match core.move::ResolvePredictionMarketPayload.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResolvePredictionMarketPayload {
+    pub creator_xid: Vec<u8>,
+    pub market_tweet_id: Vec<u8>,
+    pub solve_tweet_id: Vec<u8>,
+    pub outcome: u8,
+}
+
+/// Reward campaign create payload. Must match core.move::CreateRewardCampaignPayload.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CreateRewardCampaignPayload {
+    pub creator_xid: Vec<u8>,
+    pub campaign_tweet_id: Vec<u8>,
+    pub campaign_type: u8,
+    pub target: Vec<u8>,
+    pub reward_amount: u64,
+    pub max_winners: u64,
+    pub coin_type: Vec<u8>,
+}
+
+/// Reward campaign resolve payload. Must match core.move::ResolveRewardCampaignPayload.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResolveRewardCampaignPayload {
+    pub creator_xid: Vec<u8>,
+    pub campaign_tweet_id: Vec<u8>,
+    pub solve_tweet_id: Vec<u8>,
+}
+
+/// Generic claim payload for tweet-author initiated prediction/reward claims.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClaimPayload {
+    pub claimant_xid: Vec<u8>,
+    pub target_tweet_id: Vec<u8>,
+    pub claim_tweet_id: Vec<u8>,
+}
+
 // ============================================================================
 // UNIFIED /process_tweet ENDPOINT - NEW SIMPLIFIED ARCHITECTURE
 // ============================================================================
@@ -147,6 +205,12 @@ pub enum CommandType {
     CreateAccount,
     Transfer,
     UpdateHandle,
+    CreatePredictionMarket,
+    PlacePredictionBet,
+    ResolvePredictionMarket,
+    CreateRewardCampaign,
+    ResolveRewardCampaign,
+    Claim,
 }
 
 /// Common tweet metadata included in all responses
@@ -175,6 +239,58 @@ pub struct TransferData {
     pub coin_type: String,
 }
 
+/// Data for create_prediction_market command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatePredictionMarketData {
+    pub creator_xid: String,
+    pub creator_handle: String,
+    pub question: String,
+}
+
+/// Data for place_prediction_bet command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PredictionBetData {
+    pub bettor_xid: String,
+    pub bettor_handle: String,
+    pub choice: String,
+    pub amount: u64,
+    pub coin_type: String,
+}
+
+/// Data for resolve_prediction_market command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvePredictionMarketData {
+    pub resolver_xid: String,
+    pub resolver_handle: String,
+    pub outcome: String,
+}
+
+/// Data for create_reward_campaign command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateRewardCampaignData {
+    pub creator_xid: String,
+    pub creator_handle: String,
+    pub campaign_type: String,
+    pub target: String,
+    pub reward_amount: u64,
+    pub max_winners: u64,
+    pub coin_type: String,
+}
+
+/// Data for resolve_reward_campaign command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveRewardCampaignData {
+    pub resolver_xid: String,
+    pub resolver_handle: String,
+}
+
+/// Data for claim command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimData {
+    pub claimant_xid: String,
+    pub claimant_handle: String,
+}
+
 /// Unified response for /process_tweet endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessTweetResponse {
@@ -192,6 +308,12 @@ pub struct ProcessTweetResponse {
 pub enum ProcessTweetData {
     CreateAccount(CreateAccountData),
     Transfer(TransferData),
+    CreatePredictionMarket(CreatePredictionMarketData),
+    PredictionBet(PredictionBetData),
+    ResolvePredictionMarket(ResolvePredictionMarketData),
+    CreateRewardCampaign(CreateRewardCampaignData),
+    ResolveRewardCampaign(ResolveRewardCampaignData),
+    Claim(ClaimData),
 }
 
 /// Error response for /process_tweet endpoint
@@ -215,6 +337,12 @@ pub struct ProcessTweetRequest {
 /// Supported commands:
 /// - Create Account: "@dugong create account" or "@dugong init"
 /// - Transfer: "@dugong send <amount> <coin> to @<receiver>"
+/// - Create Prediction Market: "@dugong create market <question>"
+/// - Place Prediction Bet: "@dugong bet <amount> <coin> with yes/no"
+/// - Resolve Prediction Market: "@dugong solve yes/no"
+/// - Create Reward Campaign: "@dugong reward top 3 replies to this tweet with 5 SUI each"
+/// - Resolve Reward Campaign: "@dugong solve!"
+/// - Claim: "@dugong claim"
 pub async fn process_tweet(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ProcessDataRequest<ProcessTweetRequest>>,
@@ -250,6 +378,62 @@ pub async fn process_tweet(
             process_transfer_command(&state, &tweet_data, &receiver_username, current_timestamp)
                 .await
         }
+        ParsedCommand::CreatePredictionMarket { question } => {
+            process_create_prediction_market_command(
+                &state,
+                &tweet_data,
+                &question,
+                current_timestamp,
+            )
+            .await
+        }
+        ParsedCommand::PlacePredictionBet {
+            amount,
+            coin_type,
+            choice,
+        } => {
+            process_prediction_bet_command(
+                &state,
+                &tweet_data,
+                &amount,
+                &coin_type,
+                &choice,
+                current_timestamp,
+            )
+            .await
+        }
+        ParsedCommand::ResolvePredictionMarket { outcome } => {
+            process_resolve_prediction_market_command(
+                &state,
+                &tweet_data,
+                &outcome,
+                current_timestamp,
+            )
+            .await
+        }
+        ParsedCommand::CreateRewardCampaign {
+            campaign_type,
+            target,
+            reward_amount,
+            max_winners,
+            coin_type,
+        } => {
+            process_create_reward_campaign_command(
+                &state,
+                &tweet_data,
+                campaign_type,
+                &target,
+                &reward_amount,
+                max_winners,
+                &coin_type,
+                current_timestamp,
+            )
+            .await
+        }
+        ParsedCommand::ResolveRewardCampaign => {
+            process_resolve_reward_campaign_command(&state, &tweet_data, current_timestamp).await
+        }
+        ParsedCommand::Claim => process_claim_command(&state, &tweet_data, current_timestamp).await,
     }
 }
 
@@ -259,6 +443,7 @@ struct TweetData {
     author_xid: String,
     author_handle: String,
     text: String,
+    in_reply_to_id: Option<String>,
     mentions: Vec<TweetMention>,
 }
 
@@ -271,7 +456,29 @@ struct TweetMention {
 #[derive(Debug)]
 enum ParsedCommand {
     CreateAccount,
-    Transfer { receiver_username: String },
+    Transfer {
+        receiver_username: String,
+    },
+    CreatePredictionMarket {
+        question: String,
+    },
+    PlacePredictionBet {
+        amount: String,
+        coin_type: String,
+        choice: String,
+    },
+    ResolvePredictionMarket {
+        outcome: String,
+    },
+    CreateRewardCampaign {
+        campaign_type: u8,
+        target: String,
+        reward_amount: String,
+        max_winners: u64,
+        coin_type: String,
+    },
+    ResolveRewardCampaign,
+    Claim,
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,6 +496,13 @@ struct TweeterTweetsResponse {
 struct TweeterTweet {
     id: String,
     text: String,
+    #[serde(
+        default,
+        rename = "inReplyToId",
+        alias = "inReplyToStatusId",
+        alias = "in_reply_to_status_id_str"
+    )]
+    in_reply_to_id: Option<String>,
     author: TweeterUser,
     #[serde(default)]
     entities: Option<TweeterTweetEntities>,
@@ -418,8 +632,39 @@ async fn fetch_tweet_data(api_key: &str, tweet_url: &str) -> Result<TweetData, E
         author_xid: tweet.author.id,
         author_handle: tweet.author.user_name,
         text: tweet.text,
+        in_reply_to_id: tweet.in_reply_to_id,
         mentions,
     })
+}
+
+fn normalize_tweet_command_text(tweet_text: &str) -> Result<String, EnclaveError> {
+    let leading_mentions_regex = Regex::new(r"^\s*((?:@\w+\s+)+)(.*)$")
+        .map_err(|_| EnclaveError::GenericError("Invalid leading mentions regex".to_string()))?;
+
+    let Some(caps) = leading_mentions_regex.captures(tweet_text) else {
+        return Ok(tweet_text.trim().to_string());
+    };
+
+    let mentions_text = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+    let rest = caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+
+    let mut mentions = Vec::<String>::new();
+    for mention in mentions_text.split_whitespace() {
+        if !mentions
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(mention))
+        {
+            mentions.push(mention.to_string());
+        }
+    }
+
+    let mentions = mentions.join(" ");
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        Ok(mentions)
+    } else {
+        Ok(format!("{} {}", mentions, rest))
+    }
 }
 
 /// Parse tweet text to determine command type
@@ -427,14 +672,153 @@ fn parse_tweet_command_type(
     tweet_text: &str,
     _author_xid: &str,
 ) -> Result<ParsedCommand, EnclaveError> {
+    let normalized_tweet_text = normalize_tweet_command_text(tweet_text)?;
+    let tweet_text = normalized_tweet_text.as_str();
+
     // Regex patterns for different commands
     // Create account: @dugong create [account] OR @dugong init [account]
-    let create_account_regex = Regex::new(r"(?i)@\w+\s+(create|init)(\s+account)?")
-        .map_err(|_| EnclaveError::GenericError("Invalid create account regex".to_string()))?;
+    let command_prefix = r"(?:@\w+\s+)+";
+
+    let create_account_regex = Regex::new(&format!(
+        r"(?i)^\s*{}(?:create(?:\s+account)?|init(?:\s+account)?)\s*$",
+        command_prefix
+    ))
+    .map_err(|_| EnclaveError::GenericError("Invalid create account regex".to_string()))?;
 
     // Transfer: @dugong send <amount> <coin> to @<receiver>
-    let transfer_regex = Regex::new(r"(?i)@\w+\s+send\s+(\d+(?:\.\d+)?)\s+(\w+)\s+to\s+@(\w+)")
-        .map_err(|_| EnclaveError::GenericError("Invalid transfer regex".to_string()))?;
+    let transfer_regex = Regex::new(&format!(
+        r"(?i){}send\s+(\d+(?:\.\d+)?)\s+(\w+)\s+to\s+@(\w+)",
+        command_prefix
+    ))
+    .map_err(|_| EnclaveError::GenericError("Invalid transfer regex".to_string()))?;
+
+    // Prediction market create:
+    // @dugong create market BTC > 100K before March
+    // @dugong created a survey that BTC will be more than 100K before March
+    let create_market_regex = Regex::new(&format!(
+        r"(?i){}(?:(?:create|created)\s+(?:a\s+)?)?(?:prediction\s+)?(?:market|survey)\s+(?:that\s+)?(.+?)\s*$",
+        command_prefix
+    ))
+    .map_err(|_| EnclaveError::GenericError("Invalid prediction market regex".to_string()))?;
+
+    // Reward campaign: @dugong reward top 3 replies to this tweet with 5 SUI each
+    let reward_top_replies_regex = Regex::new(&format!(
+        r"(?i){}reward\s+top\s+(\d+)\s+repl(?:y|ies)\s+to\s+this\s+tweet\s+with\s+(\d+(?:\.\d+)?)\s+(\w+)\s+each\s*$",
+        command_prefix
+    ))
+    .map_err(|_| EnclaveError::GenericError("Invalid top replies reward regex".to_string()))?;
+
+    // Reward campaign: @dugong reward 10 SUI to first 10 users who tweeted #SuiFest2025
+    let reward_first_hashtag_regex = Regex::new(&format!(
+        r"(?i){}reward\s+(\d+(?:\.\d+)?)\s+(\w+)\s+to\s+first\s+(\d+)\s+users?\s+who\s+tweeted\s+(#\w+)\s*$",
+        command_prefix
+    ))
+    .map_err(|_| EnclaveError::GenericError("Invalid first hashtag reward regex".to_string()))?;
+
+    // Prediction bet: @dugong bet 5 SUI with yes/no
+    let bet_regex = Regex::new(&format!(
+        r"(?i){}bets?\s+(\d+(?:\.\d+)?)\s+(\w+)\s+(?:with\s+)?(yes|no)\b",
+        command_prefix
+    ))
+    .map_err(|_| EnclaveError::GenericError("Invalid prediction bet regex".to_string()))?;
+
+    // Prediction resolve: @dugong solve yes/no
+    let resolve_regex = Regex::new(&format!(
+        r"(?i){}(?:solve|resolve)\s+(yes|no)!?\s*$",
+        command_prefix
+    ))
+    .map_err(|_| EnclaveError::GenericError("Invalid prediction resolve regex".to_string()))?;
+
+    // Campaign resolve: @dugong solve!
+    let resolve_campaign_regex =
+        Regex::new(&format!(r"(?i){}(?:solve|resolve)!?\s*$", command_prefix)).map_err(|_| {
+            EnclaveError::GenericError("Invalid campaign resolve regex".to_string())
+        })?;
+
+    // Claim prediction payout or reward entitlement: @dugong claim
+    let claim_regex = Regex::new(&format!(
+        r"(?i)^\s*{}claim(?:\s+(?:reward|payout|winnings))?!?\s*$",
+        command_prefix
+    ))
+    .map_err(|_| EnclaveError::GenericError("Invalid claim regex".to_string()))?;
+
+    if let Some(caps) = reward_top_replies_regex.captures(tweet_text) {
+        let max_winners = caps
+            .get(1)
+            .ok_or_else(|| EnclaveError::GenericError("Failed to extract max winners".to_string()))?
+            .as_str()
+            .parse::<u64>()
+            .map_err(|_| EnclaveError::GenericError("Invalid max winners".to_string()))?;
+        let reward_amount = caps.get(2).map(|m| m.as_str().to_string()).ok_or_else(|| {
+            EnclaveError::GenericError("Failed to extract reward amount".to_string())
+        })?;
+        let coin_type = caps
+            .get(3)
+            .map(|m| m.as_str().to_uppercase())
+            .ok_or_else(|| {
+                EnclaveError::GenericError("Failed to extract reward coin type".to_string())
+            })?;
+
+        info!(
+            "Detected CreateRewardCampaign top replies command: top {} {} {} each",
+            max_winners, reward_amount, coin_type
+        );
+        return Ok(ParsedCommand::CreateRewardCampaign {
+            campaign_type: 1,
+            target: "replies".to_string(),
+            reward_amount,
+            max_winners,
+            coin_type,
+        });
+    }
+
+    if let Some(caps) = reward_first_hashtag_regex.captures(tweet_text) {
+        let reward_amount = caps.get(1).map(|m| m.as_str().to_string()).ok_or_else(|| {
+            EnclaveError::GenericError("Failed to extract reward amount".to_string())
+        })?;
+        let coin_type = caps
+            .get(2)
+            .map(|m| m.as_str().to_uppercase())
+            .ok_or_else(|| {
+                EnclaveError::GenericError("Failed to extract reward coin type".to_string())
+            })?;
+        let max_winners = caps
+            .get(3)
+            .ok_or_else(|| EnclaveError::GenericError("Failed to extract max winners".to_string()))?
+            .as_str()
+            .parse::<u64>()
+            .map_err(|_| EnclaveError::GenericError("Invalid max winners".to_string()))?;
+        let target = caps.get(4).map(|m| m.as_str().to_string()).ok_or_else(|| {
+            EnclaveError::GenericError("Failed to extract hashtag target".to_string())
+        })?;
+
+        info!(
+            "Detected CreateRewardCampaign hashtag command: first {} {} {} for {}",
+            max_winners, reward_amount, coin_type, target
+        );
+        return Ok(ParsedCommand::CreateRewardCampaign {
+            campaign_type: 2,
+            target,
+            reward_amount,
+            max_winners,
+            coin_type,
+        });
+    }
+
+    // Check prediction market create before create account, otherwise
+    // "@dugong create market ..." would be treated as "@dugong create".
+    if let Some(caps) = create_market_regex.captures(tweet_text) {
+        let question = caps
+            .get(1)
+            .map(|m| m.as_str().trim().to_string())
+            .filter(|question| !question.is_empty())
+            .ok_or_else(|| {
+                EnclaveError::GenericError("Failed to extract market question".to_string())
+            })?;
+
+        info!("Detected CreatePredictionMarket command: {}", question);
+        return Ok(ParsedCommand::CreatePredictionMarket { question });
+    }
 
     // Check create account
     if create_account_regex.is_match(tweet_text) {
@@ -452,9 +836,59 @@ fn parse_tweet_command_type(
         return Ok(ParsedCommand::Transfer { receiver_username });
     }
 
+    if let Some(caps) = bet_regex.captures(tweet_text) {
+        let amount = caps.get(1).map(|m| m.as_str().to_string()).ok_or_else(|| {
+            EnclaveError::GenericError("Failed to extract bet amount".to_string())
+        })?;
+        let coin_type = caps
+            .get(2)
+            .map(|m| m.as_str().to_uppercase())
+            .ok_or_else(|| {
+                EnclaveError::GenericError("Failed to extract bet coin type".to_string())
+            })?;
+        let choice = caps
+            .get(3)
+            .map(|m| m.as_str().to_lowercase())
+            .ok_or_else(|| {
+                EnclaveError::GenericError("Failed to extract bet choice".to_string())
+            })?;
+
+        info!(
+            "Detected PlacePredictionBet command: {} {} {}",
+            amount, coin_type, choice
+        );
+        return Ok(ParsedCommand::PlacePredictionBet {
+            amount,
+            coin_type,
+            choice,
+        });
+    }
+
+    if let Some(caps) = resolve_regex.captures(tweet_text) {
+        let outcome = caps
+            .get(1)
+            .map(|m| m.as_str().to_lowercase())
+            .ok_or_else(|| {
+                EnclaveError::GenericError("Failed to extract market outcome".to_string())
+            })?;
+
+        info!("Detected ResolvePredictionMarket command: {}", outcome);
+        return Ok(ParsedCommand::ResolvePredictionMarket { outcome });
+    }
+
+    if resolve_campaign_regex.is_match(tweet_text) {
+        info!("Detected ResolveRewardCampaign command");
+        return Ok(ParsedCommand::ResolveRewardCampaign);
+    }
+
+    if claim_regex.is_match(tweet_text) {
+        info!("Detected Claim command");
+        return Ok(ParsedCommand::Claim);
+    }
+
     // No valid command found
     Err(EnclaveError::GenericError(
-        "Could not parse tweet command. Expected formats: '@dugong create account' or '@dugong send <amount> <coin> to @<user>'".to_string()
+        "Could not parse tweet command. Expected formats: '@dugong create account', '@dugong send <amount> <coin> to @<user>', '@dugong create market <question>', '@dugong bet <amount> <coin> with yes/no', '@dugong solve yes/no', '@dugong reward top 3 replies to this tweet with 5 SUI each', '@dugong reward 10 SUI to first 10 users who tweeted #tag', '@dugong solve!', or '@dugong claim'".to_string()
     ))
 }
 
@@ -503,6 +937,50 @@ async fn process_create_account_command(
     Ok(Json(response))
 }
 
+fn parse_amount_units(amount_str: &str, coin_type: &str) -> Result<(f64, u64), EnclaveError> {
+    let amount_float: f64 = amount_str
+        .parse()
+        .map_err(|_| EnclaveError::GenericError("Invalid amount format".to_string()))?;
+
+    if amount_float <= 0.0 {
+        return Err(EnclaveError::GenericError(
+            "Amount must be greater than zero".to_string(),
+        ));
+    }
+
+    let decimals = get_coin_decimals(coin_type);
+    let multiplier = 10_u64.pow(decimals);
+    let amount_units = (amount_float * multiplier as f64) as u64;
+
+    if amount_units == 0 {
+        return Err(EnclaveError::GenericError(
+            "Amount is too small for the selected coin".to_string(),
+        ));
+    }
+
+    Ok((amount_float, amount_units))
+}
+
+fn prediction_choice_to_contract_u8(choice: &str) -> Result<u8, EnclaveError> {
+    match choice.to_ascii_lowercase().as_str() {
+        "yes" => Ok(1),
+        "no" => Ok(2),
+        _ => Err(EnclaveError::GenericError(
+            "Prediction choice must be yes or no".to_string(),
+        )),
+    }
+}
+
+fn reward_campaign_type_to_string(campaign_type: u8) -> Result<&'static str, EnclaveError> {
+    match campaign_type {
+        1 => Ok("top_replies"),
+        2 => Ok("first_hashtag"),
+        _ => Err(EnclaveError::GenericError(
+            "Invalid reward campaign type".to_string(),
+        )),
+    }
+}
+
 /// Process transfer command
 async fn process_transfer_command(
     state: &Arc<AppState>,
@@ -524,10 +1002,6 @@ async fn process_transfer_command(
         .ok_or_else(|| EnclaveError::GenericError("Failed to extract amount".to_string()))?
         .as_str();
 
-    let amount_float: f64 = amount_str
-        .parse()
-        .map_err(|_| EnclaveError::GenericError("Invalid amount format".to_string()))?;
-
     // Parse coin type
     let coin_type = captures
         .get(2)
@@ -535,12 +1009,7 @@ async fn process_transfer_command(
         .as_str()
         .to_uppercase();
 
-    // Get decimals for this coin type
-    let decimals = get_coin_decimals(&coin_type);
-    let multiplier = 10_u64.pow(decimals);
-
-    // Convert amount to smallest unit based on coin decimals
-    let amount_units = (amount_float * multiplier as f64) as u64;
+    let (amount_float, amount_units) = parse_amount_units(amount_str, &coin_type)?;
 
     // Convert coin type to canonical format (matches Move type_name::get<T>())
     let canonical_coin_type = to_canonical_coin_type(&coin_type);
@@ -600,6 +1069,323 @@ async fn process_transfer_command(
     Ok(Json(response))
 }
 
+async fn process_create_prediction_market_command(
+    state: &Arc<AppState>,
+    tweet_data: &TweetData,
+    question: &str,
+    timestamp_ms: u64,
+) -> Result<Json<ProcessTweetResponse>, EnclaveError> {
+    let data = CreatePredictionMarketData {
+        creator_xid: tweet_data.author_xid.clone(),
+        creator_handle: tweet_data.author_handle.clone(),
+        question: question.trim().to_string(),
+    };
+
+    let payload = CreatePredictionMarketPayload {
+        creator_xid: tweet_data.author_xid.clone().into_bytes(),
+        market_tweet_id: tweet_data.tweet_id.clone().into_bytes(),
+        question: data.question.clone().into_bytes(),
+    };
+
+    let signed = to_signed_response(
+        &state.eph_kp,
+        payload,
+        timestamp_ms,
+        IntentScope::CreatePredictionMarket,
+    );
+
+    let response = ProcessTweetResponse {
+        command_type: CommandType::CreatePredictionMarket,
+        intent: 5,
+        timestamp_ms,
+        signature: signed.signature,
+        common: TweetCommon {
+            tweet_id: tweet_data.tweet_id.clone(),
+            author_xid: tweet_data.author_xid.clone(),
+            author_handle: tweet_data.author_handle.clone(),
+        },
+        data: ProcessTweetData::CreatePredictionMarket(data),
+    };
+
+    info!(
+        "Created ProcessTweetResponse for CreatePredictionMarket: tweet={}, creator=@{}",
+        tweet_data.tweet_id, tweet_data.author_handle
+    );
+
+    Ok(Json(response))
+}
+
+async fn process_prediction_bet_command(
+    state: &Arc<AppState>,
+    tweet_data: &TweetData,
+    amount: &str,
+    coin_type: &str,
+    choice: &str,
+    timestamp_ms: u64,
+) -> Result<Json<ProcessTweetResponse>, EnclaveError> {
+    let coin_type = coin_type.to_uppercase();
+    let (amount_float, amount_units) = parse_amount_units(amount, &coin_type)?;
+    let market_tweet_id = tweet_data.in_reply_to_id.clone().ok_or_else(|| {
+        EnclaveError::GenericError(
+            "Prediction market bets must reply to the market tweet".to_string(),
+        )
+    })?;
+    let canonical_coin_type = to_canonical_coin_type(&coin_type);
+    let choice_u8 = prediction_choice_to_contract_u8(choice)?;
+
+    let data = PredictionBetData {
+        bettor_xid: tweet_data.author_xid.clone(),
+        bettor_handle: tweet_data.author_handle.clone(),
+        choice: choice.to_lowercase(),
+        amount: amount_units,
+        coin_type: coin_type.clone(),
+    };
+
+    let signed = to_signed_response(
+        &state.eph_kp,
+        PlacePredictionBetPayload {
+            bettor_xid: tweet_data.author_xid.clone().into_bytes(),
+            market_tweet_id: market_tweet_id.into_bytes(),
+            bet_tweet_id: tweet_data.tweet_id.clone().into_bytes(),
+            choice: choice_u8,
+            amount: amount_units,
+            coin_type: canonical_coin_type.into_bytes(),
+        },
+        timestamp_ms,
+        IntentScope::PlacePredictionBet,
+    );
+
+    let response = ProcessTweetResponse {
+        command_type: CommandType::PlacePredictionBet,
+        intent: 6,
+        timestamp_ms,
+        signature: signed.signature,
+        common: TweetCommon {
+            tweet_id: tweet_data.tweet_id.clone(),
+            author_xid: tweet_data.author_xid.clone(),
+            author_handle: tweet_data.author_handle.clone(),
+        },
+        data: ProcessTweetData::PredictionBet(data),
+    };
+
+    info!(
+        "Created ProcessTweetResponse for PlacePredictionBet: {} {} {} by @{}",
+        amount_float, coin_type, choice, tweet_data.author_handle
+    );
+
+    Ok(Json(response))
+}
+
+async fn process_resolve_prediction_market_command(
+    state: &Arc<AppState>,
+    tweet_data: &TweetData,
+    outcome: &str,
+    timestamp_ms: u64,
+) -> Result<Json<ProcessTweetResponse>, EnclaveError> {
+    let market_tweet_id = tweet_data.in_reply_to_id.clone().ok_or_else(|| {
+        EnclaveError::GenericError(
+            "Prediction market resolution must reply to the market tweet".to_string(),
+        )
+    })?;
+    let outcome_u8 = prediction_choice_to_contract_u8(outcome)?;
+
+    let data = ResolvePredictionMarketData {
+        resolver_xid: tweet_data.author_xid.clone(),
+        resolver_handle: tweet_data.author_handle.clone(),
+        outcome: outcome.to_lowercase(),
+    };
+
+    let signed = to_signed_response(
+        &state.eph_kp,
+        ResolvePredictionMarketPayload {
+            creator_xid: tweet_data.author_xid.clone().into_bytes(),
+            market_tweet_id: market_tweet_id.into_bytes(),
+            solve_tweet_id: tweet_data.tweet_id.clone().into_bytes(),
+            outcome: outcome_u8,
+        },
+        timestamp_ms,
+        IntentScope::ResolvePredictionMarket,
+    );
+
+    let response = ProcessTweetResponse {
+        command_type: CommandType::ResolvePredictionMarket,
+        intent: 7,
+        timestamp_ms,
+        signature: signed.signature,
+        common: TweetCommon {
+            tweet_id: tweet_data.tweet_id.clone(),
+            author_xid: tweet_data.author_xid.clone(),
+            author_handle: tweet_data.author_handle.clone(),
+        },
+        data: ProcessTweetData::ResolvePredictionMarket(data),
+    };
+
+    info!(
+        "Created ProcessTweetResponse for ResolvePredictionMarket: outcome={} by @{}",
+        outcome, tweet_data.author_handle
+    );
+
+    Ok(Json(response))
+}
+
+async fn process_create_reward_campaign_command(
+    state: &Arc<AppState>,
+    tweet_data: &TweetData,
+    campaign_type: u8,
+    target: &str,
+    reward_amount: &str,
+    max_winners: u64,
+    coin_type: &str,
+    timestamp_ms: u64,
+) -> Result<Json<ProcessTweetResponse>, EnclaveError> {
+    if max_winners == 0 || max_winners > 10 {
+        return Err(EnclaveError::GenericError(
+            "Reward campaigns support 1 to 10 winners".to_string(),
+        ));
+    }
+
+    let coin_type = coin_type.to_uppercase();
+    let (_amount_float, reward_amount_units) = parse_amount_units(reward_amount, &coin_type)?;
+    let canonical_coin_type = to_canonical_coin_type(&coin_type);
+
+    let data = CreateRewardCampaignData {
+        creator_xid: tweet_data.author_xid.clone(),
+        creator_handle: tweet_data.author_handle.clone(),
+        campaign_type: reward_campaign_type_to_string(campaign_type)?.to_string(),
+        target: target.to_string(),
+        reward_amount: reward_amount_units,
+        max_winners,
+        coin_type: coin_type.clone(),
+    };
+
+    let signed = to_signed_response(
+        &state.eph_kp,
+        CreateRewardCampaignPayload {
+            creator_xid: tweet_data.author_xid.clone().into_bytes(),
+            campaign_tweet_id: tweet_data.tweet_id.clone().into_bytes(),
+            campaign_type,
+            target: target.as_bytes().to_vec(),
+            reward_amount: reward_amount_units,
+            max_winners,
+            coin_type: canonical_coin_type.into_bytes(),
+        },
+        timestamp_ms,
+        IntentScope::CreateRewardCampaign,
+    );
+
+    let response = ProcessTweetResponse {
+        command_type: CommandType::CreateRewardCampaign,
+        intent: 8,
+        timestamp_ms,
+        signature: signed.signature,
+        common: TweetCommon {
+            tweet_id: tweet_data.tweet_id.clone(),
+            author_xid: tweet_data.author_xid.clone(),
+            author_handle: tweet_data.author_handle.clone(),
+        },
+        data: ProcessTweetData::CreateRewardCampaign(data),
+    };
+
+    info!(
+        "Created ProcessTweetResponse for CreateRewardCampaign: tweet={}, creator=@{}",
+        tweet_data.tweet_id, tweet_data.author_handle
+    );
+
+    Ok(Json(response))
+}
+
+async fn process_resolve_reward_campaign_command(
+    state: &Arc<AppState>,
+    tweet_data: &TweetData,
+    timestamp_ms: u64,
+) -> Result<Json<ProcessTweetResponse>, EnclaveError> {
+    let campaign_tweet_id = tweet_data.in_reply_to_id.clone().ok_or_else(|| {
+        EnclaveError::GenericError(
+            "Reward campaign solve commands must reply to the campaign tweet".to_string(),
+        )
+    })?;
+
+    let signed = to_signed_response(
+        &state.eph_kp,
+        ResolveRewardCampaignPayload {
+            creator_xid: tweet_data.author_xid.clone().into_bytes(),
+            campaign_tweet_id: campaign_tweet_id.into_bytes(),
+            solve_tweet_id: tweet_data.tweet_id.clone().into_bytes(),
+        },
+        timestamp_ms,
+        IntentScope::ResolveRewardCampaign,
+    );
+
+    let response = ProcessTweetResponse {
+        command_type: CommandType::ResolveRewardCampaign,
+        intent: 9,
+        timestamp_ms,
+        signature: signed.signature,
+        common: TweetCommon {
+            tweet_id: tweet_data.tweet_id.clone(),
+            author_xid: tweet_data.author_xid.clone(),
+            author_handle: tweet_data.author_handle.clone(),
+        },
+        data: ProcessTweetData::ResolveRewardCampaign(ResolveRewardCampaignData {
+            resolver_xid: tweet_data.author_xid.clone(),
+            resolver_handle: tweet_data.author_handle.clone(),
+        }),
+    };
+
+    info!(
+        "Created ProcessTweetResponse for ResolveRewardCampaign by @{}",
+        tweet_data.author_handle
+    );
+
+    Ok(Json(response))
+}
+
+async fn process_claim_command(
+    state: &Arc<AppState>,
+    tweet_data: &TweetData,
+    timestamp_ms: u64,
+) -> Result<Json<ProcessTweetResponse>, EnclaveError> {
+    let target_tweet_id = tweet_data.in_reply_to_id.clone().ok_or_else(|| {
+        EnclaveError::GenericError(
+            "Claim commands must reply to the market or campaign tweet".to_string(),
+        )
+    })?;
+
+    let signed = to_signed_response(
+        &state.eph_kp,
+        ClaimPayload {
+            claimant_xid: tweet_data.author_xid.clone().into_bytes(),
+            target_tweet_id: target_tweet_id.into_bytes(),
+            claim_tweet_id: tweet_data.tweet_id.clone().into_bytes(),
+        },
+        timestamp_ms,
+        IntentScope::Claim,
+    );
+
+    let response = ProcessTweetResponse {
+        command_type: CommandType::Claim,
+        intent: 10,
+        timestamp_ms,
+        signature: signed.signature,
+        common: TweetCommon {
+            tweet_id: tweet_data.tweet_id.clone(),
+            author_xid: tweet_data.author_xid.clone(),
+            author_handle: tweet_data.author_handle.clone(),
+        },
+        data: ProcessTweetData::Claim(ClaimData {
+            claimant_xid: tweet_data.author_xid.clone(),
+            claimant_handle: tweet_data.author_handle.clone(),
+        }),
+    };
+
+    info!(
+        "Created ProcessTweetResponse for Claim by @{}",
+        tweet_data.author_handle
+    );
+
+    Ok(Json(response))
+}
+
 /// Initialize account endpoint
 /// Creates a signed InitAccountPayload for creating new Dugong accounts
 pub async fn process_init_account(
@@ -609,20 +1395,27 @@ pub async fn process_init_account(
     let xid = request.payload.xid.clone();
     info!("Initializing account for XID: {}", xid);
 
-    let current_timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| EnclaveError::GenericError(format!("Failed to get current timestamp: {}", e)))?
-        .as_millis() as u64;
+    let current_timestamp = match request.payload.timestamp_ms {
+        Some(timestamp_ms) => timestamp_ms,
+        None => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| {
+                EnclaveError::GenericError(format!("Failed to get current timestamp: {}", e))
+            })?
+            .as_millis() as u64,
+    };
 
-    // MOCK: Fetch Twitter handle by XID
-    // TODO: Uncomment when rate limit is resolved
-    /*
-    let handle = fetch_twitter_handle_by_xid(&state.api_key, &xid).await?;
-    */
-
-    // MOCK: Simulate handle
-    let handle = format!("user_{}", &xid[..std::cmp::min(xid.len(), 8)]);
-    info!("MOCK: Handle: @{}", handle);
+    let handle = request
+        .payload
+        .handle
+        .as_deref()
+        .map(|handle| handle.trim().trim_start_matches('@').to_string())
+        .filter(|handle| !handle.is_empty())
+        .unwrap_or_else(|| {
+            // TODO: Fetch Twitter handle by XID when rate limits allow it.
+            format!("user_{}", &xid[..std::cmp::min(xid.len(), 8)])
+        });
+    info!("Handle: @{}", handle);
 
     // Create payload
     let payload = InitAccountPayload {
@@ -1032,9 +1825,9 @@ mod test {
         let signature = Ed25519Signature::from_bytes(&sig_bytes).expect("Invalid signature");
 
         match public_key.verify(&signing_payload, &signature) {
-            Ok(_) => println!("✅ Signature VALID!"),
+            Ok(_) => println!("Signature VALID!"),
             Err(e) => {
-                println!("❌ Signature INVALID: {:?}", e);
+                println!("Signature INVALID: {:?}", e);
                 println!("This means enclave signed a DIFFERENT BCS");
             }
         }
@@ -1141,12 +1934,300 @@ mod test {
     }
 
     #[test]
+    fn test_parse_tweet_command_type_prediction_market_create() {
+        let test_cases = vec![
+            (
+                "@dugong create market BTC above 100K before March",
+                "BTC above 100K before March",
+            ),
+            (
+                "@dugong created a survey that BTC will be more than 100K USD before March",
+                "BTC will be more than 100K USD before March",
+            ),
+            (
+                "@Dugong prediction market SUI hits $10 this year",
+                "SUI hits $10 this year",
+            ),
+        ];
+
+        for (tweet, expected_question) in test_cases {
+            let result = parse_tweet_command_type(tweet, "123456789");
+            assert!(result.is_ok(), "Failed for tweet: {}", tweet);
+            match result.unwrap() {
+                ParsedCommand::CreatePredictionMarket { question } => {
+                    assert_eq!(question, expected_question);
+                }
+                other => panic!(
+                    "Expected CreatePredictionMarket, got {:?} for tweet: {}",
+                    other, tweet
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_tweet_command_type_prediction_bet() {
+        let test_cases = vec![
+            ("@dugong bet 5 SUI with yes", "5", "SUI", "yes"),
+            ("@dugong bets 0.25 USDC no", "0.25", "USDC", "no"),
+            ("@Dugong BET 10 sui WITH YES", "10", "SUI", "yes"),
+        ];
+
+        for (tweet, expected_amount, expected_coin, expected_choice) in test_cases {
+            let result = parse_tweet_command_type(tweet, "123456789");
+            assert!(result.is_ok(), "Failed for tweet: {}", tweet);
+            match result.unwrap() {
+                ParsedCommand::PlacePredictionBet {
+                    amount,
+                    coin_type,
+                    choice,
+                } => {
+                    assert_eq!(amount, expected_amount);
+                    assert_eq!(coin_type, expected_coin);
+                    assert_eq!(choice, expected_choice);
+                }
+                other => panic!(
+                    "Expected PlacePredictionBet, got {:?} for tweet: {}",
+                    other, tweet
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_tweet_command_type_prediction_resolve() {
+        let test_cases = vec![
+            ("@dugong solve yes", "yes"),
+            ("@dugong solve no!", "no"),
+            ("@Dugong RESOLVE YES", "yes"),
+        ];
+
+        for (tweet, expected_outcome) in test_cases {
+            let result = parse_tweet_command_type(tweet, "123456789");
+            assert!(result.is_ok(), "Failed for tweet: {}", tweet);
+            match result.unwrap() {
+                ParsedCommand::ResolvePredictionMarket { outcome } => {
+                    assert_eq!(outcome, expected_outcome);
+                }
+                other => panic!(
+                    "Expected ResolvePredictionMarket, got {:?} for tweet: {}",
+                    other, tweet
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_tweet_command_type_reward_campaign_top_replies() {
+        let test_cases = vec![
+            (
+                "@dugong reward top 3 replies to this tweet with 5 SUI each",
+                1,
+                "replies",
+                "5",
+                3,
+                "SUI",
+            ),
+            (
+                "@Dugong REWARD TOP 1 reply to this tweet WITH 0.25 usdc EACH",
+                1,
+                "replies",
+                "0.25",
+                1,
+                "USDC",
+            ),
+        ];
+
+        for (tweet, expected_type, expected_target, expected_amount, expected_max, expected_coin) in
+            test_cases
+        {
+            let result = parse_tweet_command_type(tweet, "123456789");
+            assert!(result.is_ok(), "Failed for tweet: {}", tweet);
+            match result.unwrap() {
+                ParsedCommand::CreateRewardCampaign {
+                    campaign_type,
+                    target,
+                    reward_amount,
+                    max_winners,
+                    coin_type,
+                } => {
+                    assert_eq!(campaign_type, expected_type);
+                    assert_eq!(target, expected_target);
+                    assert_eq!(reward_amount, expected_amount);
+                    assert_eq!(max_winners, expected_max);
+                    assert_eq!(coin_type, expected_coin);
+                }
+                other => panic!(
+                    "Expected CreateRewardCampaign, got {:?} for tweet: {}",
+                    other, tweet
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_tweet_command_type_reward_campaign_first_hashtag() {
+        let test_cases = vec![
+            (
+                "@dugong reward 10 SUI to first 10 users who tweeted #SuiFest2025",
+                2,
+                "#SuiFest2025",
+                "10",
+                10,
+                "SUI",
+            ),
+            (
+                "@Dugong reward 0.5 usdc to first 1 user who tweeted #builder",
+                2,
+                "#builder",
+                "0.5",
+                1,
+                "USDC",
+            ),
+        ];
+
+        for (tweet, expected_type, expected_target, expected_amount, expected_max, expected_coin) in
+            test_cases
+        {
+            let result = parse_tweet_command_type(tweet, "123456789");
+            assert!(result.is_ok(), "Failed for tweet: {}", tweet);
+            match result.unwrap() {
+                ParsedCommand::CreateRewardCampaign {
+                    campaign_type,
+                    target,
+                    reward_amount,
+                    max_winners,
+                    coin_type,
+                } => {
+                    assert_eq!(campaign_type, expected_type);
+                    assert_eq!(target, expected_target);
+                    assert_eq!(reward_amount, expected_amount);
+                    assert_eq!(max_winners, expected_max);
+                    assert_eq!(coin_type, expected_coin);
+                }
+                other => panic!(
+                    "Expected CreateRewardCampaign, got {:?} for tweet: {}",
+                    other, tweet
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_tweet_command_type_reward_campaign_resolve() {
+        let test_cases = vec!["@dugong solve!", "@dugong solve", "@Dugong RESOLVE!"];
+
+        for tweet in test_cases {
+            let result = parse_tweet_command_type(tweet, "123456789");
+            assert!(result.is_ok(), "Failed for tweet: {}", tweet);
+            match result.unwrap() {
+                ParsedCommand::ResolveRewardCampaign => {}
+                other => panic!(
+                    "Expected ResolveRewardCampaign, got {:?} for tweet: {}",
+                    other, tweet
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_tweet_command_type_claim() {
+        let test_cases = vec![
+            "@dugong claim",
+            "@dugong claim!",
+            "@DugongWallet @DugongWallet claim",
+            "@Dugong CLAIM reward",
+            "@dugong claim payout",
+            "@dugong claim winnings",
+        ];
+
+        for tweet in test_cases {
+            let result = parse_tweet_command_type(tweet, "123456789");
+            assert!(result.is_ok(), "Failed for tweet: {}", tweet);
+            match result.unwrap() {
+                ParsedCommand::Claim => {}
+                other => panic!("Expected Claim, got {:?} for tweet: {}", other, tweet),
+            }
+        }
+    }
+
+    #[test]
+    fn test_normalize_tweet_command_text_dedupes_leading_mentions() {
+        assert_eq!(
+            normalize_tweet_command_text("@DugongWallet @DugongWallet @DugongWallet claim")
+                .unwrap(),
+            "@DugongWallet claim"
+        );
+        assert_eq!(
+            normalize_tweet_command_text("@Alice @DugongWallet @Alice claim").unwrap(),
+            "@Alice @DugongWallet claim"
+        );
+        assert_eq!(
+            normalize_tweet_command_text("@DugongWallet send 1 SUI to @alice").unwrap(),
+            "@DugongWallet send 1 SUI to @alice"
+        );
+    }
+
+    #[test]
+    fn test_parse_tweet_command_type_dedupes_leading_mentions_for_all_commands() {
+        let test_cases = vec![
+            (
+                "@DugongWallet @DugongWallet create account",
+                "create_account",
+            ),
+            (
+                "@DugongWallet @DugongWallet send 1 SUI to @alice",
+                "transfer",
+            ),
+            (
+                "@DugongWallet @DugongWallet create market Will SUI win?",
+                "create_market",
+            ),
+            (
+                "@DugongWallet @DugongWallet bet 1 USDC with yes",
+                "prediction_bet",
+            ),
+            (
+                "@DugongWallet @DugongWallet solve yes",
+                "prediction_resolve",
+            ),
+            (
+                "@DugongWallet @DugongWallet reward top 1 reply to this tweet with 1 SUI each",
+                "reward_create",
+            ),
+            (
+                "@DugongWallet @DugongWallet reward 1 SUI to first 1 user who tweeted #dugong",
+                "reward_create",
+            ),
+            ("@DugongWallet @DugongWallet solve!", "reward_resolve"),
+            ("@DugongWallet @DugongWallet claim", "claim"),
+        ];
+
+        for (tweet, expected_kind) in test_cases {
+            let parsed = parse_tweet_command_type(tweet, "123456789")
+                .unwrap_or_else(|err| panic!("Failed for tweet {}: {}", tweet, err));
+            let kind = match parsed {
+                ParsedCommand::CreateAccount => "create_account",
+                ParsedCommand::Transfer { .. } => "transfer",
+                ParsedCommand::CreatePredictionMarket { .. } => "create_market",
+                ParsedCommand::PlacePredictionBet { .. } => "prediction_bet",
+                ParsedCommand::ResolvePredictionMarket { .. } => "prediction_resolve",
+                ParsedCommand::CreateRewardCampaign { .. } => "reward_create",
+                ParsedCommand::ResolveRewardCampaign => "reward_resolve",
+                ParsedCommand::Claim => "claim",
+            };
+            assert_eq!(kind, expected_kind, "wrong command for tweet: {}", tweet);
+        }
+    }
+
+    #[test]
     fn test_parse_tweet_command_type_invalid() {
         // Test invalid formats that should fail
         let test_cases = vec![
             "hello world",
             "@dugong",
             "@dugong invalid command",
+            "@dugong create something else",
             "send 100 SUI to @bob", // Missing @dugong
         ];
 
@@ -1166,6 +2247,30 @@ mod test {
         assert_eq!(
             serde_json::to_string(&CommandType::Transfer).unwrap(),
             r#""transfer""#
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandType::CreatePredictionMarket).unwrap(),
+            r#""create_prediction_market""#
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandType::PlacePredictionBet).unwrap(),
+            r#""place_prediction_bet""#
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandType::ResolvePredictionMarket).unwrap(),
+            r#""resolve_prediction_market""#
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandType::CreateRewardCampaign).unwrap(),
+            r#""create_reward_campaign""#
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandType::ResolveRewardCampaign).unwrap(),
+            r#""resolve_reward_campaign""#
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandType::Claim).unwrap(),
+            r#""claim""#
         );
     }
 

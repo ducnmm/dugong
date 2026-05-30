@@ -107,11 +107,11 @@ export const Home: React.FC = () => {
             className="relative z-20 w-full"
             aria-label="Search Dugong accounts"
           >
-            <div className="relative">
+            <div className="account-search-field relative">
               <label htmlFor="account-search" className="sr-only">
                 Search account
               </label>
-              <Search className="pointer-events-none absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-black" />
+              <Search className="account-search-icon pointer-events-none absolute left-5 top-1/2 z-10 h-5 w-5 text-black" />
               <input
                 id="account-search"
                 type="text"

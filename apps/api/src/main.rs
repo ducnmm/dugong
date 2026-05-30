@@ -35,8 +35,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Load config
     let config = Config::from_env()?;
-    // The processor worker posts a reply to every tweet it handles, so refuse
-    // to start without reply credentials instead of silently dropping replies.
+    // Reply credentials are required only when tweet replies are explicitly enabled.
     config.ensure_reply_capable()?;
     info!("Config loaded");
 
@@ -128,6 +127,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/auth/twitter/token",
             axum::routing::post(crate::api::exchange_twitter_token),
+        )
+        .route(
+            "/api/auth/twitter/ensure-account",
+            axum::routing::post(crate::api::ensure_dugong_account),
         )
         // Transaction Sponsorship (Enoki)
         .route(

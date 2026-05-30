@@ -82,7 +82,7 @@ export const Callback: React.FC = () => {
               Completing Sign In...
             </h2>
             <p className="font-bold text-gray-700">
-              Please wait while we verify your X account.
+              Please wait while we verify your X account and prepare your wallet.
             </p>
           </>
         )}

@@ -5,6 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::time::{sleep, Duration};
 
 use crate::clients::enclave::EnclaveClient;
 use crate::clients::enoki::EnokiClient;
@@ -12,6 +13,9 @@ use crate::clients::sui_transaction::SuiTransactionBuilder;
 use crate::clients::twitter::{TwitterClient, TwitterOAuth2Client, TwitterUserInfo};
 use crate::db::models::{AccountBalance, DugongAccount, Transfer, TransferType};
 use crate::webhook::handler::AppState;
+
+const AUTO_INIT_LOOKUP_ATTEMPTS: usize = 5;
+const AUTO_INIT_LOOKUP_DELAY_MS: u64 = 500;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AccountResponse {
@@ -667,6 +671,17 @@ pub struct DugongAccountInfo {
     pub owner_address: Option<String>,
 }
 
+impl From<DugongAccount> for DugongAccountInfo {
+    fn from(account: DugongAccount) -> Self {
+        Self {
+            sui_object_id: account.sui_object_id,
+            x_user_id: account.x_user_id,
+            x_handle: account.x_handle,
+            owner_address: account.owner_address,
+        }
+    }
+}
+
 /// Auth response after successful token exchange
 #[derive(Debug, Serialize)]
 pub struct AuthResponse {
@@ -675,6 +690,11 @@ pub struct AuthResponse {
     pub access_token: String,
     #[serde(rename = "dugongAccount")]
     pub dugong_account: Option<DugongAccountInfo>,
+    #[serde(
+        rename = "createdAccountTxDigest",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub created_account_tx_digest: Option<String>,
 }
 
 /// Error response for auth failures
@@ -683,12 +703,211 @@ pub struct AuthErrorResponse {
     pub error: String,
 }
 
+/// Ensure account request for already-authenticated dapp sessions.
+#[derive(Debug, Deserialize)]
+pub struct EnsureDugongAccountRequest {
+    pub access_token: String,
+}
+
+type AuthApiResult<T> = Result<T, (StatusCode, Json<AuthErrorResponse>)>;
+
+fn auth_error(
+    status: StatusCode,
+    error: impl Into<String>,
+) -> (StatusCode, Json<AuthErrorResponse>) {
+    (
+        status,
+        Json(AuthErrorResponse {
+            error: error.into(),
+        }),
+    )
+}
+
+async fn upsert_registered_account(
+    state: &Arc<AppState>,
+    tx_builder: &SuiTransactionBuilder,
+    x_user_id: &str,
+    x_handle: &str,
+) -> AuthApiResult<Option<DugongAccountInfo>> {
+    let sui_object_id = match tx_builder.get_account_object_id_by_xid(x_user_id).await {
+        Ok(sui_object_id) => sui_object_id,
+        Err(err) => {
+            tracing::debug!(
+                x_user_id = %x_user_id,
+                error = ?err,
+                "Dugong account is not registered on-chain yet"
+            );
+            return Ok(None);
+        }
+    };
+
+    let account =
+        DugongAccount::upsert_from_indexer(&state.db, x_user_id, x_handle, &sui_object_id)
+            .await
+            .map_err(|err| {
+                tracing::error!(
+                    x_user_id = %x_user_id,
+                    sui_object_id = %sui_object_id,
+                    "Failed to upsert auto-initialized Dugong account: {:?}",
+                    err
+                );
+                auth_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error")
+            })?;
+
+    Ok(Some(account.into()))
+}
+
+async fn wait_for_registered_account(
+    state: &Arc<AppState>,
+    tx_builder: &SuiTransactionBuilder,
+    x_user_id: &str,
+    x_handle: &str,
+) -> AuthApiResult<DugongAccountInfo> {
+    for attempt in 1..=AUTO_INIT_LOOKUP_ATTEMPTS {
+        if let Some(account) =
+            upsert_registered_account(state, tx_builder, x_user_id, x_handle).await?
+        {
+            return Ok(account);
+        }
+
+        if attempt < AUTO_INIT_LOOKUP_ATTEMPTS {
+            sleep(Duration::from_millis(AUTO_INIT_LOOKUP_DELAY_MS)).await;
+        }
+    }
+
+    Err(auth_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Dugong account was initialized but is not available yet. Please try signing in again.",
+    ))
+}
+
+async fn find_or_auto_init_dugong_account(
+    state: &Arc<AppState>,
+    user_info: &TwitterUserInfo,
+) -> AuthApiResult<(DugongAccountInfo, Option<String>)> {
+    if let Some(account) = DugongAccount::find_by_x_user_id(&state.db, &user_info.id)
+        .await
+        .map_err(|err| {
+            tracing::error!("Database error looking up account: {:?}", err);
+            auth_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error")
+        })?
+    {
+        tracing::info!(
+            x_user_id = %user_info.id,
+            "Found existing Dugong account"
+        );
+        return Ok((account.into(), None));
+    }
+
+    tracing::info!(
+        x_user_id = %user_info.id,
+        username = %user_info.username,
+        "No Dugong account found; auto-initializing account"
+    );
+
+    let tx_builder = SuiTransactionBuilder::new(state.config.clone())
+        .await
+        .map_err(|err| {
+            tracing::error!(
+                "Failed to create transaction builder for auto-init: {:?}",
+                err
+            );
+            auth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to initialize Dugong account: {}", err),
+            )
+        })?;
+
+    if let Some(account) =
+        upsert_registered_account(state, &tx_builder, &user_info.id, &user_info.username).await?
+    {
+        tracing::info!(
+            x_user_id = %user_info.id,
+            "Found on-chain Dugong account that was missing from the database"
+        );
+        return Ok((account, None));
+    }
+
+    let enclave_client = EnclaveClient::new(&state.config.enclave_url);
+    let signed = enclave_client
+        .sign_init_account_with_handle(&user_info.id, Some(&user_info.username))
+        .await
+        .map_err(|err| {
+            tracing::error!(
+                x_user_id = %user_info.id,
+                "Failed to sign account init with Nautilus: {:?}",
+                err
+            );
+            auth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to initialize Dugong account: {}", err),
+            )
+        })?;
+
+    let xid = String::from_utf8(signed.response.data.xid.clone()).map_err(|err| {
+        tracing::error!("Invalid xid encoding from Nautilus: {:?}", err);
+        auth_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to initialize Dugong account",
+        )
+    })?;
+    let handle = String::from_utf8(signed.response.data.handle.clone()).map_err(|err| {
+        tracing::error!("Invalid handle encoding from Nautilus: {:?}", err);
+        auth_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to initialize Dugong account",
+        )
+    })?;
+
+    let init_digest = match tx_builder
+        .init_account(
+            &xid,
+            &handle,
+            signed.response.timestamp_ms,
+            &signed.signature,
+        )
+        .await
+    {
+        Ok(digest) => digest,
+        Err(err) => {
+            tracing::warn!(
+                x_user_id = %user_info.id,
+                "Nautilus-signed auto-init account transaction failed; checking for existing on-chain account: {:?}",
+                err
+            );
+
+            if let Some(account) =
+                upsert_registered_account(state, &tx_builder, &user_info.id, &user_info.username)
+                    .await?
+            {
+                return Ok((account, None));
+            }
+
+            return Err(auth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to initialize Dugong account: {}", err),
+            ));
+        }
+    };
+
+    tracing::info!(
+        x_user_id = %user_info.id,
+        tx_digest = %init_digest,
+        "Nautilus-signed auto-init account transaction submitted"
+    );
+
+    let account =
+        wait_for_registered_account(state, &tx_builder, &user_info.id, &user_info.username).await?;
+
+    Ok((account, Some(init_digest)))
+}
+
 /// Exchange OAuth code for access token and get user info
 ///
 /// Flow:
 /// 1. Exchange code for access_token with Twitter OAuth 2.0 API
 /// 2. Get user info from Twitter
-/// 3. Look up existing Dugong account (if any)
+/// 3. Look up existing Dugong account, or auto-initialize one if missing
 /// 4. Return user info + dugong account
 pub async fn exchange_twitter_token(
     State(state): State<Arc<AppState>>,
@@ -732,42 +951,53 @@ pub async fn exchange_twitter_token(
         "User authenticated successfully"
     );
 
-    // 3. Look up existing Dugong account
-    let dugong_account = DugongAccount::find_by_x_user_id(&state.db, &user_info.id)
-        .await
-        .map_err(|err| {
-            tracing::error!("Database error looking up account: {:?}", err);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AuthErrorResponse {
-                    error: "Database error".to_string(),
-                }),
-            )
-        })?
-        .map(|account| DugongAccountInfo {
-            sui_object_id: account.sui_object_id,
-            x_user_id: account.x_user_id,
-            x_handle: account.x_handle,
-            owner_address: account.owner_address,
-        });
-
-    if dugong_account.is_some() {
-        tracing::info!(
-            x_user_id = %user_info.id,
-            "Found existing Dugong account"
-        );
-    } else {
-        tracing::info!(
-            x_user_id = %user_info.id,
-            "No Dugong account found - user needs to create one"
-        );
-    }
+    // 3. Look up existing Dugong account, or auto-init one for this X account.
+    let (dugong_account, created_account_tx_digest) =
+        find_or_auto_init_dugong_account(&state, &user_info).await?;
 
     // 4. Return auth response
     Ok(Json(AuthResponse {
         user: user_info,
         access_token: token_response.access_token,
-        dugong_account,
+        dugong_account: Some(dugong_account),
+        created_account_tx_digest,
+    }))
+}
+
+/// Verify an existing X access token and ensure the matching Dugong account exists.
+///
+/// This is used by the dapp on already-authenticated sessions, where OAuth callback
+/// does not run again but the account may still need to be initialized or re-synced.
+pub async fn ensure_dugong_account(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<EnsureDugongAccountRequest>,
+) -> Result<Json<AuthResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    let oauth2_client = TwitterOAuth2Client::new(&state.config);
+
+    let user_info = oauth2_client
+        .get_user_info(&request.access_token)
+        .await
+        .map_err(|err| {
+            tracing::error!(
+                "Failed to verify access token for account ensure: {:?}",
+                err
+            );
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(AuthErrorResponse {
+                    error: format!("Failed to verify access token: {}", err),
+                }),
+            )
+        })?;
+
+    let (dugong_account, created_account_tx_digest) =
+        find_or_auto_init_dugong_account(&state, &user_info).await?;
+
+    Ok(Json(AuthResponse {
+        user: user_info,
+        access_token: request.access_token,
+        dugong_account: Some(dugong_account),
+        created_account_tx_digest,
     }))
 }
 

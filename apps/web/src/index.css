@@ -317,6 +317,20 @@
     color: #52525b;
   }
 
+  .input-glass[type="number"],
+  .neo-input[type="number"] {
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+
+  .input-glass[type="number"]::-webkit-outer-spin-button,
+  .input-glass[type="number"]::-webkit-inner-spin-button,
+  .neo-input[type="number"]::-webkit-outer-spin-button,
+  .neo-input[type="number"]::-webkit-inner-spin-button {
+    margin: 0;
+    -webkit-appearance: none;
+  }
+
   .input-glass:focus,
   .neo-input:focus {
     outline: none;
@@ -343,6 +357,15 @@
     background: var(--neo-cyan);
     box-shadow: 7px 8px 0 var(--neo-black);
     transform: translate(-1px, -1px);
+  }
+
+  .account-search-icon {
+    transform: translateY(-50%);
+    transition: transform 180ms ease;
+  }
+
+  .account-search-field:focus-within .account-search-icon {
+    transform: translate(-1px, calc(-50% - 1px));
   }
 
   .account-search-input::placeholder {
