@@ -970,12 +970,20 @@ impl ProcessorWorker {
         let candidates = match campaign.campaign_type {
             1 => self
                 .twitter
-                .fetch_top_reply_candidates(&campaign.campaign_tweet_id, max_winners)
+                .fetch_top_reply_candidates(
+                    &campaign.campaign_tweet_id,
+                    &campaign.creator_xid,
+                    max_winners,
+                )
                 .await
                 .context("Failed to fetch top reply candidates")?,
             2 => self
                 .twitter
-                .fetch_first_hashtag_candidates(&campaign.target, max_winners)
+                .fetch_first_hashtag_candidates(
+                    &campaign.target,
+                    &campaign.creator_xid,
+                    max_winners,
+                )
                 .await
                 .context("Failed to fetch first hashtag candidates")?,
             other => {
