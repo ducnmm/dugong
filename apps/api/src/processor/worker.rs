@@ -1300,10 +1300,37 @@ impl ProcessorWorker {
         info!(
             tx_digest = %digest,
             to_xid = %to_xid,
-            "Recipient account auto-created successfully"
+            "Recipient account init submitted; waiting for the indexer to mirror it"
         );
 
-        Ok(())
+        // The `dugong_accounts` row is written by the indexer from the on-chain
+        // `AccountCreated` event, so it is NOT visible the instant `init_account`
+        // returns. Poll until the indexer mirrors it (bounded) so this function has
+        // "ensure account exists" semantics — otherwise a follow-on read by the
+        // caller (e.g. the claim payout fetching the claimant's account object)
+        // races the indexer and fails with "account missing after auto-create".
+        const POLL_INTERVAL: Duration = Duration::from_millis(1500);
+        const MAX_POLLS: u32 = 20; // ~30s — comfortably over the indexer poll interval
+        for attempt in 1..=MAX_POLLS {
+            if DugongAccount::find_by_x_user_id(&self.state.db, to_xid)
+                .await
+                .context("Failed to poll for auto-created account")?
+                .is_some()
+            {
+                info!(to_xid = %to_xid, attempt, "Auto-created account mirrored by indexer");
+                return Ok(());
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+
+        anyhow::bail!(
+            "Auto-created account for xid {} (init tx {}) was not mirrored by the \
+             indexer within {:?}; the init_account transaction landed but the indexer \
+             has not caught up (is it running?)",
+            to_xid,
+            digest,
+            POLL_INTERVAL * MAX_POLLS
+        )
     }
 }
 
