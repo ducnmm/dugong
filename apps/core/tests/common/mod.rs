@@ -25,6 +25,7 @@ pub fn test_config() -> Config {
 
         sui_rpc_url: "http://localhost".to_string(),
         dugong_package_id: "0x1".to_string(),
+        dugong_event_package_id: "0x1".to_string(),
         dugong_witness_package_id: "0x1".to_string(),
         dugong_registry_id: "0x2".to_string(),
         enclave_config_id: "0x3".to_string(),

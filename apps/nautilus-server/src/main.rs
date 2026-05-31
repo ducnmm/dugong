@@ -36,11 +36,16 @@ async fn main() -> Result<()> {
     #[cfg(feature = "seal-example")]
     let api_key = String::new();
 
+    // Base URLs default to production but are overridable via env so the enclave
+    // can be pointed at a local mock TwitterAPI.io (the e2e mock-seam harness
+    // re-fetches command tweets through this base; see extend-e2e-campaign-claim).
     let state = Arc::new(AppState {
         eph_kp,
         api_key,
-        twitterapi_io_base_url: nautilus_server::TWITTERAPI_IO_BASE_URL.to_string(),
-        twitter_api_base_url: nautilus_server::TWITTER_API_BASE_URL.to_string(),
+        twitterapi_io_base_url: std::env::var("TWITTERAPI_IO_BASE_URL")
+            .unwrap_or_else(|_| nautilus_server::TWITTERAPI_IO_BASE_URL.to_string()),
+        twitter_api_base_url: std::env::var("TWITTER_API_BASE_URL")
+            .unwrap_or_else(|_| nautilus_server::TWITTER_API_BASE_URL.to_string()),
     });
 
     // Spawn host-only init server if seal-example feature is enabled

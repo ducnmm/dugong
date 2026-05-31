@@ -29,6 +29,17 @@ pub struct Config {
     // Sui
     pub sui_rpc_url: String,
     pub dugong_package_id: String,
+    /// Defining package id(s) the indexer filters events on (`MoveEventModule`),
+    /// as a comma-separated list. An event type's identity is keyed by the
+    /// package version that DEFINED that struct: pre-existing event structs keep
+    /// the ORIGINAL (defining) id across upgrades, but event structs ADDED in an
+    /// upgrade carry the UPGRADED package's id. A single `MoveEventModule` filter
+    /// matches only one defining id, so to see every event you must list every
+    /// defining package id — the original id, plus each upgraded id that
+    /// introduced new events (e.g. reward-campaign events added in v2).
+    /// Defaults to `dugong_package_id` (correct before any upgrade). Use
+    /// `dugong_event_package_ids()` to read the parsed list.
+    pub dugong_event_package_id: String,
     /// Package id used for the `Enclave<DUGONG>` type-argument when calling
     /// enclave-gated entry functions (init_account, link_wallet, transfer_coin).
     /// Defaults to `dugong_package_id`; override via DUGONG_WITNESS_PACKAGE_ID
@@ -103,6 +114,11 @@ impl Config {
                 .unwrap_or_else(|_| "https://fullnode.testnet.sui.io:443".to_string()),
             dugong_package_id: env::var("DUGONG_PACKAGE_ID")
                 .context("DUGONG_PACKAGE_ID must be set")?,
+            // Event-filter package id (indexer): original/defining id, preserved
+            // across upgrades. Falls back to DUGONG_PACKAGE_ID when unset.
+            dugong_event_package_id: env::var("DUGONG_EVENT_PACKAGE_ID")
+                .or_else(|_| env::var("DUGONG_PACKAGE_ID"))
+                .context("DUGONG_EVENT_PACKAGE_ID or DUGONG_PACKAGE_ID must be set")?,
             dugong_witness_package_id: env::var("DUGONG_WITNESS_PACKAGE_ID")
                 .or_else(|_| env::var("DUGONG_PACKAGE_ID"))
                 .context("DUGONG_WITNESS_PACKAGE_ID or DUGONG_PACKAGE_ID must be set")?,
@@ -180,6 +196,18 @@ impl Config {
             anyhow::bail!("TWITTERAPI_IO_PROXY must be set to post reply tweets");
         }
         Ok(())
+    }
+
+    /// Parsed list of defining package ids the indexer watches for events.
+    /// Splits `dugong_event_package_id` on commas and trims; empties are dropped.
+    /// See the field doc for why multiple ids are needed after an upgrade that
+    /// introduces new event structs.
+    pub fn dugong_event_package_ids(&self) -> Vec<String> {
+        self.dugong_event_package_id
+            .split(',')
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect()
     }
 }
 

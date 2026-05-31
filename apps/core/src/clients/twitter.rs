@@ -12,6 +12,20 @@ use crate::config::Config;
 /// Max candidates fetched from TwitterAPI.io advanced search per campaign resolution.
 const MAX_CAMPAIGN_SEARCH_RESULTS: usize = 50;
 
+/// Attempts for campaign candidate search. TwitterAPI.io's advanced_search is flaky /
+/// eventually-consistent — a single call may omit freshly-posted replies, return only
+/// a partial set (e.g. just the campaign tweet + the creator's own reply), or return an
+/// empty body — and it can take a few minutes to FULLY converge (with sustained windows
+/// where different calls disagree). So we retry (with capped backoff) over a multi-minute
+/// window until an ELIGIBLE candidate appears before concluding the crowd is empty.
+const CAMPAIGN_SEARCH_ATTEMPTS: u64 = 12;
+
+/// Per-attempt backoff (seconds) for campaign candidate search: ramps up then caps, so
+/// the total retry window spans ~3 minutes (covers the observed search convergence lag).
+fn campaign_search_backoff_secs(attempt: u64) -> u64 {
+    (3 * attempt).min(25)
+}
+
 /// A candidate winner discovered for a reward campaign (a reply author or hashtag tweeter).
 #[derive(Debug, Clone)]
 pub struct RewardCampaignCandidate {
@@ -621,38 +635,122 @@ impl TwitterClient {
     }
 
     /// Fetch top reply authors to a campaign tweet (campaign_type = top replies).
+    ///
+    /// TwitterAPI.io's advanced_search is eventually-consistent and flaky: a given
+    /// call may return the conversation root but omit freshly-posted replies, or
+    /// return an empty body entirely — and the result set varies call to call. A
+    /// single bad response at resolve time would silently select zero winners and
+    /// refund a campaign that actually had replies. So retry until at least one
+    /// genuine reply appears (a tweet other than the campaign tweet itself), backing
+    /// off between attempts. The emptiness check is POST-filter: `[campaign tweet]`
+    /// alone is not an adequate result and triggers a retry. If every successful
+    /// response is reply-free we treat the crowd as genuinely empty; a persistent
+    /// transport error is fatal so resolve fails and the campaign stays open to retry.
     pub async fn fetch_top_reply_candidates(
         &self,
         campaign_tweet_id: &str,
+        creator_xid: &str,
         max_winners: usize,
     ) -> Result<Vec<RewardCampaignCandidate>> {
         let query = format!("conversation_id:{}", campaign_tweet_id);
-        let mut candidates = self
-            .search_campaign_candidates(&query, "Top", max_winners)
-            .await
-            .with_context(|| format!("Failed to search replies for {}", campaign_tweet_id))?;
+        let mut last_err: Option<anyhow::Error> = None;
 
-        candidates.retain(|candidate| candidate.tweet_id != campaign_tweet_id);
-        dedupe_candidates(candidates, max_winners)
+        for attempt in 1..=CAMPAIGN_SEARCH_ATTEMPTS {
+            // Over-fetch the raw page (up to MAX_CAMPAIGN_SEARCH_RESULTS), NOT
+            // max_winners: the campaign tweet and the creator's own replies rank
+            // highest under "Top" and must be filtered out below, so truncating the
+            // raw search to max_winners (e.g. 1) would discard the eligible repliers
+            // before we ever see them. dedupe_candidates applies the max_winners cap
+            // after filtering.
+            match self
+                .search_campaign_candidates_once(&query, "Top", MAX_CAMPAIGN_SEARCH_RESULTS)
+                .await
+            {
+                Ok(mut candidates) => {
+                    // Drop the campaign tweet itself AND the creator's own tweets (the
+                    // creator is never an eligible winner). The retry adequacy check is
+                    // on ELIGIBLE candidates: a flaky partial response carrying only the
+                    // campaign tweet + the creator's confirmation reply is NOT adequate
+                    // and must be retried — otherwise it would resolve with 0 winners
+                    // even though the crowd replied.
+                    candidates.retain(|candidate| {
+                        candidate.tweet_id != campaign_tweet_id
+                            && candidate.author_xid != creator_xid
+                    });
+                    if !candidates.is_empty() {
+                        return dedupe_candidates(candidates, max_winners);
+                    }
+                    warn!(
+                        attempt,
+                        campaign_tweet_id,
+                        "advanced_search returned no eligible reply candidates yet; retrying"
+                    );
+                }
+                Err(e) => {
+                    warn!(attempt, campaign_tweet_id, error = %e, "advanced_search failed; retrying");
+                    last_err = Some(e);
+                }
+            }
+            if attempt < CAMPAIGN_SEARCH_ATTEMPTS {
+                tokio::time::sleep(std::time::Duration::from_secs(campaign_search_backoff_secs(attempt))).await;
+            }
+        }
+
+        match last_err {
+            Some(e) => Err(e)
+                .with_context(|| format!("Failed to search replies for {}", campaign_tweet_id)),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Fetch the first users who tweeted a hashtag (campaign_type = first hashtag).
+    /// Retries on the same flaky/empty advanced_search behavior as the reply path.
     pub async fn fetch_first_hashtag_candidates(
         &self,
         hashtag: &str,
+        creator_xid: &str,
         max_winners: usize,
     ) -> Result<Vec<RewardCampaignCandidate>> {
         let query = hashtag.trim().to_string();
-        let mut candidates = self
-            .search_campaign_candidates(&query, "Latest", max_winners)
-            .await
-            .with_context(|| format!("Failed to search hashtag candidates for {}", hashtag))?;
+        let mut last_err: Option<anyhow::Error> = None;
 
-        candidates.sort_by_key(|candidate| candidate.created_at);
-        dedupe_candidates(candidates, max_winners)
+        for attempt in 1..=CAMPAIGN_SEARCH_ATTEMPTS {
+            // Over-fetch (see fetch_top_reply_candidates): pull the full result set so
+            // the creator's own hashtag tweets can be filtered out, then sort by
+            // created_at and cap to max_winners in dedupe_candidates — truncating the
+            // raw search to max_winners here would also break "first K" ordering.
+            match self
+                .search_campaign_candidates_once(&query, "Latest", MAX_CAMPAIGN_SEARCH_RESULTS)
+                .await
+            {
+                Ok(mut candidates) => {
+                    // Exclude the creator's own hashtag tweets — they can never win, so a
+                    // creator-only response is not an adequate result and must be retried.
+                    candidates.retain(|candidate| candidate.author_xid != creator_xid);
+                    if !candidates.is_empty() {
+                        candidates.sort_by_key(|candidate| candidate.created_at);
+                        return dedupe_candidates(candidates, max_winners);
+                    }
+                    warn!(attempt, hashtag = %query, "advanced_search returned no eligible hashtag candidates yet; retrying");
+                }
+                Err(e) => {
+                    warn!(attempt, hashtag = %query, error = %e, "advanced_search failed; retrying");
+                    last_err = Some(e);
+                }
+            }
+            if attempt < CAMPAIGN_SEARCH_ATTEMPTS {
+                tokio::time::sleep(std::time::Duration::from_secs(campaign_search_backoff_secs(attempt))).await;
+            }
+        }
+
+        match last_err {
+            Some(e) => Err(e)
+                .with_context(|| format!("Failed to search hashtag candidates for {}", query)),
+            None => Ok(Vec::new()),
+        }
     }
 
-    async fn search_campaign_candidates(
+    async fn search_campaign_candidates_once(
         &self,
         query: &str,
         query_type: &str,

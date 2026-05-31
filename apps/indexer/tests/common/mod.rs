@@ -41,6 +41,9 @@ pub fn test_config(sui_rpc_url: String, package_id: String) -> Config {
 
         sui_rpc_url,
         dugong_witness_package_id: package_id.clone(),
+        // The indexer filters events on dugong_event_package_id; mirror the
+        // caller-supplied id here so existing tests keep targeting it.
+        dugong_event_package_id: package_id.clone(),
         dugong_package_id: package_id,
         dugong_registry_id: "0x2".to_string(),
         enclave_config_id: "0x3".to_string(),
