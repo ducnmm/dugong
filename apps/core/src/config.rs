@@ -29,12 +29,16 @@ pub struct Config {
     // Sui
     pub sui_rpc_url: String,
     pub dugong_package_id: String,
-    /// Package id the indexer uses to filter on-chain events (`MoveEventModule`).
-    /// Across a package upgrade, event type identity stays at the ORIGINAL
-    /// (defining) package id, so this must be the original id — NOT the latest
-    /// `dugong_package_id` used for move calls. Defaults to `dugong_package_id`
-    /// (correct before any upgrade); set DUGONG_EVENT_PACKAGE_ID to the
-    /// original id after an upgrade.
+    /// Defining package id(s) the indexer filters events on (`MoveEventModule`),
+    /// as a comma-separated list. An event type's identity is keyed by the
+    /// package version that DEFINED that struct: pre-existing event structs keep
+    /// the ORIGINAL (defining) id across upgrades, but event structs ADDED in an
+    /// upgrade carry the UPGRADED package's id. A single `MoveEventModule` filter
+    /// matches only one defining id, so to see every event you must list every
+    /// defining package id — the original id, plus each upgraded id that
+    /// introduced new events (e.g. reward-campaign events added in v2).
+    /// Defaults to `dugong_package_id` (correct before any upgrade). Use
+    /// `dugong_event_package_ids()` to read the parsed list.
     pub dugong_event_package_id: String,
     /// Package id used for the `Enclave<DUGONG>` type-argument when calling
     /// enclave-gated entry functions (init_account, link_wallet, transfer_coin).
@@ -192,6 +196,18 @@ impl Config {
             anyhow::bail!("TWITTERAPI_IO_PROXY must be set to post reply tweets");
         }
         Ok(())
+    }
+
+    /// Parsed list of defining package ids the indexer watches for events.
+    /// Splits `dugong_event_package_id` on commas and trims; empties are dropped.
+    /// See the field doc for why multiple ids are needed after an upgrade that
+    /// introduces new event structs.
+    pub fn dugong_event_package_ids(&self) -> Vec<String> {
+        self.dugong_event_package_id
+            .split(',')
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect()
     }
 }
 
