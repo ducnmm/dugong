@@ -1,11 +1,16 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { useAuth } from './contexts/useAuth';
 import { CustomWalletProvider } from './contexts/CustomWalletContext';
 import { Home } from './pages/Home';
 import { Dashboard } from './pages/Dashboard';
-import { AccountView } from './pages/AccountView';
 import { Callback } from './pages/Callback';
+import { TransactionDetail } from './pages/TransactionDetail';
+
+function AccountDashboardRedirect() {
+  const { twitter_id } = useParams<{ twitter_id: string }>();
+  return <Navigate to={`/account/${twitter_id}/dashboard`} replace />;
+}
 
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -13,8 +18,8 @@ function AppRoutes() {
   // Wait for auth state to be loaded from localStorage before rendering routes
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      <div className="neo-page flex items-center justify-center">
+        <div className="h-16 w-16 animate-spin rounded-full border-4 border-black border-t-cyan-300 bg-white shadow-neo-md" />
       </div>
     );
   }
@@ -29,11 +34,22 @@ function AppRoutes() {
         <Route path="/callback" element={<Callback />} />
 
         {/* Public route - View any account by twitter_id */}
-        <Route path="/account/:twitter_id" element={<AccountView />} />
+        <Route path="/account/:twitter_id" element={<AccountDashboardRedirect />} />
+        <Route path="/account/:twitter_id/dashboard" element={<Dashboard />} />
+        <Route path="/account/:twitter_id/dashboard/:tab" element={<Dashboard />} />
+
+        {/* Public route - View transaction detail by digest */}
+        <Route path="/tx/:tx_id" element={<TransactionDetail />} />
 
         {/* Protected Routes - User's own dashboard */}
         <Route
           path="/dashboard"
+          element={
+            isAuthenticated ? <Navigate to="/dashboard/activity" replace /> : <Navigate to="/" replace />
+          }
+        />
+        <Route
+          path="/dashboard/:tab"
           element={
             isAuthenticated ? <Dashboard /> : <Navigate to="/" replace />
           }

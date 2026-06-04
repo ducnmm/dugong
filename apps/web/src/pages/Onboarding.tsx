@@ -46,19 +46,19 @@ export const Onboarding: React.FC = () => {
   }, [walletAddress, handleWalletLogin, isLoading, isWaitingForSignature]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-      <div className="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl max-w-md w-full">
+    <div className="neo-page flex min-h-screen items-center justify-center p-4">
+      <div className="glass-strong w-full max-w-md p-8">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
+          <h1 className="hero-font mb-2 text-6xl font-black leading-none text-black">
             Dugong
           </h1>
-          <p className="text-gray-600 dark:text-gray-300">
+          <p className="font-bold uppercase text-gray-700">
             X-enabled Sui Wallet
           </p>
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-200 rounded-lg text-sm">
+          <div className="mb-4 rounded-md border-2 border-black bg-red-200 p-3 text-sm font-bold text-black shadow-neo-sm">
             {error}
           </div>
         )}
@@ -74,12 +74,12 @@ export const Onboarding: React.FC = () => {
             ) : (
               <div className="text-center py-3">
                 {isWaitingForSignature && (
-                  <p className="text-sm text-blue-600 dark:text-blue-400">
+                  <p className="text-sm font-bold text-gray-700">
                     Please sign the message in your wallet...
                   </p>
                 )}
                 {isLoading && (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                  <p className="text-sm font-bold text-gray-600">
                     Logging in...
                   </p>
                 )}
@@ -88,7 +88,7 @@ export const Onboarding: React.FC = () => {
           </div>
         </div>
 
-        <p className="text-xs text-gray-500 dark:text-gray-400 text-center mt-6">
+        <p className="mt-6 text-center text-xs font-bold text-gray-600">
           By connecting, you agree to our Terms of Service and Privacy Policy
         </p>
       </div>

@@ -1,4 +1,3 @@
-/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -13,12 +12,5 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
-  },
-  test: {
-    globals: true,
-    environment: 'jsdom',
-    setupFiles: ['./src/test/setup.ts'],
-    // E2E specs live in e2e/ and are run by Playwright, not vitest.
-    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
   },
 })

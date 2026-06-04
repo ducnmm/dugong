@@ -13,11 +13,6 @@ dist-ssr
 *.local
 .env
 
-# Playwright
-/test-results/
-/playwright-report/
-/playwright/.cache/
-
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -31,7 +31,6 @@ export const COIN_TYPES = {
 
 // Default Values
 export const DEFAULT_DECIMALS = 9; // SUI decimals
-export const REFRESH_INTERVAL = 10000; // 10 seconds
 
 // Route Paths
 export const ROUTES = {
