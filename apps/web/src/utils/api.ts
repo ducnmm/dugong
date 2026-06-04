@@ -49,6 +49,32 @@ export interface AccountResponse {
   x_handle: string;
   sui_object_id: string;
   owner_address: string | null;
+  profile_image_url?: string | null;
+}
+
+export interface AccountDetailResponse {
+  account: AccountResponse;
+  balances: TokenBalance[];
+}
+
+export interface XAuthUserResponse {
+  id: string;
+  username: string;
+  name: string;
+}
+
+export interface DugongAccountAuthResponse {
+  sui_object_id: string;
+  x_user_id: string;
+  x_handle: string;
+  owner_address?: string | null;
+}
+
+export interface EnsureDugongAccountResponse {
+  user: XAuthUserResponse;
+  accessToken: string;
+  dugongAccount: DugongAccountAuthResponse;
+  createdAccountTxDigest?: string;
 }
 
 // API Functions
@@ -73,6 +99,42 @@ export async function getAccountByWallet(walletAddress: string): Promise<Account
 }
 
 /**
+ * Get account by X user ID
+ */
+export async function getAccountByTwitterId(twitterUserId: string): Promise<AccountDetailResponse | null> {
+  const response = await fetch(`${API_BASE_URL}/api/accounts/${encodeURIComponent(twitterUserId)}`);
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+  return await response.json();
+}
+
+/**
+ * Ensure the authenticated X user has a Dugong account.
+ */
+export async function ensureDugongAccount(accessToken: string): Promise<EnsureDugongAccountResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/auth/twitter/ensure-account`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      access_token: accessToken,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+  }
+
+  return await response.json();
+}
+
+/**
  * Get account balance by sui_object_id
  */
 export async function getAccountBalance(suiObjectId: string): Promise<BalanceResponse> {
@@ -94,6 +156,17 @@ export async function getTransactionHistory(
   const response = await fetch(
     `${API_BASE_URL}/api/account/${suiObjectId}/transactions?page=${page}&limit=${limit}`
   );
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+  return await response.json();
+}
+
+/**
+ * Get one transaction by digest
+ */
+export async function getTransactionByDigest(txDigest: string): Promise<TransactionResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/transaction/${encodeURIComponent(txDigest)}`);
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
   }

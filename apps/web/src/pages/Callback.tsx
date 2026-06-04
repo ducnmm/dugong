@@ -71,31 +71,31 @@ export const Callback: React.FC = () => {
   }, [searchParams, handleCallback, login, navigate]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
-      <div className="glass-strong rounded-2xl p-8 max-w-md w-full text-center">
+    <div className="neo-page flex min-h-screen items-center justify-center p-4">
+      <div className="glass-strong w-full max-w-md p-8 text-center">
         {status === 'processing' && (
           <>
-            <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-sui-500/20 flex items-center justify-center">
-              <Loader2 className="w-8 h-8 text-sui-400 animate-spin" />
+            <div className="neo-icon-tile mx-auto mb-6 h-16 w-16 bg-cyan-200">
+              <Loader2 className="h-8 w-8 animate-spin text-black" />
             </div>
-            <h2 className="text-xl font-semibold text-white mb-2">
+            <h2 className="hero-font mb-2 text-4xl font-black text-black">
               Completing Sign In...
             </h2>
-            <p className="text-gray-400">
-              Please wait while we verify your X account.
+            <p className="font-bold text-gray-700">
+              Please wait while we verify your X account and prepare your wallet.
             </p>
           </>
         )}
 
         {status === 'success' && (
           <>
-            <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-cyber-green/20 flex items-center justify-center">
-              <CheckCircle className="w-8 h-8 text-cyber-green" />
+            <div className="neo-icon-tile mx-auto mb-6 h-16 w-16 bg-lime-200">
+              <CheckCircle className="h-8 w-8 text-black" />
             </div>
-            <h2 className="text-xl font-semibold text-white mb-2">
+            <h2 className="hero-font mb-2 text-4xl font-black text-black">
               Successfully Signed In!
             </h2>
-            <p className="text-gray-400">
+            <p className="font-bold text-gray-700">
               Redirecting to dashboard...
             </p>
             <div className="mt-4 flex justify-center">
@@ -103,7 +103,7 @@ export const Callback: React.FC = () => {
                 {[0, 1, 2].map((i) => (
                   <div
                     key={i}
-                    className="w-2 h-2 rounded-full bg-cyber-green animate-pulse"
+                    className="h-2 w-2 animate-pulse rounded-full border-2 border-black bg-yellow-200"
                     style={{ animationDelay: `${i * 0.2}s` }}
                   />
                 ))}
@@ -114,13 +114,13 @@ export const Callback: React.FC = () => {
 
         {status === 'error' && (
           <>
-            <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-red-500/20 flex items-center justify-center">
-              <XCircle className="w-8 h-8 text-red-400" />
+            <div className="neo-icon-tile mx-auto mb-6 h-16 w-16 bg-red-200">
+              <XCircle className="h-8 w-8 text-black" />
             </div>
-            <h2 className="text-xl font-semibold text-white mb-2">
+            <h2 className="hero-font mb-2 text-4xl font-black text-black">
               Sign In Failed
             </h2>
-            <p className="text-red-400 mb-6">
+            <p className="mb-6 font-bold text-gray-700">
               {error || authError || 'An unknown error occurred'}
             </p>
             <button
