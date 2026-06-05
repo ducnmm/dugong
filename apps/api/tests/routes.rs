@@ -162,6 +162,89 @@ async fn exchange_twitter_token_returns_auth(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../core/migrations")]
+async fn ensure_account_returns_existing_account(pool: PgPool) {
+    let redis = redis_or_skip!();
+    DugongAccount::create(&pool, "555", "alice", "0xacct555")
+        .await
+        .expect("create");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/2/users/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "id": "555", "name": "Alice", "username": "alice" }
+        })))
+        .mount(&server)
+        .await;
+
+    let mut config = test_config();
+    config.twitter_api_base = server.uri();
+    let app = build_router(app_state(config, pool, redis));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/twitter/ensure-account")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "access_token": "tok123" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["user"]["id"], json!("555"));
+    assert_eq!(body["accessToken"], json!("tok123"));
+    assert_eq!(body["dugongAccount"]["sui_object_id"], json!("0xacct555"));
+    // The account already existed, so no init tx was submitted.
+    assert_eq!(body["createdAccountTxDigest"], json!(null));
+}
+
+#[sqlx::test(migrations = "../core/migrations")]
+async fn ensure_account_rejects_invalid_token(pool: PgPool) {
+    let redis = redis_or_skip!();
+    let server = MockServer::start().await;
+    // X rejects the token, so account assurance must not run.
+    Mock::given(method("GET"))
+        .and(path("/2/users/me"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "title": "Unauthorized",
+            "status": 401
+        })))
+        .mount(&server)
+        .await;
+
+    let mut config = test_config();
+    config.twitter_api_base = server.uri();
+    let app = build_router(app_state(config, pool.clone(), redis));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/twitter/ensure-account")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "access_token": "bad-token" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    // No account row should have been created for the (unverifiable) caller.
+    assert!(DugongAccount::find_by_x_user_id(&pool, "555")
+        .await
+        .expect("lookup")
+        .is_none());
+}
+
+#[sqlx::test(migrations = "../core/migrations")]
 async fn sponsor_transaction_returns_bytes_and_digest(pool: PgPool) {
     let redis = redis_or_skip!();
     let server = MockServer::start().await;
