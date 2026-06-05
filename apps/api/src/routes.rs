@@ -5,13 +5,14 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 
+use crate::webhook::handler::AppState;
 use dugong_core::clients::enclave::EnclaveClient;
 use dugong_core::clients::enoki::EnokiClient;
 use dugong_core::clients::sui_transaction::SuiTransactionBuilder;
 use dugong_core::clients::twitter::{TwitterOAuth2Client, TwitterUserInfo};
 use dugong_core::db::models::{AccountBalance, DugongAccount, Transfer, TransferType};
-use crate::webhook::handler::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AccountResponse {
@@ -603,6 +604,17 @@ pub struct DugongAccountInfo {
     pub owner_address: Option<String>,
 }
 
+impl From<DugongAccount> for DugongAccountInfo {
+    fn from(account: DugongAccount) -> Self {
+        Self {
+            sui_object_id: account.sui_object_id,
+            x_user_id: account.x_user_id,
+            x_handle: account.x_handle,
+            owner_address: account.owner_address,
+        }
+    }
+}
+
 /// Auth response after successful token exchange
 #[derive(Debug, Serialize)]
 pub struct AuthResponse {
@@ -611,6 +623,11 @@ pub struct AuthResponse {
     pub access_token: String,
     #[serde(rename = "dugongAccount")]
     pub dugong_account: Option<DugongAccountInfo>,
+    #[serde(
+        rename = "createdAccountTxDigest",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub created_account_tx_digest: Option<String>,
 }
 
 /// Error response for auth failures
@@ -681,12 +698,7 @@ pub async fn exchange_twitter_token(
                 }),
             )
         })?
-        .map(|account| DugongAccountInfo {
-            sui_object_id: account.sui_object_id,
-            x_user_id: account.x_user_id,
-            x_handle: account.x_handle,
-            owner_address: account.owner_address,
-        });
+        .map(DugongAccountInfo::from);
 
     if dugong_account.is_some() {
         tracing::info!(
@@ -705,6 +717,160 @@ pub async fn exchange_twitter_token(
         user: user_info,
         access_token: token_response.access_token,
         dugong_account,
+        created_account_tx_digest: None,
+    }))
+}
+
+/// Ensure-account request for already-authenticated dapp sessions.
+#[derive(Debug, Deserialize)]
+pub struct EnsureDugongAccountRequest {
+    pub access_token: String,
+}
+
+/// Find the Dugong account for `xid`, or auto-initialize one on-chain via the Nautilus enclave.
+///
+/// Idempotent: returns an existing account without submitting a transaction. When no account
+/// exists it signs an `init_account` intent in the enclave (whose response carries the canonical
+/// xid + handle), submits the transaction, then polls until the indexer mirrors the new
+/// `dugong_accounts` row — the on-chain `AccountCreated` event is not visible the instant
+/// `init_account` returns. Returns the account and, when one was created, the init tx digest.
+///
+/// Shared by the `/api/auth/twitter/ensure-account` handler and the tweet-triggered recipient
+/// auto-creation in the processor worker, so both paths create accounts the same way.
+pub(crate) async fn ensure_dugong_account_for_xid(
+    state: &Arc<AppState>,
+    enclave: &EnclaveClient,
+    xid: &str,
+) -> anyhow::Result<(DugongAccountInfo, Option<String>)> {
+    use anyhow::Context;
+
+    if let Some(account) = DugongAccount::find_by_x_user_id(&state.db, xid)
+        .await
+        .context("Failed to look up Dugong account")?
+    {
+        tracing::info!(xid = %xid, "Found existing Dugong account");
+        return Ok((account.into(), None));
+    }
+
+    tracing::info!(xid = %xid, "No Dugong account found; auto-initializing via Nautilus enclave");
+
+    let signed = enclave
+        .sign_init_account(xid)
+        .await
+        .context("Failed to sign init account")?;
+
+    let signed_xid =
+        String::from_utf8(signed.response.data.xid.clone()).context("Invalid xid encoding from enclave")?;
+    let handle = String::from_utf8(signed.response.data.handle.clone())
+        .context("Invalid handle encoding from enclave")?;
+
+    tracing::info!(
+        xid = %signed_xid,
+        handle = %handle,
+        timestamp = signed.response.timestamp_ms,
+        "Submitting auto-created account initialization to Sui with enclave signature"
+    );
+
+    let tx_builder = SuiTransactionBuilder::new(state.config.clone())
+        .await
+        .context("Failed to initialize Sui transaction builder")?;
+
+    let digest = tx_builder
+        .init_account(
+            &signed_xid,
+            &handle,
+            signed.response.timestamp_ms,
+            &signed.signature,
+        )
+        .await
+        .context("Failed to submit auto-created account init transaction")?;
+
+    tracing::info!(
+        tx_digest = %digest,
+        xid = %xid,
+        "Account init submitted; waiting for the indexer to mirror it"
+    );
+
+    // The `dugong_accounts` row is written by the indexer from the on-chain `AccountCreated`
+    // event, so it is NOT visible the instant `init_account` returns. Poll until the indexer
+    // mirrors it (bounded) so this function has "ensure account exists" semantics.
+    const POLL_INTERVAL: Duration = Duration::from_millis(1500);
+    const MAX_POLLS: u32 = 20; // ~30s — comfortably over the indexer poll interval
+    for attempt in 1..=MAX_POLLS {
+        if let Some(account) = DugongAccount::find_by_x_user_id(&state.db, xid)
+            .await
+            .context("Failed to poll for auto-created account")?
+        {
+            tracing::info!(xid = %xid, attempt, "Auto-created account mirrored by indexer");
+            return Ok((account.into(), Some(digest)));
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+
+    anyhow::bail!(
+        "Auto-created account for xid {} (init tx {}) was not mirrored by the indexer within \
+         {:?}; the init_account transaction landed but the indexer has not caught up (is it \
+         running?)",
+        xid,
+        digest,
+        POLL_INTERVAL * MAX_POLLS
+    )
+}
+
+/// Verify an existing X access token and ensure the matching Dugong account exists.
+///
+/// Used by the dapp on already-authenticated sessions, where the OAuth callback does not run
+/// again but the account may still need to be initialized.
+pub async fn ensure_dugong_account(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<EnsureDugongAccountRequest>,
+) -> Result<Json<AuthResponse>, (StatusCode, Json<AuthErrorResponse>)> {
+    let oauth2_client =
+        TwitterOAuth2Client::with_base_url(&state.config, state.config.twitter_api_base.clone());
+
+    let user_info = oauth2_client
+        .get_user_info(&request.access_token)
+        .await
+        .map_err(|err| {
+            tracing::error!("Failed to verify access token for ensure-account: {:?}", err);
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(AuthErrorResponse {
+                    error: format!("Failed to verify access token: {}", err),
+                }),
+            )
+        })?;
+
+    tracing::info!(
+        x_user_id = %user_info.id,
+        username = %user_info.username,
+        "Ensure-account request for authenticated X session"
+    );
+
+    let enclave = EnclaveClient::new(state.config.enclave_url.clone());
+
+    let (dugong_account, created_account_tx_digest) =
+        ensure_dugong_account_for_xid(&state, &enclave, &user_info.id)
+            .await
+            .map_err(|err| {
+                tracing::error!(
+                    x_user_id = %user_info.id,
+                    "Failed to ensure Dugong account: {:?}",
+                    err
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(AuthErrorResponse {
+                        error: format!("Failed to ensure Dugong account: {}", err),
+                    }),
+                )
+            })?;
+
+    Ok(Json(AuthResponse {
+        user: user_info,
+        access_token: request.access_token,
+        dugong_account: Some(dugong_account),
+        created_account_tx_digest,
     }))
 }
 

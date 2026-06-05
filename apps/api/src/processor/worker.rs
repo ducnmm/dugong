@@ -1257,80 +1257,11 @@ impl ProcessorWorker {
 
     /// Auto-create account for recipient who doesn't have an Dugong account yet
     async fn auto_create_recipient_account(&self, to_xid: &str) -> Result<()> {
-        info!(to_xid = %to_xid, "Auto-creating account for recipient via Nautilus enclave");
-
-        // Call Nautilus enclave to sign init account for the recipient
-        let signed = self
-            .enclave
-            .sign_init_account(to_xid)
-            .await
-            .context("Failed to sign init account for recipient")?;
-
-        let xid = String::from_utf8(signed.response.data.xid.clone())
-            .context("Invalid xid encoding from enclave")?;
-        let handle = String::from_utf8(signed.response.data.handle.clone())
-            .context("Invalid handle encoding from enclave")?;
-
-        info!(
-            xid = %xid,
-            handle = %handle,
-            intent = signed.response.intent,
-            timestamp = signed.response.timestamp_ms,
-            "Submitting auto-created account initialization to Sui with enclave signature"
-        );
-
-        // Initialize transaction builder
-        let tx_builder = dugong_core::clients::sui_transaction::SuiTransactionBuilder::new(
-            self.state.config.clone(),
-        )
-        .await
-        .context("Failed to initialize Sui transaction builder")?;
-
-        // Submit init account transaction with enclave signature
-        let digest = tx_builder
-            .init_account(
-                &xid,
-                &handle,
-                signed.response.timestamp_ms,
-                &signed.signature,
-            )
-            .await
-            .context("Failed to submit auto-created account init transaction")?;
-
-        info!(
-            tx_digest = %digest,
-            to_xid = %to_xid,
-            "Recipient account init submitted; waiting for the indexer to mirror it"
-        );
-
-        // The `dugong_accounts` row is written by the indexer from the on-chain
-        // `AccountCreated` event, so it is NOT visible the instant `init_account`
-        // returns. Poll until the indexer mirrors it (bounded) so this function has
-        // "ensure account exists" semantics — otherwise a follow-on read by the
-        // caller (e.g. the claim payout fetching the claimant's account object)
-        // races the indexer and fails with "account missing after auto-create".
-        const POLL_INTERVAL: Duration = Duration::from_millis(1500);
-        const MAX_POLLS: u32 = 20; // ~30s — comfortably over the indexer poll interval
-        for attempt in 1..=MAX_POLLS {
-            if DugongAccount::find_by_x_user_id(&self.state.db, to_xid)
-                .await
-                .context("Failed to poll for auto-created account")?
-                .is_some()
-            {
-                info!(to_xid = %to_xid, attempt, "Auto-created account mirrored by indexer");
-                return Ok(());
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-
-        anyhow::bail!(
-            "Auto-created account for xid {} (init tx {}) was not mirrored by the \
-             indexer within {:?}; the init_account transaction landed but the indexer \
-             has not caught up (is it running?)",
-            to_xid,
-            digest,
-            POLL_INTERVAL * MAX_POLLS
-        )
+        // Tweet-triggered creation shares the same "ensure an account exists for an xid" path as
+        // the `/api/auth/twitter/ensure-account` handler (find-or-init + wait for the indexer to
+        // mirror it). We only need the side effect here, so the returned account is discarded.
+        crate::routes::ensure_dugong_account_for_xid(&self.state, &self.enclave, to_xid).await?;
+        Ok(())
     }
 }
 

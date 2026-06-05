@@ -51,6 +51,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/auth/twitter/token",
             axum::routing::post(routes::exchange_twitter_token),
         )
+        .route(
+            "/api/auth/twitter/ensure-account",
+            axum::routing::post(routes::ensure_dugong_account),
+        )
         .route("/api/sponsor", axum::routing::post(routes::sponsor_transaction))
         .route(
             "/api/execute",
