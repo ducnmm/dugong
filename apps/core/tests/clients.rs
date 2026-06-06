@@ -7,7 +7,7 @@ use common::test_config;
 use dugong_core::clients::enclave::EnclaveClient;
 use dugong_core::clients::enoki::EnokiClient;
 use dugong_core::clients::sui_client::SuiClient;
-use dugong_core::clients::twitter::{TwitterClient, TwitterOAuth2Client};
+use dugong_core::clients::twitter::{RefreshError, TwitterClient, TwitterOAuth2Client};
 use serde_json::json;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -200,6 +200,76 @@ async fn enclave_non_success_is_error() {
     assert!(err.to_string().contains("enclave boom"));
 }
 
+#[tokio::test]
+async fn enclave_retries_transient_5xx_then_succeeds() {
+    let server = MockServer::start().await;
+    // Fallback success (mounted first => lower match priority).
+    Mock::given(method("POST"))
+        .and(path("/process_tweet"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "command_type": "transfer",
+            "intent": 3,
+            "timestamp_ms": 1700000000000u64,
+            "signature": "c2ln",
+            "common": { "tweet_id": "111", "author_xid": "222", "author_handle": "alice" },
+            "data": {
+                "from_xid": "222", "from_handle": "alice",
+                "to_xid": "333", "to_handle": "bob",
+                "amount": 1000, "coin_type": "0x2::sui::SUI"
+            }
+        })))
+        .mount(&server)
+        .await;
+    // First call returns a transient 503 (mounted last => matched first, once only).
+    Mock::given(method("POST"))
+        .and(path("/process_tweet"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("cold boot"))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    let client = EnclaveClient::new(server.uri());
+    let resp = client
+        .process_tweet("https://x.com/alice/status/111")
+        .await
+        .expect("should succeed after retrying the 503");
+    let transfer = EnclaveClient::parse_transfer_data(&resp).expect("transfer data parses");
+    assert_eq!(transfer.to_handle, "bob");
+}
+
+#[tokio::test]
+async fn enclave_does_not_retry_business_error() {
+    let server = MockServer::start().await;
+    // `expect(1)` verifies (on drop) that exactly one request was made — i.e. a
+    // 400 business error is NOT retried.
+    Mock::given(method("POST"))
+        .and(path("/process_tweet"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = EnclaveClient::new(server.uri());
+    let err = client
+        .process_tweet("https://x.com/a/status/1")
+        .await
+        .expect_err("400 should be Err");
+    assert!(err.to_string().contains("400"));
+}
+
+#[tokio::test]
+async fn enclave_connection_error_is_bounded() {
+    // Nothing listens on this port → connection refused on each attempt; the
+    // client must give up (bounded retries) and surface a transport error
+    // rather than hang.
+    let client = EnclaveClient::new("http://127.0.0.1:1");
+    let err = client
+        .process_tweet("https://x.com/a/status/1")
+        .await
+        .expect_err("connection refused should error");
+    assert!(err.to_string().contains("request failed"));
+}
+
 // ============================ TwitterClient ============================
 
 #[tokio::test]
@@ -288,4 +358,72 @@ async fn oauth2_get_user_info_parses() {
     let client = TwitterOAuth2Client::with_base_url(&test_config(), server.uri());
     let info = client.get_user_info("tok123").await.expect("me should succeed");
     assert_eq!(info.username, "alice");
+}
+
+#[tokio::test]
+async fn oauth2_refresh_returns_rotated_token() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/2/oauth2/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "fresh-access",
+            "token_type": "bearer",
+            "expires_in": 7200,
+            "refresh_token": "rotated-refresh",
+            "scope": "tweet.read users.read offline.access"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = TwitterOAuth2Client::with_base_url(&test_config(), server.uri());
+    let token = client
+        .refresh_access_token("old-refresh")
+        .await
+        .expect("refresh should succeed");
+    assert_eq!(token.access_token, "fresh-access");
+    // Twitter rotates the refresh token — caller must persist the new one.
+    assert_eq!(token.refresh_token.as_deref(), Some("rotated-refresh"));
+}
+
+#[tokio::test]
+async fn oauth2_refresh_invalid_grant_requires_reauth() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/2/oauth2/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": "invalid_grant",
+            "error_description": "Value passed for the token was invalid."
+        })))
+        .mount(&server)
+        .await;
+
+    let client = TwitterOAuth2Client::with_base_url(&test_config(), server.uri());
+    let err = client
+        .refresh_access_token("dead-refresh")
+        .await
+        .expect_err("refresh should fail");
+    assert!(
+        matches!(err, RefreshError::ReauthRequired(_)),
+        "invalid_grant must map to ReauthRequired, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn oauth2_refresh_server_error_is_transient() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/2/oauth2/token"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("upstream unavailable"))
+        .mount(&server)
+        .await;
+
+    let client = TwitterOAuth2Client::with_base_url(&test_config(), server.uri());
+    let err = client
+        .refresh_access_token("some-refresh")
+        .await
+        .expect_err("refresh should fail");
+    assert!(
+        matches!(err, RefreshError::Transient(_)),
+        "5xx must map to Transient, got {err:?}"
+    );
 }

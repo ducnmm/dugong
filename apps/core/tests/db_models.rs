@@ -5,7 +5,7 @@
 //! `DATABASE_URL` (CI provides one as a service container).
 
 use dugong_core::db::models::{
-    AccountBalance, DugongAccount, EventStatus, Market, MarketBet, WebhookEvent,
+    AccountBalance, DugongAccount, EventStatus, Market, MarketBet, TwitterOAuthToken, WebhookEvent,
 };
 use serde_json::json;
 use sqlx::PgPool;
@@ -209,4 +209,45 @@ async fn market_and_bets_round_trip(pool: PgPool) {
         .expect("winners");
     assert_eq!(winners.len(), 1);
     assert_eq!(winners[0].0, "better-yes");
+}
+
+#[sqlx::test]
+async fn twitter_oauth_token_upsert_lookup_and_rotation(pool: PgPool) {
+    let key = [9u8; 32];
+
+    // Store an encrypted refresh token; the DB must never hold plaintext.
+    let enc = dugong_core::crypto::seal(&key, "refresh-token-v1").expect("seal");
+    TwitterOAuthToken::upsert(&pool, "xid-1", &enc, None, None, Some("offline.access"))
+        .await
+        .expect("upsert");
+
+    let row = TwitterOAuthToken::find_by_x_user_id(&pool, "xid-1")
+        .await
+        .expect("query")
+        .expect("row exists");
+    assert_ne!(row.refresh_token_enc, "refresh-token-v1");
+    assert_eq!(row.scope.as_deref(), Some("offline.access"));
+    let plaintext = dugong_core::crypto::open(&key, &row.refresh_token_enc).expect("open");
+    assert_eq!(plaintext, "refresh-token-v1");
+
+    // Upsert again (simulating refresh-token rotation) replaces in place.
+    let enc2 = dugong_core::crypto::seal(&key, "refresh-token-v2").expect("seal");
+    TwitterOAuthToken::upsert(&pool, "xid-1", &enc2, None, None, Some("offline.access"))
+        .await
+        .expect("rotate");
+    let rotated = TwitterOAuthToken::find_by_x_user_id(&pool, "xid-1")
+        .await
+        .expect("query")
+        .expect("row exists");
+    assert_eq!(
+        dugong_core::crypto::open(&key, &rotated.refresh_token_enc).expect("open"),
+        "refresh-token-v2"
+    );
+
+    // Delete removes the credential so it cannot be retried.
+    TwitterOAuthToken::delete(&pool, "xid-1").await.expect("delete");
+    assert!(TwitterOAuthToken::find_by_x_user_id(&pool, "xid-1")
+        .await
+        .expect("query")
+        .is_none());
 }

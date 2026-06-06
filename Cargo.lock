@@ -2220,6 +2220,7 @@ dependencies = [
 name = "dugong-core"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "async-trait",
  "base64 0.21.7",
@@ -2228,6 +2229,7 @@ dependencies = [
  "dotenvy",
  "fastcrypto 0.1.9 (git+https://github.com/MystenLabs/fastcrypto?rev=0eea35ee442a798fb1f1e7c2f39dc021bd21dbc3)",
  "hex",
+ "jsonwebtoken",
  "redis",
  "reqwest 0.11.27",
  "serde",

@@ -59,6 +59,9 @@ pub fn test_config() -> Config {
         twitter_oauth2_client_secret: "test-client-secret".to_string(),
         twitter_oauth2_redirect_uri: "http://localhost/callback".to_string(),
 
+        token_encryption_key: Some([7u8; 32]),
+        session_token_secret: Some("test-session-secret-please-change".to_string()),
+
         sui_rpc_url: "http://localhost".to_string(),
         dugong_package_id: "0x1".to_string(),
         dugong_event_package_id: "0x1".to_string(),

@@ -33,6 +33,8 @@ export interface XUser {
 export interface XAuthResult {
   user: XUser;
   accessToken: string;
+  /** Backend session token; proof of identity for wallet linking. */
+  sessionToken: string;
   createdAccountTxDigest?: string;
   dugongAccount?: {
     sui_object_id: string;

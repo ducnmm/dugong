@@ -52,6 +52,28 @@ pub struct OAuth2TokenResponse {
     pub scope: Option<String>,
 }
 
+/// Outcome of a refresh-token exchange, distinguishing failures the caller must
+/// react to differently: a definitively-dead refresh token (the user must
+/// re-authenticate) vs. a transient error (retrying later may succeed).
+#[derive(Debug)]
+pub enum RefreshError {
+    /// The refresh token is invalid/revoked/expired — re-authentication required.
+    ReauthRequired(String),
+    /// Transport or server-side error; the stored token may still be valid.
+    Transient(anyhow::Error),
+}
+
+impl std::fmt::Display for RefreshError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RefreshError::ReauthRequired(msg) => write!(f, "re-authentication required: {msg}"),
+            RefreshError::Transient(err) => write!(f, "transient refresh error: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for RefreshError {}
+
 /// Twitter user info from /2/users/me endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TwitterUserInfo {
@@ -138,6 +160,74 @@ impl TwitterOAuth2Client {
             serde_json::from_str(&response_text).context("Failed to parse token response")?;
 
         info!("Successfully exchanged code for access token");
+        Ok(token_response)
+    }
+
+    /// Exchange a stored refresh token for a fresh access token
+    /// (`grant_type=refresh_token`, Basic client credentials).
+    ///
+    /// Twitter **rotates** refresh tokens: the returned [`OAuth2TokenResponse`]
+    /// usually carries a new `refresh_token` that the caller MUST persist in place
+    /// of the one passed in. Errors are classified so the caller can tell apart a
+    /// dead token (re-login) from a transient failure (safe to retry).
+    pub async fn refresh_access_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<OAuth2TokenResponse, RefreshError> {
+        let url = format!("{}/2/oauth2/token", self.api_base);
+
+        let params = [
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+        ];
+
+        let credentials = format!("{}:{}", self.client_id, self.client_secret);
+        let auth_header = format!("Basic {}", BASE64.encode(credentials.as_bytes()));
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("Authorization", &auth_header)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| {
+                RefreshError::Transient(anyhow::Error::new(e).context("refresh token request failed"))
+            })?;
+
+        let status = response.status();
+        let response_text = response.text().await.map_err(|e| {
+            RefreshError::Transient(anyhow::Error::new(e).context("failed to read refresh response"))
+        })?;
+
+        if !status.is_success() {
+            // 401/invalid_grant/invalid_request/unauthorized_client → the refresh
+            // token is dead; the user must re-authenticate. 429/5xx → transient.
+            let body_l = response_text.to_lowercase();
+            let is_reauth = status == reqwest::StatusCode::UNAUTHORIZED
+                || body_l.contains("invalid_grant")
+                || body_l.contains("invalid_request")
+                || body_l.contains("unauthorized_client")
+                || (status.is_client_error()
+                    && status != reqwest::StatusCode::TOO_MANY_REQUESTS);
+            // Do NOT log the response body — it can echo token material.
+            let msg = format!("Twitter refresh failed ({status})");
+            return Err(if is_reauth {
+                RefreshError::ReauthRequired(msg)
+            } else {
+                RefreshError::Transient(anyhow::anyhow!(msg))
+            });
+        }
+
+        let token_response: OAuth2TokenResponse = serde_json::from_str(&response_text)
+            .map_err(|e| {
+                RefreshError::Transient(
+                    anyhow::Error::new(e).context("failed to parse refresh response"),
+                )
+            })?;
+
+        info!("Successfully refreshed Twitter access token");
         Ok(token_response)
     }
 

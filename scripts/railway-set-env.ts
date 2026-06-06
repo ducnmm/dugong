@@ -1,8 +1,8 @@
 #!/usr/bin/env -S npx --yes tsx
 // Push each service's local .env file into Railway, applying deploy-time
-// overrides (DB/Redis -> plugin references, drop PORT for services that
-// honour Railway's injected $PORT, rewrite localhost URLs to public /
-// internal Railway hostnames).
+// overrides (DB/Redis -> plugin references, rewrite localhost URLs to public /
+// internal Railway hostnames, point the worker at the api over the private
+// network). PORT is kept so the api listens on a fixed port the worker can reach.
 //
 // Usage:
 //   scripts/railway-set-env.ts <service|all> [flags]
@@ -26,6 +26,8 @@
 //   scripts/railway-set-env.ts web --api-domain api.dugong.dev \
 //                                  --nautilus-domain nautilus.dugong.dev \
 //                                  --web-domain app.dugong.dev
+//   # Push all prod services — Railway domains are baked in as defaults:
+//   scripts/railway-set-env.ts all --environment production
 //   # Push all dev services — Railway domains are baked in as defaults:
 //   scripts/railway-set-env.ts all --environment dev
 //   scripts/railway-set-env.ts all --environment dev --dry-run
@@ -57,8 +59,6 @@ type Service = {
 
 // The api reads apps/api/.env; the indexer reads its own apps/indexer/.env
 // (a trimmed copy of the shared dugong-core Config — see apps/indexer/.env.example).
-const apiDrop = (key: string) => key === "PORT";
-
 function makeApiRewrite(dbRef: string, redisRef: string) {
   return (key: string, val: string, ctx: Ctx): string | null => {
     switch (key) {
@@ -106,8 +106,11 @@ function makeWebRewrite(): Service["rewrite"] {
         return `https://${ctx.apiDomain}`;
       case "VITE_ENCLAVE_URL":
         if (!ctx.nautilusDomain) {
-          warn(`VITE_ENCLAVE_URL kept as-is ('${val}'); pass --nautilus-domain to rewrite`);
-          return val;
+          // No public nautilus domain (e.g. production): drop the key rather than
+          // bake the local .env value into the web build. Pass --nautilus-domain
+          // to set it explicitly.
+          warn(`VITE_ENCLAVE_URL dropped (no nautilus public domain); pass --nautilus-domain to set it`);
+          return null;
         }
         return `https://${ctx.nautilusDomain}`;
       case "VITE_TWITTER_REDIRECT_URI":
@@ -122,45 +125,75 @@ function makeWebRewrite(): Service["rewrite"] {
   };
 }
 
-// Production services — PORT is dropped so Railway injects its own.
+// Production services. PORT is kept (not dropped): the api pins PORT=43001 from
+// its .env so it listens on a fixed port that the worker reaches over Railway's
+// private network (BACKEND_URL=http://api.railway.internal:43001) — same shape
+// as the dev setup below.
 const PROD_SERVICES = ["api", "indexer", "worker", "nautilus", "web"] as const;
 // Dev services — PORT is kept at the value from .env so internal networking
 // uses a predictable port (worker-dev references api-dev on that port).
 const DEV_SERVICES  = ["api-dev", "indexer-dev", "worker-dev", "nautilus-dev", "web-dev"] as const;
 
+type EnvDefaults = {
+  webDomain?: string;
+  apiDomain?: string;
+  nautilusDomain?: string;
+  nautilusInternal: string;
+};
+
+// Railway public domains for the production environment (used by default, or with
+// --environment production). nautilus has no public domain in production — it's
+// reached privately at nautilus.railway.internal — so the web build's
+// VITE_ENCLAVE_URL is dropped unless you pass --nautilus-domain.
+const PROD_DEFAULTS: EnvDefaults = {
+  webDomain:        "dugong.up.railway.app",
+  apiDomain:        "api-dugong.up.railway.app",
+  nautilusInternal: "http://nautilus.railway.internal:3000",
+};
+
 // Railway-generated public domains for the dev environment.
 // Override any of these via the --*-domain flags if you add a custom domain.
-const DEV_DEFAULTS = {
-  webDomain:       "web-dev-dev-ffbd.up.railway.app",
-  apiDomain:       "api-dev-dev-1672.up.railway.app",
-  nautilusDomain:  "nautilus-dev-dev.up.railway.app",
-  nautilusInternal:"http://nautilus-dev.railway.internal:43000",
-} as const;
+const DEV_DEFAULTS: EnvDefaults = {
+  webDomain:        "web-dev-dev-ffbd.up.railway.app",
+  apiDomain:        "api-dev-dev-1672.up.railway.app",
+  nautilusDomain:   "nautilus-dev-dev.up.railway.app",
+  nautilusInternal: "http://nautilus-dev.railway.internal:43000",
+};
 
 const services: Record<string, Service> = {
   // ── Production ──────────────────────────────────────────────────────────
   api: {
     name: "api",
     envFile: "apps/api/.env",
-    drop: apiDrop,
+    // PORT is kept (43001 from .env) so the worker can reach the api on a fixed
+    // private port — Railway routes the public domain to that port too.
     rewrite: apiRewrite,
   },
   indexer: {
     name: "indexer",
     envFile: "apps/indexer/.env",
-    drop: apiDrop,
     rewrite: indexerRewrite,
   },
   worker: {
     name: "worker",
     envFile: "apps/worker/.env",
+    rewrite(key, val) {
+      // Reach the api over Railway's private network on its pinned port (43001).
+      if (key === "BACKEND_URL") return "http://api.railway.internal:43001";
+      return val;
+    },
   },
   nautilus: {
     name: "nautilus",
     envFile: "apps/nautilus-server/.env",
-    // PORT and ENCLAVE_PORT must both stay (see deployment_railway_cli.md §6
-    // — the binary reads ENCLAVE_PORT and Railway's proxy targets PORT, so
-    // we keep both pinned to the same value from the .env).
+    // Prod nautilus has no public domain — the api reaches it privately at
+    // nautilus.railway.internal:3000, so the binary (which reads ENCLAVE_PORT)
+    // must listen on 3000. The shared .env carries the dev port (43000), so pin
+    // ENCLAVE_PORT to 3000 here. PORT is moot without a public Railway proxy.
+    rewrite(key, val) {
+      if (key === "ENCLAVE_PORT") return "3000";
+      return val;
+    },
   },
   web: {
     name: "web",
@@ -291,13 +324,18 @@ Flags:
   --api-domain <domain>      Public api domain      (used for VITE_API_BASE_URL).
   --nautilus-domain <domain> Public nautilus domain (used for VITE_ENCLAVE_URL).
   --nautilus-internal <url>  Internal nautilus URL for the api's ENCLAVE_URL.
-                             Default (prod): http://nautilus.railway.internal:3000
+                             Default (prod): ${PROD_DEFAULTS.nautilusInternal}
                              Default (dev):  ${DEV_DEFAULTS.nautilusInternal}
 
+Production (default, or --environment production) bakes in these domains:
+  web:      ${PROD_DEFAULTS.webDomain}
+  api:      ${PROD_DEFAULTS.apiDomain}
+  nautilus: no public domain — VITE_ENCLAVE_URL is dropped from the web build
+
 When --environment dev the Railway-generated public domains are used by default:
-  web:     ${DEV_DEFAULTS.webDomain}
-  api:     ${DEV_DEFAULTS.apiDomain}
-  nautilus:${DEV_DEFAULTS.nautilusDomain}
+  web:      ${DEV_DEFAULTS.webDomain}
+  api:      ${DEV_DEFAULTS.apiDomain}
+  nautilus: ${DEV_DEFAULTS.nautilusDomain}
 
   --help                     Show this message.
 `);
@@ -321,14 +359,19 @@ function main(): void {
 
   if (values.help || positionals.length !== 1) usage();
   const target = positionals[0]!;
-  const isDevEnv = values.environment === "dev";
+  const isDevEnv  = values.environment === "dev";
+  // Production is the default when no --environment is given, or explicitly
+  // --environment production. Any other named environment gets no baked-in domains.
+  const isProdEnv = !values.environment || values.environment === "production";
+  const defaults: EnvDefaults | undefined =
+    isDevEnv ? DEV_DEFAULTS : isProdEnv ? PROD_DEFAULTS : undefined;
 
   const ctx: Ctx = {
-    webDomain:       values["web-domain"]       ?? (isDevEnv ? DEV_DEFAULTS.webDomain       : undefined),
-    apiDomain:       values["api-domain"]       ?? (isDevEnv ? DEV_DEFAULTS.apiDomain       : undefined),
-    nautilusDomain:  values["nautilus-domain"]  ?? (isDevEnv ? DEV_DEFAULTS.nautilusDomain  : undefined),
-    nautilusInternal: values["nautilus-internal"] ??
-      (isDevEnv ? DEV_DEFAULTS.nautilusInternal : "http://nautilus.railway.internal:3000"),
+    webDomain:        values["web-domain"]        ?? defaults?.webDomain,
+    apiDomain:        values["api-domain"]        ?? defaults?.apiDomain,
+    nautilusDomain:   values["nautilus-domain"]   ?? defaults?.nautilusDomain,
+    nautilusInternal: values["nautilus-internal"] ?? defaults?.nautilusInternal
+                      ?? "http://nautilus.railway.internal:3000",
   };
   const opts = {
     dryRun: !!values["dry-run"],

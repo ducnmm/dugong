@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::{app_state, test_config, try_redis};
 use dugong_api::build_router;
-use dugong_core::db::models::DugongAccount;
+use dugong_core::db::models::{DugongAccount, TwitterOAuthToken};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -321,19 +321,61 @@ async fn execute_sponsored_transaction_returns_digest(pool: PgPool) {
     assert_eq!(body["digest"], json!("0xfinal"));
 }
 
+/// Issue a backend session token for `xid` using the test config's secret.
+fn test_session_token(config: &dugong_core::config::Config, xid: &str) -> String {
+    dugong_core::session::issue(
+        config.session_token_secret().unwrap(),
+        xid,
+        std::time::Duration::from_secs(3600),
+    )
+    .unwrap()
+}
+
+/// Seed an encrypted stored refresh token for `xid` using the test config's key.
+async fn seed_refresh_token(
+    config: &dugong_core::config::Config,
+    pool: &PgPool,
+    xid: &str,
+    refresh: &str,
+) {
+    let enc = dugong_core::crypto::seal(config.token_encryption_key().unwrap(), refresh).unwrap();
+    TwitterOAuthToken::upsert(pool, xid, &enc, None, None, Some("offline.access"))
+        .await
+        .unwrap();
+}
+
 #[sqlx::test(migrations = "../core/migrations")]
-async fn secure_link_wallet_surfaces_enclave_failure(pool: PgPool) {
+async fn secure_link_wallet_refreshes_then_reaches_enclave(pool: PgPool) {
     let redis = redis_or_skip!();
-    // Enclave returns an error; the route should respond 200 with success=false
-    // rather than panicking or leaking a 500.
+    // Happy auth path: a valid session + a stored refresh token means the route
+    // mints a FRESH Twitter token and forwards it to the enclave. The enclave mock
+    // returns 500 so we stop before on-chain submission (no Sui mock here), proving
+    // the request got past auth+mint and reached the enclave (not a re-auth bail).
     let server = MockServer::start().await;
     Mock::given(method("POST"))
+        .and(path("/2/oauth2/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "fresh-access",
+            "token_type": "bearer",
+            "expires_in": 7200,
+            "refresh_token": "rotated-refresh",
+            "scope": "tweet.read users.read offline.access"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/process_secure_link_wallet"))
         .respond_with(ResponseTemplate::new(500).set_body_string("enclave down"))
         .mount(&server)
         .await;
 
     let mut config = test_config();
     config.enclave_url = server.uri();
+    config.twitter_api_base = server.uri();
+
+    seed_refresh_token(&config, &pool, "1", "stored-refresh").await;
+    let session = test_session_token(&config, "1");
     let app = build_router(app_state(config, pool, redis));
 
     let response = app
@@ -342,9 +384,9 @@ async fn secure_link_wallet_surfaces_enclave_failure(pool: PgPool) {
                 .method("POST")
                 .uri("/api/link-wallet/submit")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {session}"))
                 .body(Body::from(
                     json!({
-                        "access_token": "tok",
                         "wallet_address": "0xwallet",
                         "wallet_signature": "c2ln",
                         "message": "Link XID:1 to wallet 0xwallet at 0",
@@ -360,5 +402,114 @@ async fn secure_link_wallet_surfaces_enclave_failure(pool: PgPool) {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["success"], json!(false));
+    assert_eq!(body["reauth_required"], json!(false));
     assert!(body["error"].as_str().unwrap().contains("Verification failed"));
+}
+
+#[sqlx::test(migrations = "../core/migrations")]
+async fn secure_link_wallet_without_session_requires_reauth(pool: PgPool) {
+    let redis = redis_or_skip!();
+    // No Authorization header → unauthenticated → re-auth signal, and the enclave
+    // is never contacted.
+    let config = test_config();
+    let app = build_router(app_state(config, pool, redis));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/link-wallet/submit")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "wallet_address": "0xwallet",
+                        "wallet_signature": "c2ln",
+                        "message": "Link XID:1 to wallet 0xwallet at 0",
+                        "timestamp": 0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["success"], json!(false));
+    assert_eq!(body["reauth_required"], json!(true));
+}
+
+#[sqlx::test(migrations = "../core/migrations")]
+async fn secure_link_wallet_xid_mismatch_rejected(pool: PgPool) {
+    let redis = redis_or_skip!();
+    // Session is for xid "1" but the signed message is for xid "999": reject so a
+    // caller cannot link a wallet on behalf of another X account.
+    let config = test_config();
+    seed_refresh_token(&config, &pool, "1", "stored-refresh").await;
+    let session = test_session_token(&config, "1");
+    let app = build_router(app_state(config, pool, redis));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/link-wallet/submit")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {session}"))
+                .body(Body::from(
+                    json!({
+                        "wallet_address": "0xwallet",
+                        "wallet_signature": "c2ln",
+                        "message": "Link XID:999 to wallet 0xwallet at 0",
+                        "timestamp": 0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["success"], json!(false));
+    assert_eq!(body["reauth_required"], json!(false));
+    assert!(body["error"].as_str().unwrap().contains("does not match"));
+}
+
+#[sqlx::test(migrations = "../core/migrations")]
+async fn secure_link_wallet_missing_refresh_token_requires_reauth(pool: PgPool) {
+    let redis = redis_or_skip!();
+    // Valid session but NO stored refresh token → cannot mint a fresh token → the
+    // user must re-authenticate. The enclave is never contacted.
+    let config = test_config();
+    let session = test_session_token(&config, "1");
+    let app = build_router(app_state(config, pool, redis));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/link-wallet/submit")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {session}"))
+                .body(Body::from(
+                    json!({
+                        "wallet_address": "0xwallet",
+                        "wallet_signature": "c2ln",
+                        "message": "Link XID:1 to wallet 0xwallet at 0",
+                        "timestamp": 0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["success"], json!(false));
+    assert_eq!(body["reauth_required"], json!(true));
 }

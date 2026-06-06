@@ -22,6 +22,10 @@ async fn main() -> anyhow::Result<()> {
     // The processor worker posts a reply to every tweet it handles, so refuse
     // to start without reply credentials instead of silently dropping replies.
     config.ensure_reply_capable()?;
+    // Refuse to start without OAuth credential-security config: the auth/link-wallet
+    // endpoints encrypt refresh tokens and sign session tokens, so missing keys must
+    // fail loudly here rather than at the first user request.
+    config.ensure_token_security()?;
     info!("Config loaded");
 
     let db = create_pool(&config.database_url).await?;
