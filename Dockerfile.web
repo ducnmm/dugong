@@ -34,6 +34,10 @@ RUN pnpm build
 FROM nginx:1.27-alpine AS runtime
 COPY --from=builder /app/dist /usr/share/nginx/html
 
+# Railway's shared nodes report the host's full CPU count, so the stock
+# `worker_processes auto;` spawns ~32 nginx workers for a static SPA. Pin to 2.
+RUN sed -i 's/^worker_processes.*/worker_processes 2;/' /etc/nginx/nginx.conf
+
 # SPA fallback + listen on Railway's $PORT (defaults to 8080 locally).
 # The official nginx image runs envsubst over /etc/nginx/templates/*.template
 # at startup, but the directory doesn't exist until we create it.
