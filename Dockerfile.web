@@ -38,6 +38,12 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # `worker_processes auto;` spawns ~32 nginx workers for a static SPA. Pin to 2.
 RUN sed -i 's/^worker_processes.*/worker_processes 2;/' /etc/nginx/nginx.conf
 
+# The base image defaults to `error_log ... notice;`, which spams the OS,
+# getrlimit and per-worker startup notices into Railway's log stream. Raise the
+# threshold to `warn` so only genuine warnings and errors surface. (No-op if a
+# future base image drops the line.)
+RUN sed -i 's#^error_log.*#error_log /var/log/nginx/error.log warn;#' /etc/nginx/nginx.conf
+
 # SPA fallback + listen on Railway's $PORT (defaults to 8080 locally).
 # The official nginx image runs envsubst over /etc/nginx/templates/*.template
 # at startup, but the directory doesn't exist until we create it.
@@ -47,6 +53,7 @@ RUN mkdir -p /etc/nginx/templates && printf '%s\n' \
   '  server_name  _;' \
   '  root   /usr/share/nginx/html;' \
   '  index  index.html;' \
+  '  location ~* \.(?:js|css|png|svg|ico|webmanifest|txt|woff2?)$ { access_log off; try_files $uri =404; }' \
   '  location / { try_files $uri $uri/ /index.html; }' \
   '}' > /etc/nginx/templates/default.conf.template
 
