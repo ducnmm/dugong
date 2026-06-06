@@ -29,6 +29,8 @@ bcs.workspace = true
 
 base64.workspace = true
 hex.workspace = true
+aes-gcm.workspace = true
+jsonwebtoken.workspace = true
 
 dotenvy.workspace = true
 

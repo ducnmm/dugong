@@ -26,6 +26,13 @@ pub struct Config {
     pub twitter_oauth2_client_secret: String,
     pub twitter_oauth2_redirect_uri: String,
 
+    // OAuth credential security (API only; see `ensure_token_security`).
+    // 32-byte AES-256 key for encrypting refresh tokens at rest, decoded from
+    // base64 or hex in `TOKEN_ENCRYPTION_KEY`. `None` when unset.
+    pub token_encryption_key: Option<[u8; 32]>,
+    // HMAC secret for signing backend session JWTs (`SESSION_TOKEN_SECRET`).
+    pub session_token_secret: Option<String>,
+
     // Sui
     pub sui_rpc_url: String,
     pub dugong_package_id: String,
@@ -108,6 +115,15 @@ impl Config {
                 .context("TWITTER_OAUTH2_CLIENT_SECRET must be set")?,
             twitter_oauth2_redirect_uri: env::var("TWITTER_OAUTH2_REDIRECT_URI")
                 .unwrap_or_else(|_| "http://localhost:43173/callback".to_string()),
+
+            // OAuth credential security. Parsed (and length-validated) when present;
+            // a present-but-malformed key is a hard misconfiguration. Requiredness is
+            // enforced for the API binary via `ensure_token_security`, so other
+            // binaries (worker/indexer) that don't refresh tokens still start.
+            token_encryption_key: optional_env("TOKEN_ENCRYPTION_KEY")
+                .map(|raw| parse_encryption_key(&raw))
+                .transpose()?,
+            session_token_secret: optional_env("SESSION_TOKEN_SECRET"),
 
             // Sui
             sui_rpc_url: env::var("SUI_RPC_URL")
@@ -198,6 +214,44 @@ impl Config {
         Ok(())
     }
 
+    /// Ensure the OAuth credential-security config is present. The API binary
+    /// stores and refreshes Twitter tokens, so missing `TOKEN_ENCRYPTION_KEY` or
+    /// `SESSION_TOKEN_SECRET` is an operator error that must fail loudly at startup
+    /// rather than at the first login/link request. Other binaries do not call this.
+    pub fn ensure_token_security(&self) -> Result<()> {
+        if self.token_encryption_key.is_none() {
+            anyhow::bail!(
+                "TOKEN_ENCRYPTION_KEY must be set to a 32-byte key (base64 or hex) \
+                 to encrypt Twitter refresh tokens at rest"
+            );
+        }
+        if self
+            .session_token_secret
+            .as_ref()
+            .map(|s| s.len() < 16)
+            .unwrap_or(true)
+        {
+            anyhow::bail!(
+                "SESSION_TOKEN_SECRET must be set (>= 16 chars) to sign backend session tokens"
+            );
+        }
+        Ok(())
+    }
+
+    /// The 32-byte refresh-token encryption key, or an error explaining it is unset.
+    pub fn token_encryption_key(&self) -> Result<&[u8; 32]> {
+        self.token_encryption_key
+            .as_ref()
+            .context("TOKEN_ENCRYPTION_KEY is not configured")
+    }
+
+    /// The session-token signing secret, or an error explaining it is unset.
+    pub fn session_token_secret(&self) -> Result<&str> {
+        self.session_token_secret
+            .as_deref()
+            .context("SESSION_TOKEN_SECRET is not configured")
+    }
+
     /// Parsed list of defining package ids the indexer watches for events.
     /// Splits `dugong_event_package_id` on commas and trims; empties are dropped.
     /// See the field doc for why multiple ids are needed after an upgrade that
@@ -216,4 +270,20 @@ fn optional_env(name: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty() && !value.starts_with("replace_with_"))
+}
+
+/// Decode a 32-byte AES-256 key from a base64 or hex string. Accepts standard
+/// base64 (e.g. `openssl rand -base64 32`) or 64-char hex; rejects any other length.
+fn parse_encryption_key(raw: &str) -> Result<[u8; 32]> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+
+    let bytes = BASE64
+        .decode(raw.trim())
+        .or_else(|_| hex::decode(raw.trim()))
+        .context("TOKEN_ENCRYPTION_KEY must be valid base64 or hex")?;
+
+    let len = bytes.len();
+    bytes.try_into().map_err(|_| {
+        anyhow::anyhow!("TOKEN_ENCRYPTION_KEY must decode to exactly 32 bytes, got {len}")
+    })
 }

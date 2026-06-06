@@ -39,6 +39,9 @@ pub fn test_config(sui_rpc_url: String, package_id: String) -> Config {
         twitter_oauth2_client_secret: "test-client-secret".to_string(),
         twitter_oauth2_redirect_uri: "http://localhost/callback".to_string(),
 
+        token_encryption_key: Some([7u8; 32]),
+        session_token_secret: Some("test-session-secret-please-change".to_string()),
+
         sui_rpc_url,
         dugong_witness_package_id: package_id.clone(),
         // The indexer filters events on dugong_event_package_id; mirror the

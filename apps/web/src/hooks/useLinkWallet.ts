@@ -11,6 +11,7 @@
 import { useState, useCallback } from 'react';
 import { useSignPersonalMessage } from '@mysten/dapp-kit';
 import { useAuth } from '../contexts/useAuth';
+import { useXAuth } from './useXAuth';
 import { API_BASE_URL } from '../utils/constants';
 
 interface GenerateMessageResponse {
@@ -22,6 +23,8 @@ interface LinkWalletResponse {
   success: boolean;
   tx_digest?: string;
   error?: string;
+  /** When true, the user's X session expired and must re-authenticate. */
+  reauth_required?: boolean;
 }
 
 export interface UseLinkWalletReturn {
@@ -33,7 +36,8 @@ export interface UseLinkWalletReturn {
 export function useLinkWallet(): UseLinkWalletReturn {
   const [isLinking, setIsLinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { user, accessToken, linkWallet: updateLocalWallet } = useAuth();
+  const { user, sessionToken, linkWallet: updateLocalWallet } = useAuth();
+  const { initiateLogin } = useXAuth();
   const { mutateAsync: signPersonalMessage } = useSignPersonalMessage();
 
   const linkWallet = useCallback(
@@ -42,8 +46,11 @@ export function useLinkWallet(): UseLinkWalletReturn {
         throw new Error('User not authenticated');
       }
 
-      if (!accessToken) {
-        throw new Error('No access token available');
+      if (!sessionToken) {
+        // No backend session — route the user through X login again.
+        setError('Your X session has expired. Please sign in with X again.');
+        await initiateLogin();
+        throw new Error('Your X session has expired. Please sign in with X again.');
       }
 
       setIsLinking(true);
@@ -81,16 +88,17 @@ export function useLinkWallet(): UseLinkWalletReturn {
           throw new Error('Failed to sign message');
         }
 
-        // Step 3: Submit to backend
+        // Step 3: Submit to backend, authenticated by the backend session token
+        // (not the Twitter access token, which may be expired).
         const submitResponse = await fetch(
           `${API_BASE_URL}/api/link-wallet/submit`,
           {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
+              Authorization: `Bearer ${sessionToken}`,
             },
             body: JSON.stringify({
-              access_token: accessToken,
               wallet_address: walletAddress,
               wallet_signature: signature,
               message,
@@ -105,6 +113,15 @@ export function useLinkWallet(): UseLinkWalletReturn {
         }
 
         const result: LinkWalletResponse = await submitResponse.json();
+
+        if (result.reauth_required) {
+          // The backend could not verify the X session — send the user back
+          // through X login, then they can retry linking.
+          setError('Your X session has expired. Redirecting you to sign in again...');
+          setIsLinking(false);
+          await initiateLogin();
+          return result;
+        }
 
         if (result.success) {
           // Update local state
@@ -122,7 +139,7 @@ export function useLinkWallet(): UseLinkWalletReturn {
         throw err;
       }
     },
-    [user, accessToken, signPersonalMessage, updateLocalWallet]
+    [user, sessionToken, initiateLogin, signPersonalMessage, updateLocalWallet]
   );
 
   return {

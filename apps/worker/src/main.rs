@@ -9,7 +9,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "twitter_poller=info".into()),
+                .unwrap_or_else(|_| "dugong_worker=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();

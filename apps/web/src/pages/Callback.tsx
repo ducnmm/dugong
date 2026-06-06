@@ -44,7 +44,7 @@ export const Callback: React.FC = () => {
         // Exchange code for token and get user info
         const result = await handleCallback(code, state);
 
-        // Update auth context with user info and access token
+        // Update auth context with user info, access token, and session token
         login(
           {
             twitterUserId: result.user.id,
@@ -52,7 +52,8 @@ export const Callback: React.FC = () => {
             suiObjectId: result.dugongAccount?.sui_object_id || null,
             linkedWalletAddress: result.dugongAccount?.owner_address || null,
           },
-          result.accessToken
+          result.accessToken,
+          result.sessionToken
         );
 
         setStatus('success');

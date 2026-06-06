@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tracing::warn;
 
 use crate::constants::enclave;
 
@@ -137,11 +139,31 @@ pub struct EnclaveClient {
     http: Client,
 }
 
+/// Connection timeout for enclave requests.
+const ENCLAVE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Overall request timeout. Generous because some enclave operations include a
+/// downstream Twitter round-trip (e.g. verifying an access token).
+const ENCLAVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Max attempts (initial + retries) for an enclave request on transient errors.
+const ENCLAVE_MAX_ATTEMPTS: u32 = 3;
+
+/// Exponential backoff before the Nth retry: 200ms, 400ms, ...
+fn enclave_retry_backoff(attempt: u32) -> Duration {
+    Duration::from_millis(200u64 * 2u64.pow(attempt.saturating_sub(1)))
+}
+
 impl EnclaveClient {
     pub fn new(base_url: impl Into<String>) -> Self {
+        // A bare `Client::new()` has no timeouts, so a hung or unreachable enclave
+        // would block the caller indefinitely. Bound both connect and total time.
+        let http = Client::builder()
+            .connect_timeout(ENCLAVE_CONNECT_TIMEOUT)
+            .timeout(ENCLAVE_REQUEST_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
             base_url: base_url.into(),
-            http: Client::new(),
+            http,
         }
     }
 
@@ -300,15 +322,40 @@ impl EnclaveClient {
         label: &str,
     ) -> Result<TResp> {
         let url = self.url(path);
-        let resp = self
-            .http
-            .post(&url)
-            .json(body)
-            .send()
-            .await
-            .with_context(|| format!("enclave {} request failed", label))?;
 
-        Self::parse_response(resp).await
+        // Enclave operations only verify-and-sign (idempotent), so retrying a
+        // transient transport failure or upstream gateway error is safe. A clean
+        // 4xx/business response is a definitive answer and is NOT retried.
+        let mut attempt: u32 = 0;
+        loop {
+            attempt += 1;
+            match self.http.post(&url).json(body).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if matches!(status.as_u16(), 502 | 503 | 504) && attempt < ENCLAVE_MAX_ATTEMPTS {
+                        let backoff = enclave_retry_backoff(attempt);
+                        warn!(
+                            "enclave {label} returned {status}; retrying (attempt {attempt}/{ENCLAVE_MAX_ATTEMPTS}) after {backoff:?}"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                    return Self::parse_response(resp).await;
+                }
+                Err(err) => {
+                    if attempt < ENCLAVE_MAX_ATTEMPTS {
+                        let backoff = enclave_retry_backoff(attempt);
+                        warn!(
+                            "enclave {label} request failed ({err}); retrying (attempt {attempt}/{ENCLAVE_MAX_ATTEMPTS}) after {backoff:?}"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                    return Err(anyhow::Error::new(err))
+                        .with_context(|| format!("enclave {} request failed", label));
+                }
+            }
+        }
     }
 
     fn url(&self, path: &str) -> String {

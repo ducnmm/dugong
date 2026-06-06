@@ -968,3 +968,82 @@ impl IndexerState {
         .await
     }
 }
+
+/// Stored Twitter OAuth 2.0 credentials for a user, keyed by X user id (xid).
+///
+/// `*_enc` fields hold AES-256-GCM ciphertext (base64), never plaintext — decrypt
+/// with [`crate::crypto::open`]. Intentionally NOT `Serialize`: these must never be
+/// returned in an API response.
+#[derive(Debug, Clone, FromRow)]
+pub struct TwitterOAuthToken {
+    pub x_user_id: String,
+    pub refresh_token_enc: String,
+    pub access_token_enc: Option<String>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub scope: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl TwitterOAuthToken {
+    /// Insert or replace the stored credentials for `x_user_id`. Callers pass
+    /// already-encrypted blobs (see [`crate::crypto::seal`]).
+    pub async fn upsert(
+        pool: &sqlx::PgPool,
+        x_user_id: &str,
+        refresh_token_enc: &str,
+        access_token_enc: Option<&str>,
+        expires_at: Option<DateTime<Utc>>,
+        scope: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO twitter_oauth_tokens
+                (x_user_id, refresh_token_enc, access_token_enc, expires_at, scope)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (x_user_id)
+            DO UPDATE SET
+                refresh_token_enc = EXCLUDED.refresh_token_enc,
+                access_token_enc  = EXCLUDED.access_token_enc,
+                expires_at        = EXCLUDED.expires_at,
+                scope             = EXCLUDED.scope,
+                updated_at        = NOW()
+            "#,
+        )
+        .bind(x_user_id)
+        .bind(refresh_token_enc)
+        .bind(access_token_enc)
+        .bind(expires_at)
+        .bind(scope)
+        .execute(pool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Look up stored credentials for a user, if any.
+    pub async fn find_by_x_user_id(
+        pool: &sqlx::PgPool,
+        x_user_id: &str,
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query_as::<_, TwitterOAuthToken>(
+            r#"
+            SELECT x_user_id, refresh_token_enc, access_token_enc, expires_at, scope, created_at, updated_at
+            FROM twitter_oauth_tokens
+            WHERE x_user_id = $1
+            "#,
+        )
+        .bind(x_user_id)
+        .fetch_optional(pool)
+        .await
+    }
+
+    /// Remove stored credentials for a user (e.g. after Twitter rejects the
+    /// refresh token, so a stale credential is not retried).
+    pub async fn delete(pool: &sqlx::PgPool, x_user_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM twitter_oauth_tokens WHERE x_user_id = $1")
+            .bind(x_user_id)
+            .execute(pool)
+            .await
+            .map(|_| ())
+    }
+}

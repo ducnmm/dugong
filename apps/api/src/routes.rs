@@ -1,8 +1,9 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,8 +12,114 @@ use crate::webhook::handler::AppState;
 use dugong_core::clients::enclave::EnclaveClient;
 use dugong_core::clients::enoki::EnokiClient;
 use dugong_core::clients::sui_transaction::SuiTransactionBuilder;
-use dugong_core::clients::twitter::{TwitterOAuth2Client, TwitterUserInfo};
-use dugong_core::db::models::{AccountBalance, DugongAccount, Transfer, TransferType};
+use dugong_core::clients::twitter::{
+    OAuth2TokenResponse, RefreshError, TwitterOAuth2Client, TwitterUserInfo,
+};
+use dugong_core::config::Config;
+use dugong_core::db::models::{
+    AccountBalance, DugongAccount, Transfer, TransferType, TwitterOAuthToken,
+};
+
+/// Lifetime of a backend session token. Long-lived because it tracks the OAuth
+/// login cadence (the stored refresh token keeps Twitter access alive underneath).
+const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Issue a backend session token binding a request to a verified `xid`.
+fn issue_session(config: &Config, xid: &str) -> anyhow::Result<String> {
+    dugong_core::session::issue(config.session_token_secret()?, xid, SESSION_TTL)
+}
+
+/// Recover the trusted `xid` from a request's `Authorization: Bearer <session>`
+/// header, or `None` if absent/invalid/expired.
+fn session_xid(config: &Config, headers: &HeaderMap) -> Option<String> {
+    let secret = config.session_token_secret().ok()?;
+    let raw = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+    let token = raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))?
+        .trim();
+    dugong_core::session::verify(secret, token).ok()
+}
+
+/// Extract the xid embedded in a link message: `Link XID:{xid} to wallet {addr} at {ts}`.
+fn message_xid(message: &str) -> Option<&str> {
+    let rest = message.strip_prefix("Link XID:")?;
+    let end = rest.find(" to wallet ")?;
+    Some(&rest[..end])
+}
+
+/// Persist a user's Twitter OAuth credentials (encrypted at rest). No-op when the
+/// response carries no refresh token (e.g. `offline.access` not granted).
+async fn store_oauth_tokens(
+    state: &AppState,
+    xid: &str,
+    tokens: &OAuth2TokenResponse,
+) -> anyhow::Result<()> {
+    let Some(refresh) = tokens.refresh_token.as_deref() else {
+        return Ok(());
+    };
+    let key = state.config.token_encryption_key()?;
+    let refresh_enc = dugong_core::crypto::seal(key, refresh)?;
+    let access_enc = dugong_core::crypto::seal(key, &tokens.access_token)?;
+    let expires_at = tokens
+        .expires_in
+        .map(|s| Utc::now() + chrono::Duration::seconds(s as i64));
+    TwitterOAuthToken::upsert(
+        &state.db,
+        xid,
+        &refresh_enc,
+        Some(&access_enc),
+        expires_at,
+        tokens.scope.as_deref(),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Why a fresh access token could not be minted.
+enum FreshTokenError {
+    /// The user must re-authenticate with X (no stored token, or Twitter rejected it).
+    ReauthRequired(String),
+    /// A server-side/transient problem unrelated to the user's credentials.
+    Internal(String),
+}
+
+/// Mint a fresh Twitter access token for a trusted `xid` using the stored refresh
+/// token. Persists the rotated refresh token; drops a definitively-dead one.
+async fn mint_fresh_access_token(state: &AppState, xid: &str) -> Result<String, FreshTokenError> {
+    let key = state
+        .config
+        .token_encryption_key()
+        .map_err(|e| FreshTokenError::Internal(e.to_string()))?;
+
+    let stored = TwitterOAuthToken::find_by_x_user_id(&state.db, xid)
+        .await
+        .map_err(|e| FreshTokenError::Internal(format!("db error: {e}")))?
+        .ok_or_else(|| {
+            FreshTokenError::ReauthRequired("no stored X session for this user".to_string())
+        })?;
+
+    let refresh = dugong_core::crypto::open(key, &stored.refresh_token_enc)
+        .map_err(|_| FreshTokenError::ReauthRequired("stored X credential unreadable".to_string()))?;
+
+    let oauth =
+        TwitterOAuth2Client::with_base_url(&state.config, state.config.twitter_api_base.clone());
+    match oauth.refresh_access_token(&refresh).await {
+        Ok(resp) => {
+            // Twitter rotates the refresh token — persist the new one.
+            if let Err(err) = store_oauth_tokens(state, xid, &resp).await {
+                tracing::warn!("failed to persist rotated Twitter token: {err:?}");
+            }
+            Ok(resp.access_token)
+        }
+        Err(RefreshError::ReauthRequired(msg)) => {
+            // Dead refresh token: remove it so it is not retried.
+            let _ = TwitterOAuthToken::delete(&state.db, xid).await;
+            Err(FreshTokenError::ReauthRequired(msg))
+        }
+        Err(RefreshError::Transient(err)) => Err(FreshTokenError::Internal(err.to_string())),
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AccountResponse {
@@ -195,10 +302,14 @@ pub async fn get_account_transactions(
 
 // ====== Secure Link Wallet API ======
 
-/// Request to link wallet with Twitter access token and wallet signature
+/// Request to link a wallet. The caller is authenticated via the backend session
+/// token (Authorization header); the Twitter access token is no longer trusted
+/// from the client (it may be expired) — it is accepted but ignored for back-compat.
 #[derive(Debug, Deserialize)]
 pub struct SecureLinkWalletApiRequest {
-    pub access_token: String,     // Twitter OAuth2 access token
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub access_token: Option<String>, // ignored; kept for back-compat with older clients
     pub wallet_address: String,   // Sui wallet address (0x...)
     pub wallet_signature: String, // Signature of the message by wallet (base64)
     pub message: String,          // The message that was signed
@@ -211,17 +322,51 @@ pub struct LinkWalletResponse {
     pub success: bool,
     pub tx_digest: Option<String>,
     pub error: Option<String>,
+    /// When true, the user's X session has expired and they must re-login before
+    /// linking can succeed. The frontend routes to re-auth on this signal.
+    pub reauth_required: bool,
+}
+
+impl LinkWalletResponse {
+    fn success(tx_digest: String) -> Self {
+        Self {
+            success: true,
+            tx_digest: Some(tx_digest),
+            error: None,
+            reauth_required: false,
+        }
+    }
+
+    fn failure(error: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            tx_digest: None,
+            error: Some(error.into()),
+            reauth_required: false,
+        }
+    }
+
+    fn reauth(error: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            tx_digest: None,
+            error: Some(error.into()),
+            reauth_required: true,
+        }
+    }
 }
 
 /// Secure link wallet endpoint
 ///
 /// Flow:
-/// 1. Receive request from Dapp with access_token + wallet_signature
-/// 2. Forward to Nautilus enclave for verification and signing
-/// 3. Submit link_wallet transaction to Sui blockchain
-/// 4. Return transaction digest
+/// 1. Authenticate the caller via the backend session token → trusted xid
+/// 2. Verify the signed message is for that same xid
+/// 3. Mint a FRESH Twitter access token from the stored refresh token
+/// 4. Forward the fresh token to the Nautilus enclave for verification and signing
+/// 5. Submit link_wallet transaction to Sui blockchain and return the digest
 pub async fn secure_link_wallet(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request): Json<SecureLinkWalletApiRequest>,
 ) -> Result<Json<LinkWalletResponse>, StatusCode> {
     tracing::info!(
@@ -229,12 +374,59 @@ pub async fn secure_link_wallet(
         request.wallet_address
     );
 
-    // 1. Create enclave client and get signed payload
+    // 1. Authenticate the caller. An expired Twitter access token is no longer
+    //    proof of identity, so we trust only the backend session token.
+    let xid = match session_xid(&state.config, &headers) {
+        Some(xid) => xid,
+        None => {
+            tracing::warn!("Link wallet rejected: missing or invalid session token");
+            return Ok(Json(LinkWalletResponse::reauth(
+                "Your X session has expired. Please sign in with X again.",
+            )));
+        }
+    };
+
+    // 2. The signed message embeds the xid; it must match the authenticated user,
+    //    so a caller cannot link a wallet on behalf of another X account.
+    match message_xid(&request.message) {
+        Some(msg_xid) if msg_xid == xid => {}
+        Some(_) => {
+            tracing::warn!("Link wallet rejected: message xid does not match session xid");
+            return Ok(Json(LinkWalletResponse::failure(
+                "Signed message does not match the authenticated X account.",
+            )));
+        }
+        None => {
+            return Ok(Json(LinkWalletResponse::failure(
+                "Malformed link message.",
+            )));
+        }
+    }
+
+    // 3. Mint a fresh Twitter access token from the stored refresh token. Never
+    //    trust the (possibly stale) token the browser may have sent.
+    let access_token = match mint_fresh_access_token(&state, &xid).await {
+        Ok(token) => token,
+        Err(FreshTokenError::ReauthRequired(msg)) => {
+            tracing::info!("Link wallet needs re-auth for xid {xid}: {msg}");
+            return Ok(Json(LinkWalletResponse::reauth(
+                "Your X session has expired. Please sign in with X again.",
+            )));
+        }
+        Err(FreshTokenError::Internal(msg)) => {
+            tracing::error!("Failed to mint fresh Twitter token for xid {xid}: {msg}");
+            return Ok(Json(LinkWalletResponse::failure(
+                "Could not verify your X session. Please try again.",
+            )));
+        }
+    };
+
+    // 4. Forward the FRESH token to the enclave for verification and signing.
     let enclave_client = EnclaveClient::new(&state.config.enclave_url);
 
     let signed_result = enclave_client
         .sign_secure_link_wallet(
-            &request.access_token,
+            &access_token,
             &request.wallet_address,
             &request.wallet_signature,
             &request.message,
@@ -246,11 +438,10 @@ pub async fn secure_link_wallet(
         Ok(payload) => payload,
         Err(err) => {
             tracing::error!("Enclave verification failed: {:?}", err);
-            return Ok(Json(LinkWalletResponse {
-                success: false,
-                tx_digest: None,
-                error: Some(format!("Verification failed: {}", err)),
-            }));
+            return Ok(Json(LinkWalletResponse::failure(format!(
+                "Verification failed: {}",
+                err
+            ))));
         }
     };
 
@@ -264,16 +455,15 @@ pub async fn secure_link_wallet(
         "Received secure link wallet signature from enclave"
     );
 
-    // 2. Build and submit transaction
+    // 5. Build and submit transaction
     let tx_builder = match SuiTransactionBuilder::new(state.config.clone()).await {
         Ok(builder) => builder,
         Err(err) => {
             tracing::error!("Failed to create transaction builder: {:?}", err);
-            return Ok(Json(LinkWalletResponse {
-                success: false,
-                tx_digest: None,
-                error: Some(format!("Failed to initialize: {}", err)),
-            }));
+            return Ok(Json(LinkWalletResponse::failure(format!(
+                "Failed to initialize: {}",
+                err
+            ))));
         }
     };
 
@@ -295,19 +485,14 @@ pub async fn secure_link_wallet(
     match tx_result {
         Ok(digest) => {
             tracing::info!("Link wallet transaction successful: {}", digest);
-            Ok(Json(LinkWalletResponse {
-                success: true,
-                tx_digest: Some(digest),
-                error: None,
-            }))
+            Ok(Json(LinkWalletResponse::success(digest)))
         }
         Err(err) => {
             tracing::error!("Link wallet transaction failed: {:?}", err);
-            Ok(Json(LinkWalletResponse {
-                success: false,
-                tx_digest: None,
-                error: Some(format!("Transaction failed: {}", err)),
-            }))
+            Ok(Json(LinkWalletResponse::failure(format!(
+                "Transaction failed: {}",
+                err
+            ))))
         }
     }
 }
@@ -621,6 +806,12 @@ pub struct AuthResponse {
     pub user: TwitterUserInfo,
     #[serde(rename = "accessToken")]
     pub access_token: String,
+    /// Backend session token. The SPA stores this and sends it as
+    /// `Authorization: Bearer <sessionToken>` on endpoints that act on the user's
+    /// behalf (e.g. wallet linking), where it — not the Twitter token — is the proof
+    /// of identity.
+    #[serde(rename = "sessionToken")]
+    pub session_token: String,
     #[serde(rename = "dugongAccount")]
     pub dugong_account: Option<DugongAccountInfo>,
     #[serde(
@@ -686,6 +877,31 @@ pub async fn exchange_twitter_token(
         "User authenticated successfully"
     );
 
+    // 2b. Persist the refresh token (encrypted) so the backend can mint fresh
+    //     access tokens later (e.g. for wallet linking) without forcing re-login.
+    //     A storage failure must not block login — the user can still re-auth if a
+    //     later action finds no stored token.
+    if let Err(err) = store_oauth_tokens(&state, &user_info.id, &token_response).await {
+        tracing::error!(
+            x_user_id = %user_info.id,
+            "Failed to persist Twitter refresh token: {err:?}"
+        );
+    }
+
+    // 2c. Issue the backend session token that authenticates this user on our own
+    //     endpoints. This is required to act on the user's behalf, so fail if it
+    //     cannot be issued (a misconfiguration caught at startup by
+    //     `ensure_token_security`, so this should not happen in practice).
+    let session_token = issue_session(&state.config, &user_info.id).map_err(|err| {
+        tracing::error!("Failed to issue session token: {err:?}");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AuthErrorResponse {
+                error: "Failed to establish session".to_string(),
+            }),
+        )
+    })?;
+
     // 3. Look up existing Dugong account
     let dugong_account = DugongAccount::find_by_x_user_id(&state.db, &user_info.id)
         .await
@@ -716,6 +932,7 @@ pub async fn exchange_twitter_token(
     Ok(Json(AuthResponse {
         user: user_info,
         access_token: token_response.access_token,
+        session_token,
         dugong_account,
         created_account_tx_digest: None,
     }))
@@ -866,9 +1083,22 @@ pub async fn ensure_dugong_account(
                 )
             })?;
 
+    // Issue a fresh backend session token for the already-authenticated user, so
+    // dapp sessions restored on reload (no OAuth callback) can still link wallets.
+    let session_token = issue_session(&state.config, &user_info.id).map_err(|err| {
+        tracing::error!("Failed to issue session token: {err:?}");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AuthErrorResponse {
+                error: "Failed to establish session".to_string(),
+            }),
+        )
+    })?;
+
     Ok(Json(AuthResponse {
         user: user_info,
         access_token: request.access_token,
+        session_token,
         dugong_account: Some(dugong_account),
         created_account_tx_digest,
     }))

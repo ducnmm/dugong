@@ -6,6 +6,7 @@ import type { LoginData, User } from './auth-context';
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true); // Start true for initial load
 
   // Load user from localStorage on mount
@@ -13,6 +14,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       const storedUser = localStorage.getItem(STORAGE_KEYS.USER);
       const storedToken = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+      const storedSession = localStorage.getItem(STORAGE_KEYS.SESSION_TOKEN);
 
       if (storedUser) {
         setUser(JSON.parse(storedUser));
@@ -20,18 +22,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (storedToken) {
         setAccessToken(storedToken);
       }
+      if (storedSession) {
+        setSessionToken(storedSession);
+      }
     } catch (error) {
       console.error('Failed to load user from storage:', error);
       // Clear corrupted data
       localStorage.removeItem(STORAGE_KEYS.USER);
       localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
+      localStorage.removeItem(STORAGE_KEYS.SESSION_TOKEN);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   // Login with X OAuth data
-  const login = useCallback((data: LoginData, token?: string) => {
+  const login = useCallback((data: LoginData, token?: string, session?: string) => {
     const newUser: User = {
       twitterHandle: data.twitterHandle,
       twitterUserId: data.twitterUserId,
@@ -45,6 +51,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (token) {
       setAccessToken(token);
       localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, token);
+    }
+
+    if (session) {
+      setSessionToken(session);
+      localStorage.setItem(STORAGE_KEYS.SESSION_TOKEN, session);
     }
   }, []);
 
@@ -71,8 +82,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const logout = useCallback(() => {
     setUser(null);
     setAccessToken(null);
+    setSessionToken(null);
     localStorage.removeItem(STORAGE_KEYS.USER);
     localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
+    localStorage.removeItem(STORAGE_KEYS.SESSION_TOKEN);
   }, []);
 
   // Update local state after wallet is linked (called by useLinkWallet hook)
@@ -96,6 +109,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         isAuthenticated: !!user,
         isLoading,
         accessToken,
+        sessionToken,
         login,
         loginWithWallet,
         logout,

@@ -130,6 +130,8 @@ railway variables --service api \
   --set 'ENOKI_API_KEY=...' \
   --set 'ENOKI_NETWORK=testnet' \
   --set 'BACKEND_SIGNER_PRIVATE_KEY=...' \
+  --set "TOKEN_ENCRYPTION_KEY=$(openssl rand -base64 32)" \
+  --set "SESSION_TOKEN_SECRET=$(openssl rand -base64 48)" \
   --set 'INDEXER_POLL_INTERVAL_MS=5000' \
   --set 'INDEXER_BATCH_SIZE=50'
 ```
@@ -137,6 +139,18 @@ railway variables --service api \
 > Do **not** set `PORT` — Railway injects it and `config.rs` reads it.
 > After the first deploy, generate a domain (step 8) and update
 > `TWITTER_OAUTH2_REDIRECT_URI` to the real `web` URL.
+
+> **`TOKEN_ENCRYPTION_KEY` / `SESSION_TOKEN_SECRET` (required).** The `api`
+> stores Twitter **refresh tokens encrypted at rest** and signs **backend
+> session tokens**, so it refuses to start (`ensure_token_security`) without
+> both. `TOKEN_ENCRYPTION_KEY` must decode to exactly 32 bytes (base64 or hex —
+> `openssl rand -base64 32`); `SESSION_TOKEN_SECRET` is any secret ≥ 16 chars
+> (`openssl rand -base64 48`). Use **distinct** values per environment — `api`
+> (production) and `api-dev` (dev) have separate databases, so they should not
+> share keys.
+> **Rotation:** changing either value invalidates already-stored refresh tokens
+> / issued sessions — there is no dual-key decrypt — so users simply re-login
+> once afterward. Treat both as long-lived secrets; never commit them.
 
 ### `nautilus`
 
