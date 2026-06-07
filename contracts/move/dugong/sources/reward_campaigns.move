@@ -8,11 +8,10 @@
 module dugong::reward_campaigns {
     use std::ascii;
     use std::string::{Self, String};
-    use std::type_name;
     use sui::bag::{Self, Bag};
     use sui::balance::Balance;
     use sui::table::{Self, Table};
-    use dugong::core::{Self, DugongAccount};
+    use dugong::dug::{Self, DugongAccount};
     use dugong::events;
 
     // ====== Status & Type Constants ======
@@ -66,30 +65,29 @@ module dugong::reward_campaigns {
         _signature: &vector<u8>,
         ctx: &mut TxContext,
     ) {
-        assert!(is_valid_campaign_type(campaign_type), core::e_invalid_campaign_type());
-        assert!(reward_amount > 0, core::e_invalid_reward_amount());
-        assert!(max_winners > 0 && max_winners <= MAX_WINNERS, core::e_too_many_winners());
+        assert!(is_valid_campaign_type(campaign_type), dug::e_invalid_campaign_type());
+        assert!(reward_amount > 0, dug::e_invalid_reward_amount());
+        assert!(max_winners > 0 && max_winners <= MAX_WINNERS, dug::e_too_many_winners());
 
         let campaign_tweet_id_str = string::utf8(campaign_tweet_id);
-        let processed_tweets = core::account_processed_tweets(creator);
-        assert!(!processed_tweets.contains(campaign_tweet_id_str), core::e_tweet_already_processed());
+        let processed_tweets = dug::account_processed_tweets(creator);
+        assert!(!processed_tweets.contains(campaign_tweet_id_str), dug::e_tweet_already_processed());
 
-        let expected_type = type_name::get<T>().into_string();
-        assert!(coin_type == expected_type.into_bytes(), core::e_coin_type_mismatch());
+        dug::assert_coin_type<T>(coin_type);
 
-        assert!(timestamp_ms > core::account_last_timestamp(creator), core::e_replay_attempt());
-        core::account_set_last_timestamp(creator, timestamp_ms);
-        core::account_add_processed_tweet(creator, campaign_tweet_id_str);
+        assert!(timestamp_ms > dug::account_last_timestamp(creator), dug::e_replay_attempt());
+        dug::account_set_last_timestamp(creator, timestamp_ms);
+        dug::account_add_processed_tweet(creator, campaign_tweet_id_str);
 
         let total_budget = reward_amount * max_winners;
         let mut campaign = RewardCampaign {
             id: object::new(ctx),
             campaign_tweet_id: campaign_tweet_id_str,
-            creator_xid: core::account_xid(creator),
+            creator_xid: dug::account_xid(creator),
             campaign_type,
             target: string::utf8(target),
             status: STATUS_OPEN,
-            coin_type: type_name::get<T>().into_string(),
+            coin_type: dug::coin_type<T>(),
             reward_amount,
             max_winners,
             selected_winners: 0,
@@ -131,23 +129,22 @@ module dugong::reward_campaigns {
         timestamp_ms: u64,
         _signature: &vector<u8>,
     ) {
-        assert!(campaign.status == STATUS_OPEN, core::e_campaign_closed());
-        assert!(core::account_xid(creator) == campaign.creator_xid, core::e_not_campaign_creator());
+        assert!(campaign.status == STATUS_OPEN, dug::e_campaign_closed());
+        assert!(dug::account_xid(creator) == campaign.creator_xid, dug::e_not_campaign_creator());
 
-        let expected_type = type_name::get<T>().into_string();
-        assert!(coin_type == expected_type.into_bytes(), core::e_coin_type_mismatch());
-        assert!(campaign.coin_type == type_name::get<T>().into_string(), core::e_coin_type_mismatch());
+        dug::assert_coin_type<T>(coin_type);
+        assert!(campaign.coin_type == dug::coin_type<T>(), dug::e_coin_type_mismatch());
 
         let solve_tweet_id_str = string::utf8(solve_tweet_id);
-        let processed_tweets = core::account_processed_tweets(creator);
-        assert!(!processed_tweets.contains(solve_tweet_id_str), core::e_tweet_already_processed());
+        let processed_tweets = dug::account_processed_tweets(creator);
+        assert!(!processed_tweets.contains(solve_tweet_id_str), dug::e_tweet_already_processed());
 
-        assert!(timestamp_ms > core::account_last_timestamp(creator), core::e_replay_attempt());
-        core::account_set_last_timestamp(creator, timestamp_ms);
-        core::account_add_processed_tweet(creator, solve_tweet_id_str);
+        assert!(timestamp_ms > dug::account_last_timestamp(creator), dug::e_replay_attempt());
+        dug::account_set_last_timestamp(creator, timestamp_ms);
+        dug::account_add_processed_tweet(creator, solve_tweet_id_str);
 
         let submitted_count = vector::length(&winner_xids);
-        assert!(submitted_count <= campaign.max_winners, core::e_too_many_winners());
+        assert!(submitted_count <= campaign.max_winners, dug::e_too_many_winners());
 
         let mut selected_winner_xids = vector::empty<String>();
         let mut i = 0;
@@ -196,16 +193,15 @@ module dugong::reward_campaigns {
         coin_type: vector<u8>,
         timestamp_ms: u64,
     ) {
-        assert!(campaign.status == STATUS_RESOLVED, core::e_campaign_not_resolved());
+        assert!(campaign.status == STATUS_RESOLVED, dug::e_campaign_not_resolved());
 
-        let expected_type = type_name::get<T>().into_string();
-        assert!(coin_type == expected_type.into_bytes(), core::e_coin_type_mismatch());
-        assert!(campaign.coin_type == type_name::get<T>().into_string(), core::e_coin_type_mismatch());
+        dug::assert_coin_type<T>(coin_type);
+        assert!(campaign.coin_type == dug::coin_type<T>(), dug::e_coin_type_mismatch());
 
-        let winner_xid = core::account_xid(winner);
-        assert!(campaign.entitlements.contains(winner_xid), core::e_no_reward_entitlement());
+        let winner_xid = dug::account_xid(winner);
+        assert!(campaign.entitlements.contains(winner_xid), dug::e_no_reward_entitlement());
         let entitlement = campaign.entitlements.borrow_mut(winner_xid);
-        assert!(!entitlement.claimed, core::e_reward_already_claimed());
+        assert!(!entitlement.claimed, dug::e_reward_already_claimed());
 
         let amount = entitlement.amount;
         entitlement.claimed = true;
@@ -280,13 +276,8 @@ module dugong::reward_campaigns {
         campaign: &mut RewardCampaign,
         amount: u64,
     ) {
-        let type_key = type_name::get<T>().into_string();
-        let account_balances = core::account_balances_mut(account);
-        assert!(account_balances.contains(type_key), core::e_insufficient_balance());
-
-        let account_balance = account_balances.borrow_mut<ascii::String, Balance<T>>(type_key);
-        assert!(account_balance.value() >= amount, core::e_insufficient_balance());
-        let stake = account_balance.split(amount);
+        let type_key = dug::coin_type<T>();
+        let stake = dug::account_debit_balance<T>(account, amount);
 
         if (campaign.escrow.contains(type_key)) {
             let escrow_balance = campaign.escrow.borrow_mut<ascii::String, Balance<T>>(type_key);
@@ -301,19 +292,13 @@ module dugong::reward_campaigns {
         account: &mut DugongAccount,
         amount: u64,
     ) {
-        let type_key = type_name::get<T>().into_string();
-        assert!(campaign.escrow.contains(type_key), core::e_insufficient_balance());
+        let type_key = dug::coin_type<T>();
+        assert!(campaign.escrow.contains(type_key), dug::e_insufficient_balance());
 
         let escrow_balance = campaign.escrow.borrow_mut<ascii::String, Balance<T>>(type_key);
-        assert!(escrow_balance.value() >= amount, core::e_insufficient_balance());
+        assert!(escrow_balance.value() >= amount, dug::e_insufficient_balance());
         let payout = escrow_balance.split(amount);
 
-        let account_balances = core::account_balances_mut(account);
-        if (account_balances.contains(type_key)) {
-            let account_balance = account_balances.borrow_mut<ascii::String, Balance<T>>(type_key);
-            account_balance.join(payout);
-        } else {
-            account_balances.add(type_key, payout);
-        };
+        dug::account_credit_balance(account, payout);
     }
 }

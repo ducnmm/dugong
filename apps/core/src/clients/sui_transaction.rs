@@ -772,7 +772,7 @@ impl SuiTransactionBuilder {
     /// - "0x2::sui::SUI" -> "0x2::sui::SUI" (already full)
     ///
     /// Note: Testnet addresses - update these for mainnet deployment
-    fn expand_coin_type(coin_type: &str) -> String {
+    fn expand_coin_type(&self, coin_type: &str) -> String {
         match coin_type.to_uppercase().as_str() {
             "SUI" => "0x2::sui::SUI".to_string(),
             "USDC" => {
@@ -783,6 +783,7 @@ impl SuiTransactionBuilder {
                 "0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL"
                     .to_string()
             }
+            "DUG" | "CORE" => format!("{}::dug::DUG", self.config.dugong_package_id),
             _ => {
                 // If already contains "::", assume it's a full type path
                 if coin_type.contains("::") {
@@ -798,9 +799,9 @@ impl SuiTransactionBuilder {
 
     /// Convert coin type to canonical format expected by Move's type_name
     /// e.g., "0x2::sui::SUI" -> "0000000000000000000000000000000000000000000000000000000000000002::sui::SUI"
-    fn to_canonical_coin_type(coin_type: &str) -> String {
+    fn to_canonical_coin_type(&self, coin_type: &str) -> String {
         // First expand shorthand
-        let expanded = Self::expand_coin_type(coin_type);
+        let expanded = self.expand_coin_type(coin_type);
 
         // Then convert address prefix to canonical format (64 hex chars without 0x)
         if let Some(rest) = expanded.strip_prefix("0x") {
@@ -831,7 +832,7 @@ impl SuiTransactionBuilder {
         let mut ptb = ProgrammableTransactionBuilder::new();
 
         // Expand shorthand coin type to full type path
-        let full_coin_type = Self::expand_coin_type(coin_type);
+        let full_coin_type = self.expand_coin_type(coin_type);
 
         // Parse coin type as TypeTag
         let coin_type_tag = TypeTag::from_str(&full_coin_type).with_context(|| {
@@ -871,7 +872,7 @@ impl SuiTransactionBuilder {
         let amount_arg = ptb.pure(amount)?;
 
         // 4. coin_type: vector<u8> - must match Move's type_name format (canonical, no 0x prefix)
-        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+        let canonical_coin_type = self.to_canonical_coin_type(coin_type);
         let coin_type_bytes = canonical_coin_type.as_bytes().to_vec();
         let coin_type_arg = ptb.pure(coin_type_bytes)?;
 
@@ -959,7 +960,7 @@ impl SuiTransactionBuilder {
         let mut ptb = ProgrammableTransactionBuilder::new();
 
         // Expand shorthand coin type to full type path
-        let full_coin_type = Self::expand_coin_type(coin_type);
+        let full_coin_type = self.expand_coin_type(coin_type);
 
         // Parse coin type as TypeTag
         let coin_type_tag = TypeTag::from_str(&full_coin_type).with_context(|| {
@@ -1457,8 +1458,7 @@ impl SuiTransactionBuilder {
             market_object_id, better_account_id, amount, side
         );
 
-        let market_id =
-            ObjectID::from_str(market_object_id).context("Invalid market object ID")?;
+        let market_id = ObjectID::from_str(market_object_id).context("Invalid market object ID")?;
         let market_ref = self.get_object_ref(market_id).await?;
         let better_id =
             ObjectID::from_str(better_account_id).context("Invalid better account object ID")?;
@@ -1494,10 +1494,10 @@ impl SuiTransactionBuilder {
         let mut ptb = ProgrammableTransactionBuilder::new();
         let package_id = ObjectID::from_str(&self.config.dugong_package_id)
             .context("Invalid DUGONG_PACKAGE_ID")?;
-        let full_coin_type = Self::expand_coin_type(coin_type);
+        let full_coin_type = self.expand_coin_type(coin_type);
         let coin_type_tag =
             TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
-        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+        let canonical_coin_type = self.to_canonical_coin_type(coin_type);
 
         let market_arg = ptb.obj(ObjectArg::SharedObject {
             id: market.0,
@@ -1553,8 +1553,7 @@ impl SuiTransactionBuilder {
             market_object_id, resolver_xid, outcome
         );
 
-        let market_id =
-            ObjectID::from_str(market_object_id).context("Invalid market object ID")?;
+        let market_id = ObjectID::from_str(market_object_id).context("Invalid market object ID")?;
         let market_ref = self.get_object_ref(market_id).await?;
         let treasury_id = ObjectID::from_str(&self.config.market_treasury_account_id)
             .context("Invalid MARKET_TREASURY_ACCOUNT_ID")?;
@@ -1588,7 +1587,7 @@ impl SuiTransactionBuilder {
         let mut ptb = ProgrammableTransactionBuilder::new();
         let package_id = ObjectID::from_str(&self.config.dugong_package_id)
             .context("Invalid DUGONG_PACKAGE_ID")?;
-        let full_coin_type = Self::expand_coin_type(coin_type);
+        let full_coin_type = self.expand_coin_type(coin_type);
         let coin_type_tag =
             TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
 
@@ -1639,8 +1638,7 @@ impl SuiTransactionBuilder {
             market_object_id, winner_account_id
         );
 
-        let market_id =
-            ObjectID::from_str(market_object_id).context("Invalid market object ID")?;
+        let market_id = ObjectID::from_str(market_object_id).context("Invalid market object ID")?;
         let market_ref = self.get_object_ref(market_id).await?;
         let winner_id =
             ObjectID::from_str(winner_account_id).context("Invalid winner account object ID")?;
@@ -1662,7 +1660,7 @@ impl SuiTransactionBuilder {
         let mut ptb = ProgrammableTransactionBuilder::new();
         let package_id = ObjectID::from_str(&self.config.dugong_package_id)
             .context("Invalid DUGONG_PACKAGE_ID")?;
-        let full_coin_type = Self::expand_coin_type(coin_type);
+        let full_coin_type = self.expand_coin_type(coin_type);
         let coin_type_tag =
             TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
 
@@ -1714,10 +1712,10 @@ impl SuiTransactionBuilder {
         let mut ptb = ProgrammableTransactionBuilder::new();
         let package_id = ObjectID::from_str(&self.config.dugong_package_id)
             .context("Invalid DUGONG_PACKAGE_ID")?;
-        let full_coin_type = Self::expand_coin_type(coin_type);
+        let full_coin_type = self.expand_coin_type(coin_type);
         let coin_type_tag =
             TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
-        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+        let canonical_coin_type = self.to_canonical_coin_type(coin_type);
 
         let creator_arg = ptb.obj(ObjectArg::SharedObject {
             id: creator_ref.0,
@@ -1785,10 +1783,10 @@ impl SuiTransactionBuilder {
         let mut ptb = ProgrammableTransactionBuilder::new();
         let package_id = ObjectID::from_str(&self.config.dugong_package_id)
             .context("Invalid DUGONG_PACKAGE_ID")?;
-        let full_coin_type = Self::expand_coin_type(coin_type);
+        let full_coin_type = self.expand_coin_type(coin_type);
         let coin_type_tag =
             TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
-        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+        let canonical_coin_type = self.to_canonical_coin_type(coin_type);
 
         let campaign_arg = ptb.obj(ObjectArg::SharedObject {
             id: campaign_ref.0,
@@ -1852,10 +1850,10 @@ impl SuiTransactionBuilder {
         let mut ptb = ProgrammableTransactionBuilder::new();
         let package_id = ObjectID::from_str(&self.config.dugong_package_id)
             .context("Invalid DUGONG_PACKAGE_ID")?;
-        let full_coin_type = Self::expand_coin_type(coin_type);
+        let full_coin_type = self.expand_coin_type(coin_type);
         let coin_type_tag =
             TypeTag::from_str(&full_coin_type).context("Failed to parse coin type")?;
-        let canonical_coin_type = Self::to_canonical_coin_type(coin_type);
+        let canonical_coin_type = self.to_canonical_coin_type(coin_type);
 
         let campaign_arg = ptb.obj(ObjectArg::SharedObject {
             id: campaign_ref.0,
@@ -1883,10 +1881,7 @@ impl SuiTransactionBuilder {
     }
 
     /// Finalize PTB into TransactionData with gas pricing
-    async fn finish_ptb(
-        &self,
-        ptb: ProgrammableTransactionBuilder,
-    ) -> Result<TransactionData> {
+    async fn finish_ptb(&self, ptb: ProgrammableTransactionBuilder) -> Result<TransactionData> {
         let pt = ptb.finish();
         let gas_price = self
             .sui_client

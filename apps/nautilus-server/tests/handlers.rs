@@ -1,8 +1,8 @@
 //! HTTP-handler integration tests for the dugong enclave endpoints.
 //!
 //! Each test boots the real Axum router (`build_router`) on an ephemeral port
-//! with a deterministic test keypair, points its outbound TwitterAPI.io /
-//! Twitter calls at a wiremock server, and drives it over real HTTP.
+//! with a deterministic test keypair, points outbound X API calls at a
+//! wiremock server, and drives it over real HTTP.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,20 +28,23 @@ fn now_ms() -> u64 {
 }
 
 /// Boot the enclave router on an ephemeral port, returning its base URL.
-async fn spawn_app(twitterapi_io_base_url: String, twitter_api_base_url: String) -> String {
+async fn spawn_app(twitter_api_base_url: String) -> String {
     let eph_kp = Ed25519KeyPair::generate(&mut rand::rngs::StdRng::from_seed([7u8; 32]));
     let state = Arc::new(AppState {
         eph_kp,
         api_key: "test-key".to_string(),
-        twitterapi_io_base_url,
+        twitterapi_io_base_url: twitter_api_base_url.clone(),
         twitter_api_base_url,
+        dugong_package_id: "0x0".to_string(),
     });
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = build_router(state);
     tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service()).await.unwrap();
+        axum::serve(listener, app.into_make_service())
+            .await
+            .unwrap();
     });
 
     format!("http://{}", addr)
@@ -51,19 +54,21 @@ async fn spawn_app(twitterapi_io_base_url: String, twitter_api_base_url: String)
 async fn process_tweet_create_account_returns_signed_payload() {
     let twitter = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/twitter/tweets"))
+        .and(path("/2/tweets/123"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "status": "success",
-            "tweets": [{
+            "data": {
                 "id": "123",
                 "text": "@dugong create account",
-                "author": { "id": "555", "userName": "alice" }
-            }]
+                "author_id": "555"
+            },
+            "includes": {
+                "users": [{ "id": "555", "username": "alice" }]
+            }
         })))
         .mount(&twitter)
         .await;
 
-    let base = spawn_app(twitter.uri(), "http://unused".to_string()).await;
+    let base = spawn_app(twitter.uri()).await;
 
     let resp = reqwest::Client::new()
         .post(format!("{base}/process_tweet"))
@@ -84,24 +89,26 @@ async fn process_tweet_create_account_returns_signed_payload() {
 async fn process_tweet_transfer_resolves_mentioned_user() {
     let twitter = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/twitter/tweets"))
+        .and(path("/2/tweets/200"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "status": "success",
-            "tweets": [{
+            "data": {
                 "id": "200",
                 "text": "@dugong send 5 SUI to @bob",
-                "author": { "id": "111", "userName": "alice" },
+                "author_id": "111",
                 "entities": {
-                    "user_mentions": [
-                        { "id_str": "999", "screen_name": "bob" }
+                    "mentions": [
+                        { "id": "999", "username": "bob" }
                     ]
                 }
-            }]
+            },
+            "includes": {
+                "users": [{ "id": "111", "username": "alice" }]
+            }
         })))
         .mount(&twitter)
         .await;
 
-    let base = spawn_app(twitter.uri(), "http://unused".to_string()).await;
+    let base = spawn_app(twitter.uri()).await;
 
     let resp = reqwest::Client::new()
         .post(format!("{base}/process_tweet"))
@@ -122,7 +129,7 @@ async fn process_tweet_transfer_resolves_mentioned_user() {
 #[tokio::test]
 async fn process_tweet_invalid_url_returns_bad_request() {
     // The URL regex fails before any HTTP call, so no mock is needed.
-    let base = spawn_app("http://unused".to_string(), "http://unused".to_string()).await;
+    let base = spawn_app("http://unused".to_string()).await;
 
     let resp = reqwest::Client::new()
         .post(format!("{base}/process_tweet"))
@@ -133,13 +140,16 @@ async fn process_tweet_invalid_url_returns_bad_request() {
 
     assert_eq!(resp.status(), 400);
     let body: Value = resp.json().await.unwrap();
-    assert!(body["error"].as_str().unwrap().contains("Invalid tweet URL"));
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid tweet URL"));
 }
 
 #[tokio::test]
 async fn process_init_account_returns_signed_payload() {
     // No external HTTP: the handler mocks the handle internally.
-    let base = spawn_app("http://unused".to_string(), "http://unused".to_string()).await;
+    let base = spawn_app("http://unused".to_string()).await;
 
     let resp = reqwest::Client::new()
         .post(format!("{base}/process_init_account"))
@@ -194,7 +204,7 @@ async fn process_secure_link_wallet_verifies_token_and_signature() {
         .mount(&twitter)
         .await;
 
-    let base = spawn_app("http://unused".to_string(), twitter.uri()).await;
+    let base = spawn_app(twitter.uri()).await;
 
     let resp = reqwest::Client::new()
         .post(format!("{base}/process_secure_link_wallet"))
@@ -222,7 +232,7 @@ async fn process_secure_link_wallet_rejects_invalid_token() {
     // No mock is mounted, so the wiremock server replies 404 to /2/users/me;
     // assert the handler surfaces that upstream failure as a 400 EnclaveError.
     let twitter = MockServer::start().await;
-    let base = spawn_app("http://unused".to_string(), twitter.uri()).await;
+    let base = spawn_app(twitter.uri()).await;
 
     let resp = reqwest::Client::new()
         .post(format!("{base}/process_secure_link_wallet"))
@@ -239,5 +249,8 @@ async fn process_secure_link_wallet_rejects_invalid_token() {
 
     assert_eq!(resp.status(), 400);
     let body: Value = resp.json().await.unwrap();
-    assert!(body["error"].as_str().unwrap().contains("Twitter API returned error"));
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("Twitter API returned error"));
 }

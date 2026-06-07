@@ -22,7 +22,10 @@ macro_rules! redis_or_skip {
         match try_redis().await {
             Some(r) => r,
             None => {
-                eprintln!("skipping: Redis unreachable at {}", common::test_redis_url());
+                eprintln!(
+                    "skipping: Redis unreachable at {}",
+                    common::test_redis_url()
+                );
                 return;
             }
         }

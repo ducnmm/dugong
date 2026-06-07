@@ -59,7 +59,10 @@ async fn fetch_events_empty_page() {
     let fetcher = EventFetcher::new(test_config(server.uri(), "0x9".to_string()))
         .await
         .expect("fetcher");
-    let page = fetcher.fetch_events(Some("CURSOR:1"), 50).await.expect("fetch");
+    let page = fetcher
+        .fetch_events(Some("CURSOR:1"), 50)
+        .await
+        .expect("fetch");
 
     assert!(page.data.is_empty());
     assert!(!page.has_next_page);

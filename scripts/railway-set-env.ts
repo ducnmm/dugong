@@ -1,14 +1,14 @@
 #!/usr/bin/env -S npx --yes tsx
 // Push each service's local .env file into Railway, applying deploy-time
 // overrides (DB/Redis -> plugin references, rewrite localhost URLs to public /
-// internal Railway hostnames, point the worker at the api over the private
-// network). PORT is kept so the api listens on a fixed port the worker can reach.
+// internal Railway hostnames). The official X Account Activity webhook posts
+// directly to the public api service; no poller worker service is required.
 //
 // Usage:
 //   scripts/railway-set-env.ts <service|all> [flags]
 //
-// Production services: api, indexer, worker, nautilus, web
-// Dev services:        api-dev, indexer-dev, worker-dev, nautilus-dev, web-dev
+// Production services: api, indexer, nautilus, web
+// Dev services:        api-dev, indexer-dev, nautilus-dev, web-dev
 //
 // Flags:
 //   --dry-run                 Print the `railway variables ...` command instead of running it.
@@ -113,6 +113,8 @@ function makeWebRewrite(): Service["rewrite"] {
           return null;
         }
         return `https://${ctx.nautilusDomain}`;
+      case "VITE_DOCS_URL":
+        return "https://github.com/ducnmm/dugong/tree/main/docs/site";
       case "VITE_TWITTER_REDIRECT_URI":
         if (!ctx.webDomain) {
           warn(`VITE_TWITTER_REDIRECT_URI kept as-is ('${val}'); pass --web-domain to rewrite`);
@@ -125,14 +127,8 @@ function makeWebRewrite(): Service["rewrite"] {
   };
 }
 
-// Production services. PORT is kept (not dropped): the api pins PORT=43001 from
-// its .env so it listens on a fixed port that the worker reaches over Railway's
-// private network (BACKEND_URL=http://api.railway.internal:43001) — same shape
-// as the dev setup below.
-const PROD_SERVICES = ["api", "indexer", "worker", "nautilus", "web"] as const;
-// Dev services — PORT is kept at the value from .env so internal networking
-// uses a predictable port (worker-dev references api-dev on that port).
-const DEV_SERVICES  = ["api-dev", "indexer-dev", "worker-dev", "nautilus-dev", "web-dev"] as const;
+const PROD_SERVICES = ["api", "indexer", "nautilus", "web"] as const;
+const DEV_SERVICES  = ["api-dev", "indexer-dev", "nautilus-dev", "web-dev"] as const;
 
 type EnvDefaults = {
   webDomain?: string;
@@ -165,23 +161,12 @@ const services: Record<string, Service> = {
   api: {
     name: "api",
     envFile: "apps/api/.env",
-    // PORT is kept (43001 from .env) so the worker can reach the api on a fixed
-    // private port — Railway routes the public domain to that port too.
     rewrite: apiRewrite,
   },
   indexer: {
     name: "indexer",
     envFile: "apps/indexer/.env",
     rewrite: indexerRewrite,
-  },
-  worker: {
-    name: "worker",
-    envFile: "apps/worker/.env",
-    rewrite(key, val) {
-      // Reach the api over Railway's private network on its pinned port (43001).
-      if (key === "BACKEND_URL") return "http://api.railway.internal:43001";
-      return val;
-    },
   },
   nautilus: {
     name: "nautilus",
@@ -202,7 +187,6 @@ const services: Record<string, Service> = {
   },
 
   // ── Dev ─────────────────────────────────────────────────────────────────
-  // PORT is kept (not dropped) so worker-dev can reach api-dev on a fixed port.
   "api-dev": {
     name: "api-dev",
     envFile: "apps/api/.env",
@@ -212,14 +196,6 @@ const services: Record<string, Service> = {
     name: "indexer-dev",
     envFile: "apps/indexer/.env",
     rewrite: indexerDevRewrite,
-  },
-  "worker-dev": {
-    name: "worker-dev",
-    envFile: "apps/worker/.env",
-    rewrite(key, val, ctx) {
-      if (key === "BACKEND_URL") return "http://api-dev.railway.internal:43001";
-      return val;
-    },
   },
   "nautilus-dev": {
     name: "nautilus-dev",

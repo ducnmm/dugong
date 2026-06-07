@@ -6,7 +6,7 @@ module dugong::markets_tests {
     use sui::test_scenario::{Self as ts, Scenario};
     use sui::coin;
     use sui::sui::SUI;
-    use dugong::core::{Self, DugongRegistry, DugongAccount};
+    use dugong::dug::{Self, DugongRegistry, DugongAccount};
     use dugong::markets::{Self, PredictionMarket, MarketRegistry};
     use dugong::account;
 
@@ -14,6 +14,7 @@ module dugong::markets_tests {
     fun creator(): address { @0xCAFE }
     fun better_a(): address { @0xA }
     fun better_b(): address { @0xB }
+    fun better_c(): address { @0xC }
     fun treasury_addr(): address { @0xFEE }
 
     // Create a shared DugongAccount for testing with initial SUI balance
@@ -24,14 +25,23 @@ module dugong::markets_tests {
             account::init_account_no_signature(&mut registry, xid, handle, ts::ctx(scenario));
             ts::return_shared(registry);
         };
+        ts::next_tx(scenario, owner);
+        {
+            let registry = ts::take_shared<DugongRegistry>(scenario);
+            let account_id = dug::registry_get_account_id(&registry, std::string::utf8(xid));
+            let mut account = ts::take_shared_by_id<DugongAccount>(scenario, account_id);
+            dug::account_set_owner_address(&mut account, owner);
+            ts::return_shared(account);
+            ts::return_shared(registry);
+        };
     }
 
     // Deposit SUI into an account (using test mint)
-    fun deposit_sui(scenario: &mut Scenario, account_xid: vector<u8>, amount: u64) {
-        ts::next_tx(scenario, creator());
+    fun deposit_sui(scenario: &mut Scenario, owner: address, account_xid: vector<u8>, amount: u64) {
+        ts::next_tx(scenario, owner);
         {
             let registry = ts::take_shared<DugongRegistry>(scenario);
-            let account_id = core::registry_get_account_id(&registry, std::string::utf8(account_xid));
+            let account_id = dug::registry_get_account_id(&registry, std::string::utf8(account_xid));
             let mut account = ts::take_shared_by_id<DugongAccount>(scenario, account_id);
             let coin = coin::mint_for_testing<SUI>(amount, ts::ctx(scenario));
             dugong::assets::deposit_coin<SUI>(&mut account, coin, ts::ctx(scenario));
@@ -48,7 +58,7 @@ module dugong::markets_tests {
 
         // Init core registry and markets registry
         ts::next_tx(&mut scenario, creator());
-        { core::init_for_testing(ts::ctx(&mut scenario)); };
+        { dug::init_for_testing(ts::ctx(&mut scenario)); };
 
         ts::next_tx(&mut scenario, creator());
         { markets::init_for_testing(ts::ctx(&mut scenario)); };
@@ -74,12 +84,12 @@ module dugong::markets_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 16)] // EMarketTweetAlreadyUsed
+    #[expected_failure(abort_code = 16, location = dugong::markets)] // EMarketTweetAlreadyUsed
     fun test_create_market_duplicate_rejected() {
         let mut scenario = ts::begin(creator());
 
         ts::next_tx(&mut scenario, creator());
-        { core::init_for_testing(ts::ctx(&mut scenario)); };
+        { dug::init_for_testing(ts::ctx(&mut scenario)); };
 
         ts::next_tx(&mut scenario, creator());
         { markets::init_for_testing(ts::ctx(&mut scenario)); };
@@ -102,6 +112,30 @@ module dugong::markets_tests {
         ts::end(scenario);
     }
 
+    #[test]
+    #[expected_failure(abort_code = 17, location = dugong::markets)] // EInvalidMarketFee
+    fun test_create_market_rejects_fee_above_100_percent() {
+        let mut scenario = ts::begin(creator());
+
+        ts::next_tx(&mut scenario, creator());
+        { dug::init_for_testing(ts::ctx(&mut scenario)); };
+
+        ts::next_tx(&mut scenario, creator());
+        { markets::init_for_testing(ts::ctx(&mut scenario)); };
+
+        ts::next_tx(&mut scenario, creator());
+        {
+            let mut registry = ts::take_shared<MarketRegistry>(&scenario);
+            markets::create_market(
+                &mut registry, b"creator_xid", b"tweet_bad_fee",
+                b"Q?", 10_001, 1000, &b"sig", ts::ctx(&mut scenario),
+            );
+            ts::return_shared(registry);
+        };
+
+        ts::end(scenario);
+    }
+
     // ====== Test: Place bet ======
 
     #[test]
@@ -109,13 +143,13 @@ module dugong::markets_tests {
         let mut scenario = ts::begin(creator());
 
         ts::next_tx(&mut scenario, creator());
-        { core::init_for_testing(ts::ctx(&mut scenario)); };
+        { dug::init_for_testing(ts::ctx(&mut scenario)); };
         ts::next_tx(&mut scenario, creator());
         { markets::init_for_testing(ts::ctx(&mut scenario)); };
 
         // Create accounts
         setup_account(&mut scenario, better_a(), b"xid_a", b"alice");
-        deposit_sui(&mut scenario, b"xid_a", 10_000_000_000); // 10 SUI
+        deposit_sui(&mut scenario, better_a(), b"xid_a", 10_000_000_000); // 10 SUI
 
         // Create market
         ts::next_tx(&mut scenario, creator());
@@ -136,10 +170,10 @@ module dugong::markets_tests {
             let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
 
             let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
-            let acct_id = core::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_a"));
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_a"));
             let mut better = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
 
-            let sui_type = std::type_name::get<SUI>().into_string().into_bytes();
+            let sui_type = std::type_name::with_defining_ids<SUI>().into_string().into_bytes();
             markets::place_bet<SUI>(
                 &mut market, &mut better,
                 5_000_000_000, // 5 SUI
@@ -162,16 +196,16 @@ module dugong::markets_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 14)] // EBetAlreadyProcessed
+    #[expected_failure(abort_code = 14, location = dugong::markets)] // EBetAlreadyProcessed
     fun test_bet_idempotency() {
         let mut scenario = ts::begin(creator());
         ts::next_tx(&mut scenario, creator());
-        { core::init_for_testing(ts::ctx(&mut scenario)); };
+        { dug::init_for_testing(ts::ctx(&mut scenario)); };
         ts::next_tx(&mut scenario, creator());
         { markets::init_for_testing(ts::ctx(&mut scenario)); };
 
         setup_account(&mut scenario, better_a(), b"xid_a2", b"alice2");
-        deposit_sui(&mut scenario, b"xid_a2", 20_000_000_000);
+        deposit_sui(&mut scenario, better_a(), b"xid_a2", 20_000_000_000);
 
         ts::next_tx(&mut scenario, creator());
         {
@@ -189,9 +223,9 @@ module dugong::markets_tests {
             let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_idem"));
             let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
             let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
-            let acct_id = core::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_a2"));
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_a2"));
             let mut better = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
-            let sui_type = std::type_name::get<SUI>().into_string().into_bytes();
+            let sui_type = std::type_name::with_defining_ids<SUI>().into_string().into_bytes();
 
             markets::place_bet<SUI>(&mut market, &mut better, 1_000_000_000, true, b"dup_bet", sui_type, 2000, &b"sig", ts::ctx(&mut scenario));
             // Same bet_tweet_id should abort
@@ -212,15 +246,15 @@ module dugong::markets_tests {
     fun test_resolve_parimutuel_payout() {
         let mut scenario = ts::begin(creator());
         ts::next_tx(&mut scenario, creator());
-        { core::init_for_testing(ts::ctx(&mut scenario)); };
+        { dug::init_for_testing(ts::ctx(&mut scenario)); };
         ts::next_tx(&mut scenario, creator());
         { markets::init_for_testing(ts::ctx(&mut scenario)); };
 
         setup_account(&mut scenario, better_a(), b"xid_pa", b"alice_p");
         setup_account(&mut scenario, better_b(), b"xid_pb", b"bob_p");
         setup_account(&mut scenario, treasury_addr(), b"xid_treasury", b"treasury");
-        deposit_sui(&mut scenario, b"xid_pa", 10_000_000_000); // 10 SUI yes
-        deposit_sui(&mut scenario, b"xid_pb", 10_000_000_000); // 10 SUI no
+        deposit_sui(&mut scenario, better_a(), b"xid_pa", 10_000_000_000); // 10 SUI yes
+        deposit_sui(&mut scenario, better_b(), b"xid_pb", 10_000_000_000); // 10 SUI no
 
         ts::next_tx(&mut scenario, creator());
         {
@@ -240,9 +274,9 @@ module dugong::markets_tests {
             let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_resolve"));
             let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
             let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
-            let acct_id = core::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_pa"));
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_pa"));
             let mut better = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
-            let sui_type = std::type_name::get<SUI>().into_string().into_bytes();
+            let sui_type = std::type_name::with_defining_ids<SUI>().into_string().into_bytes();
             markets::place_bet<SUI>(&mut market, &mut better, 6_000_000_000, true, b"b1", sui_type, 2000, &b"sig", ts::ctx(&mut scenario));
             ts::return_shared(market);
             ts::return_shared(acct_reg);
@@ -256,9 +290,9 @@ module dugong::markets_tests {
             let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_resolve"));
             let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
             let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
-            let acct_id = core::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_pb"));
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_pb"));
             let mut better = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
-            let sui_type = std::type_name::get<SUI>().into_string().into_bytes();
+            let sui_type = std::type_name::with_defining_ids<SUI>().into_string().into_bytes();
             markets::place_bet<SUI>(&mut market, &mut better, 4_000_000_000, false, b"b2", sui_type, 3000, &b"sig", ts::ctx(&mut scenario));
             ts::return_shared(market);
             ts::return_shared(acct_reg);
@@ -273,7 +307,7 @@ module dugong::markets_tests {
             let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_resolve"));
             let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
             let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
-            let treasury_id = core::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_treasury"));
+            let treasury_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_treasury"));
             let mut treasury_acct = ts::take_shared_by_id<DugongAccount>(&scenario, treasury_id);
 
             markets::resolve_market<SUI>(
@@ -297,7 +331,7 @@ module dugong::markets_tests {
             let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_resolve"));
             let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
             let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
-            let acct_id = core::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_pa"));
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_pa"));
             let mut winner = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
 
             markets::pay_winner<SUI>(&mut market, &mut winner);
@@ -316,11 +350,227 @@ module dugong::markets_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 13)] // ENotMarketCreator
+    fun test_resolve_caps_fee_to_losing_pool() {
+        let mut scenario = ts::begin(creator());
+        ts::next_tx(&mut scenario, creator());
+        { dug::init_for_testing(ts::ctx(&mut scenario)); };
+        ts::next_tx(&mut scenario, creator());
+        { markets::init_for_testing(ts::ctx(&mut scenario)); };
+
+        setup_account(&mut scenario, better_a(), b"xid_cap_a", b"alice_cap");
+        setup_account(&mut scenario, better_b(), b"xid_cap_b", b"bob_cap");
+        setup_account(&mut scenario, treasury_addr(), b"xid_cap_treasury", b"treasury_cap");
+        deposit_sui(&mut scenario, better_a(), b"xid_cap_a", 10_000_000_000);
+        deposit_sui(&mut scenario, better_b(), b"xid_cap_b", 10_000_000_000);
+
+        ts::next_tx(&mut scenario, creator());
+        {
+            let mut market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            markets::create_market(
+                &mut market_reg, b"creator_xid", b"tweet_fee_cap",
+                b"Q?", 10_000, 1000, &b"sig", ts::ctx(&mut scenario),
+            );
+            ts::return_shared(market_reg);
+        };
+
+        ts::next_tx(&mut scenario, better_a());
+        {
+            let market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_fee_cap"));
+            let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
+            let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_cap_a"));
+            let mut better = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
+            let sui_type = std::type_name::with_defining_ids<SUI>().into_string().into_bytes();
+            markets::place_bet<SUI>(&mut market, &mut better, 9_000_000_000, true, b"cap_a", sui_type, 2000, &b"sig", ts::ctx(&mut scenario));
+            ts::return_shared(market);
+            ts::return_shared(acct_reg);
+            ts::return_shared(better);
+            ts::return_shared(market_reg);
+        };
+
+        ts::next_tx(&mut scenario, better_b());
+        {
+            let market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_fee_cap"));
+            let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
+            let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_cap_b"));
+            let mut better = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
+            let sui_type = std::type_name::with_defining_ids<SUI>().into_string().into_bytes();
+            markets::place_bet<SUI>(&mut market, &mut better, 1_000_000_000, false, b"cap_b", sui_type, 3000, &b"sig", ts::ctx(&mut scenario));
+            ts::return_shared(market);
+            ts::return_shared(acct_reg);
+            ts::return_shared(better);
+            ts::return_shared(market_reg);
+        };
+
+        ts::next_tx(&mut scenario, creator());
+        {
+            let market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_fee_cap"));
+            let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
+            let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
+            let treasury_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_cap_treasury"));
+            let mut treasury_acct = ts::take_shared_by_id<DugongAccount>(&scenario, treasury_id);
+            markets::resolve_market<SUI>(&mut market, &mut treasury_acct, b"creator_xid", true, 4000, &b"sig");
+            assert!(markets::pool_distributable<SUI>(&market) == 9_000_000_000);
+            ts::return_shared(market);
+            ts::return_shared(acct_reg);
+            ts::return_shared(treasury_acct);
+            ts::return_shared(market_reg);
+        };
+
+        ts::next_tx(&mut scenario, better_a());
+        {
+            let market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_fee_cap"));
+            let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
+            let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_cap_a"));
+            let mut winner = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
+            markets::pay_winner<SUI>(&mut market, &mut winner);
+            assert!(dugong::assets::get_balance<SUI>(&winner) == 10_000_000_000);
+            ts::return_shared(market);
+            ts::return_shared(acct_reg);
+            ts::return_shared(winner);
+            ts::return_shared(market_reg);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_resolve_parimutuel_pays_multiple_winners_from_original_pool() {
+        let mut scenario = ts::begin(creator());
+        ts::next_tx(&mut scenario, creator());
+        { dug::init_for_testing(ts::ctx(&mut scenario)); };
+        ts::next_tx(&mut scenario, creator());
+        { markets::init_for_testing(ts::ctx(&mut scenario)); };
+
+        setup_account(&mut scenario, better_a(), b"xid_multi_a", b"alice_multi");
+        setup_account(&mut scenario, better_b(), b"xid_multi_b", b"bob_multi");
+        setup_account(&mut scenario, better_c(), b"xid_multi_c", b"cora_multi");
+        setup_account(&mut scenario, treasury_addr(), b"xid_multi_treasury", b"treasury_multi");
+        deposit_sui(&mut scenario, better_a(), b"xid_multi_a", 10_000_000_000);
+        deposit_sui(&mut scenario, better_b(), b"xid_multi_b", 10_000_000_000);
+        deposit_sui(&mut scenario, better_c(), b"xid_multi_c", 10_000_000_000);
+
+        ts::next_tx(&mut scenario, creator());
+        {
+            let mut market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            markets::create_market(
+                &mut market_reg, b"creator_xid", b"tweet_multi",
+                b"Q?", 0, 1000, &b"sig", ts::ctx(&mut scenario),
+            );
+            ts::return_shared(market_reg);
+        };
+
+        ts::next_tx(&mut scenario, better_a());
+        {
+            let market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_multi"));
+            let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
+            let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_multi_a"));
+            let mut better = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
+            let sui_type = std::type_name::with_defining_ids<SUI>().into_string().into_bytes();
+            markets::place_bet<SUI>(&mut market, &mut better, 6_000_000_000, true, b"multi_a", sui_type, 2000, &b"sig", ts::ctx(&mut scenario));
+            ts::return_shared(market);
+            ts::return_shared(acct_reg);
+            ts::return_shared(better);
+            ts::return_shared(market_reg);
+        };
+
+        ts::next_tx(&mut scenario, better_c());
+        {
+            let market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_multi"));
+            let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
+            let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_multi_c"));
+            let mut better = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
+            let sui_type = std::type_name::with_defining_ids<SUI>().into_string().into_bytes();
+            markets::place_bet<SUI>(&mut market, &mut better, 4_000_000_000, true, b"multi_c", sui_type, 3000, &b"sig", ts::ctx(&mut scenario));
+            ts::return_shared(market);
+            ts::return_shared(acct_reg);
+            ts::return_shared(better);
+            ts::return_shared(market_reg);
+        };
+
+        ts::next_tx(&mut scenario, better_b());
+        {
+            let market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_multi"));
+            let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
+            let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_multi_b"));
+            let mut better = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
+            let sui_type = std::type_name::with_defining_ids<SUI>().into_string().into_bytes();
+            markets::place_bet<SUI>(&mut market, &mut better, 10_000_000_000, false, b"multi_b", sui_type, 4000, &b"sig", ts::ctx(&mut scenario));
+            ts::return_shared(market);
+            ts::return_shared(acct_reg);
+            ts::return_shared(better);
+            ts::return_shared(market_reg);
+        };
+
+        ts::next_tx(&mut scenario, creator());
+        {
+            let market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_multi"));
+            let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
+            let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
+            let treasury_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_multi_treasury"));
+            let mut treasury_acct = ts::take_shared_by_id<DugongAccount>(&scenario, treasury_id);
+            markets::resolve_market<SUI>(&mut market, &mut treasury_acct, b"creator_xid", true, 5000, &b"sig");
+            assert!(markets::pool_distributable<SUI>(&market) == 20_000_000_000);
+            ts::return_shared(market);
+            ts::return_shared(acct_reg);
+            ts::return_shared(treasury_acct);
+            ts::return_shared(market_reg);
+        };
+
+        ts::next_tx(&mut scenario, better_a());
+        {
+            let market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_multi"));
+            let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
+            let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_multi_a"));
+            let mut winner = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
+            markets::pay_winner<SUI>(&mut market, &mut winner);
+            assert!(dugong::assets::get_balance<SUI>(&winner) == 16_000_000_000);
+            ts::return_shared(market);
+            ts::return_shared(acct_reg);
+            ts::return_shared(winner);
+            ts::return_shared(market_reg);
+        };
+
+        ts::next_tx(&mut scenario, better_c());
+        {
+            let market_reg = ts::take_shared<MarketRegistry>(&scenario);
+            let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_multi"));
+            let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
+            let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
+            let acct_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_multi_c"));
+            let mut winner = ts::take_shared_by_id<DugongAccount>(&scenario, acct_id);
+            markets::pay_winner<SUI>(&mut market, &mut winner);
+            assert!(dugong::assets::get_balance<SUI>(&winner) == 14_000_000_000);
+            ts::return_shared(market);
+            ts::return_shared(acct_reg);
+            ts::return_shared(winner);
+            ts::return_shared(market_reg);
+        };
+
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 13, location = dugong::markets)] // ENotMarketCreator
     fun test_unauthorized_resolve() {
         let mut scenario = ts::begin(creator());
         ts::next_tx(&mut scenario, creator());
-        { core::init_for_testing(ts::ctx(&mut scenario)); };
+        { dug::init_for_testing(ts::ctx(&mut scenario)); };
         ts::next_tx(&mut scenario, creator());
         { markets::init_for_testing(ts::ctx(&mut scenario)); };
         setup_account(&mut scenario, treasury_addr(), b"xid_t2", b"t2");
@@ -341,7 +591,7 @@ module dugong::markets_tests {
             let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_unauth"));
             let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
             let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
-            let treasury_id = core::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_t2"));
+            let treasury_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_t2"));
             let mut treasury_acct = ts::take_shared_by_id<DugongAccount>(&scenario, treasury_id);
             // Wrong resolver_xid → should abort
             markets::resolve_market<SUI>(&mut market, &mut treasury_acct, b"wrong_xid", true, 4000, &b"sig");
@@ -354,11 +604,11 @@ module dugong::markets_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 12)] // EMarketAlreadyResolved
+    #[expected_failure(abort_code = 12, location = dugong::markets)] // EMarketAlreadyResolved
     fun test_double_resolve_rejected() {
         let mut scenario = ts::begin(creator());
         ts::next_tx(&mut scenario, creator());
-        { core::init_for_testing(ts::ctx(&mut scenario)); };
+        { dug::init_for_testing(ts::ctx(&mut scenario)); };
         ts::next_tx(&mut scenario, creator());
         { markets::init_for_testing(ts::ctx(&mut scenario)); };
         setup_account(&mut scenario, treasury_addr(), b"xid_t3", b"t3");
@@ -379,7 +629,7 @@ module dugong::markets_tests {
             let market_id = markets::registry_get_market_id(&market_reg, std::string::utf8(b"tweet_dbl"));
             let mut market = ts::take_shared_by_id<PredictionMarket>(&scenario, market_id);
             let acct_reg = ts::take_shared<DugongRegistry>(&scenario);
-            let treasury_id = core::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_t3"));
+            let treasury_id = dug::registry_get_account_id(&acct_reg, std::string::utf8(b"xid_t3"));
             let mut treasury_acct = ts::take_shared_by_id<DugongAccount>(&scenario, treasury_id);
             markets::resolve_market<SUI>(&mut market, &mut treasury_acct, b"creator_xid", true, 4000, &b"sig");
             // Second resolve should abort

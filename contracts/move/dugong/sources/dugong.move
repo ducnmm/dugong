@@ -5,7 +5,7 @@
 module dugong::dugong {
     use std::string::String;
     use sui::coin::Coin;
-    use dugong::core::{Self, DugongRegistry, DugongAccount};
+    use dugong::dug::{Self, DugongRegistry, DugongAccount};
     use dugong::account;
     use dugong::assets;
     use dugong::transfers;
@@ -114,19 +114,19 @@ module dugong::dugong {
     // ====== View Function Wrappers ======
 
     public fun xid(account: &DugongAccount): String {
-        core::account_xid(account)
+        dug::account_xid(account)
     }
 
     public fun handle(account: &DugongAccount): String {
-        core::account_handle(account)
+        dug::account_handle(account)
     }
 
     public fun owner_address(account: &DugongAccount): Option<address> {
-        *core::account_owner_address(account)
+        *dug::account_owner_address(account)
     }
 
     public fun last_timestamp(account: &DugongAccount): u64 {
-        core::account_last_timestamp(account)
+        dug::account_last_timestamp(account)
     }
 
     public fun get_account_id(registry: &DugongRegistry, xid: String): Option<ID> {
@@ -137,6 +137,6 @@ module dugong::dugong {
 
     #[test_only]
     public fun init_for_testing(ctx: &mut TxContext) {
-        core::init_for_testing(ctx);
+        dug::init_for_testing(ctx);
     }
 }

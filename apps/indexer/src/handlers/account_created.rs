@@ -4,8 +4,8 @@ use sqlx::PgPool;
 use tracing::info;
 
 use super::EventHandler;
-use dugong_core::db::models::DugongAccount;
 use crate::types::{AccountCreatedEvent, SuiEvent};
+use dugong_core::db::models::DugongAccount;
 
 pub struct AccountCreatedHandler;
 

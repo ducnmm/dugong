@@ -1,12 +1,13 @@
 import { useSuiClient } from '@mysten/dapp-kit';
 import { useQuery } from '@tanstack/react-query';
 import { useCustomWallet } from '../contexts/useCustomWallet';
-import { COIN_TYPES } from '../utils/constants';
+import { COIN_TYPES, getCoinSymbol, isDugCoinType } from '../utils/constants';
 
 // Token icons mapping (for known tokens)
 import suiIcon from '../assets/tokens/sui.png';
 import walIcon from '../assets/tokens/wal.png';
 import usdcIcon from '../assets/tokens/usdc.png';
+import dugIcon from '../assets/tokens/dug-simple.png';
 import unknownIcon from '../assets/tokens/unknown.png';
 
 export interface WalletCoin {
@@ -32,13 +33,17 @@ const VERIFIED_TOKENS: Record<string, { symbol: string; decimals: number; icon: 
   [COIN_TYPES.USDC]: { symbol: 'USDC', decimals: 6, icon: usdcIcon },
 };
 
-// Check if coin type is a verified token (exact match only)
+// Check if coin type is a verified token
 function isVerifiedToken(coinType: string): boolean {
-  return coinType in VERIFIED_TOKENS;
+  return isDugCoinType(coinType) || coinType in VERIFIED_TOKENS;
 }
 
-// Get verified token info (exact match only - no suffix matching)
+// Get verified token info
 function getVerifiedTokenInfo(coinType: string): { symbol: string; decimals: number; icon: string } | null {
+  if (isDugCoinType(coinType)) {
+    return { symbol: 'DUG', decimals: 9, icon: dugIcon };
+  }
+
   return VERIFIED_TOKENS[coinType] || null;
 }
 
@@ -119,16 +124,14 @@ export function useWalletCoins() {
               decimals = coinMetadata.decimals;
             } else {
               // Fallback: extract symbol from coin type
-              const parts = coinType.split('::');
-              symbol = parts[parts.length - 1] || 'UNKNOWN';
+              symbol = getCoinSymbol(coinType, 'UNKNOWN');
               name = symbol;
               decimals = 9; // Default to 9 decimals
               hasUnknownDecimals = true;
             }
           } catch {
             // Metadata not available, use fallback
-            const parts = coinType.split('::');
-            symbol = parts[parts.length - 1] || 'UNKNOWN';
+            symbol = getCoinSymbol(coinType, 'UNKNOWN');
             name = symbol;
             decimals = 9; // Default to 9 decimals
             hasUnknownDecimals = true;

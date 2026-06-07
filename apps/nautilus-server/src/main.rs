@@ -14,7 +14,7 @@ use tracing::info;
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load .env file
-    dotenvy::dotenv().ok();
+    dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/.env")).ok();
 
     // Initialize tracing/logging
     tracing_subscriber::fmt()
@@ -46,6 +46,8 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|_| nautilus_server::TWITTERAPI_IO_BASE_URL.to_string()),
         twitter_api_base_url: std::env::var("TWITTER_API_BASE_URL")
             .unwrap_or_else(|_| nautilus_server::TWITTER_API_BASE_URL.to_string()),
+        dugong_package_id: std::env::var("DUGONG_PACKAGE_ID")
+            .expect("DUGONG_PACKAGE_ID must be set"),
     });
 
     // Spawn host-only init server if seal-example feature is enabled

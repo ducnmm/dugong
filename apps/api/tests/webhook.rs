@@ -31,7 +31,10 @@ fn unique_tweet_id(tag: &str) -> String {
 #[sqlx::test(migrations = "../core/migrations")]
 async fn crc_challenge_returns_signed_token(pool: PgPool) {
     let Some(redis) = try_redis().await else {
-        eprintln!("skipping: Redis unreachable at {}", common::test_redis_url());
+        eprintln!(
+            "skipping: Redis unreachable at {}",
+            common::test_redis_url()
+        );
         return;
     };
     let state = app_state(test_config(), pool, redis);
@@ -57,7 +60,10 @@ async fn crc_challenge_returns_signed_token(pool: PgPool) {
 #[sqlx::test(migrations = "../core/migrations")]
 async fn webhook_enqueues_new_tweet(pool: PgPool) {
     let Some(redis) = try_redis().await else {
-        eprintln!("skipping: Redis unreachable at {}", common::test_redis_url());
+        eprintln!(
+            "skipping: Redis unreachable at {}",
+            common::test_redis_url()
+        );
         return;
     };
     let _guard = lock_queue().await;
@@ -99,7 +105,10 @@ async fn webhook_enqueues_new_tweet(pool: PgPool) {
 
     // The dedup key should be set and a queue item enqueued.
     assert!(
-        redis.check_dedup(&redis::dedup_tweet(&tweet_id)).await.unwrap(),
+        redis
+            .check_dedup(&redis::dedup_tweet(&tweet_id))
+            .await
+            .unwrap(),
         "dedup key should be set"
     );
     let queued = redis.pop_queue(redis::QUEUE_TWEETS).await.unwrap();
@@ -110,9 +119,73 @@ async fn webhook_enqueues_new_tweet(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../core/migrations")]
+async fn webhook_enqueues_twitterapi_io_filter_tweet(pool: PgPool) {
+    let Some(redis) = try_redis().await else {
+        eprintln!(
+            "skipping: Redis unreachable at {}",
+            common::test_redis_url()
+        );
+        return;
+    };
+    let _guard = lock_queue().await;
+    drain_queue(&redis).await;
+
+    let tweet_id = unique_tweet_id("twitterapi-io");
+    let state = app_state(test_config(), pool.clone(), redis.clone());
+    let app = build_router(state);
+
+    let payload = json!({
+        "event_type": "tweet",
+        "rule_id": "rule_123",
+        "rule_tag": "dugong-mentions",
+        "tweets": [{
+            "id": tweet_id,
+            "text": "@DugongWallet init account",
+            "author": {
+                "id": "111",
+                "userName": "alice",
+                "name": "Alice"
+            },
+            "created_at": "2026-06-07T03:30:00Z"
+        }],
+        "timestamp": 1779179123456u64
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/webhook")
+                .header("content-type", "application/json")
+                .header("x-api-key", "test-twitterapi-key")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let event_id = events::tweet_event_id(&tweet_id);
+    assert!(
+        WebhookEvent::exists(&pool, &event_id).await.unwrap(),
+        "webhook event should be persisted"
+    );
+
+    let queued = redis.pop_queue(redis::QUEUE_TWEETS).await.unwrap();
+    let queued = queued.expect("a queue item should be present");
+    let item: Value = serde_json::from_str(&queued).unwrap();
+    assert_eq!(item["tweet_id"], json!(tweet_id));
+    assert_eq!(item["event_id"], json!(event_id));
+}
+
+#[sqlx::test(migrations = "../core/migrations")]
 async fn webhook_skips_already_persisted_event(pool: PgPool) {
     let Some(redis) = try_redis().await else {
-        eprintln!("skipping: Redis unreachable at {}", common::test_redis_url());
+        eprintln!(
+            "skipping: Redis unreachable at {}",
+            common::test_redis_url()
+        );
         return;
     };
     let _guard = lock_queue().await;
@@ -153,7 +226,11 @@ async fn webhook_skips_already_persisted_event(pool: PgPool) {
 
     // Nothing new should have been enqueued for the duplicate event.
     assert!(
-        redis.pop_queue(redis::QUEUE_TWEETS).await.unwrap().is_none(),
+        redis
+            .pop_queue(redis::QUEUE_TWEETS)
+            .await
+            .unwrap()
+            .is_none(),
         "duplicate event must not enqueue work"
     );
 }
@@ -161,7 +238,10 @@ async fn webhook_skips_already_persisted_event(pool: PgPool) {
 #[sqlx::test(migrations = "../core/migrations")]
 async fn health_check_returns_ok(pool: PgPool) {
     let Some(redis) = try_redis().await else {
-        eprintln!("skipping: Redis unreachable at {}", common::test_redis_url());
+        eprintln!(
+            "skipping: Redis unreachable at {}",
+            common::test_redis_url()
+        );
         return;
     };
     let state = app_state(test_config(), pool, redis);

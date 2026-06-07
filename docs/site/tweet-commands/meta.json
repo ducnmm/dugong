@@ -1,0 +1,13 @@
+{
+  "title": "Tweet Commands",
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "account-creation",
+    "transfer",
+    "markets",
+    "rewards",
+    "claim",
+    "system-replies"
+  ]
+}

@@ -3,8 +3,6 @@ name = "dugong"
 edition = "2024.beta"
 
 [dependencies]
-Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "b448b1d971bd6c1aac8ef4eee4305943806d5d5b", override = true }
-MoveStdlib = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "b448b1d971bd6c1aac8ef4eee4305943806d5d5b", override = true }
 enclave = { local = "../enclave" }
 
 [addresses]

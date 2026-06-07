@@ -4,6 +4,7 @@ import React from 'react';
 import suiIcon from '../assets/tokens/sui.png';
 import walIcon from '../assets/tokens/wal.png';
 import usdcIcon from '../assets/tokens/usdc.png';
+import dugIcon from '../assets/tokens/dug-simple.png';
 
 interface TokenIconProps {
   symbol: string;
@@ -15,6 +16,7 @@ interface TokenIconProps {
 
 // Known token icons by symbol
 const KNOWN_ICONS: Record<string, string> = {
+  DUG: dugIcon,
   SUI: suiIcon,
   WAL: walIcon,
   USDC: usdcIcon,
@@ -54,7 +56,7 @@ export const TokenIcon: React.FC<TokenIconProps> = ({
         alt={symbol}
         className={`${sizeClasses[size]} ${
           framed
-            ? 'rounded-md border-2 border-black bg-white object-cover shadow-neo-sm'
+            ? 'rounded-md border border-black bg-white object-contain p-0.5 shadow-neo-sm'
             : 'object-contain'
         } ${className}`}
       />
@@ -67,7 +69,7 @@ export const TokenIcon: React.FC<TokenIconProps> = ({
   return (
     <div
       className={`${sizeClasses[size]} flex items-center justify-center font-black text-black ${
-        framed ? 'rounded-md border-2 border-black shadow-neo-sm' : ''
+        framed ? 'rounded-md border border-black shadow-neo-sm' : ''
       } ${className}`}
       style={{ backgroundColor: bgColor }}
     >

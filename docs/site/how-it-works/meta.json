@@ -1,0 +1,10 @@
+{
+  "title": "How Dugong Works",
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "components",
+    "account-flow",
+    "webhook-flow"
+  ]
+}

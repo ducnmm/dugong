@@ -1,0 +1,70 @@
+---
+title: Reward Campaigns
+description: Create and resolve reward campaigns for replies or hashtag users.
+---
+
+## Top Replies
+
+Use this to reward top reply authors on the campaign tweet.
+
+```text
+@DugongWallet reward top <count> reply to this tweet with <amount> <coin> each
+@DugongWallet reward top <count> replies to this tweet with <amount> <coin> each
+```
+
+Example:
+
+```text
+@DugongWallet reward top 3 replies to this tweet with 5 DUG each
+```
+
+Behavior:
+
+- Creates a reward campaign anchored to the command tweet id.
+- Auto-creates the creator account if needed.
+- Escrows the total campaign budget from the creator account.
+- Replies with the reward amount, max winner count, resolve instruction, claim instruction, and Suiscan transaction link.
+- If a campaign already exists for the same tweet, replies that a reward campaign already exists.
+
+## First Hashtag Users
+
+Use this to reward the first users found for a hashtag search.
+
+```text
+@DugongWallet reward <amount> <coin> to first <count> users who tweeted #<tag>
+```
+
+Example:
+
+```text
+@DugongWallet reward 10 DUG to first 10 users who tweeted #SuiFest
+```
+
+Behavior:
+
+- Creates a reward campaign anchored to the command tweet id.
+- At resolve time, searches TwitterAPI.io advanced search for the hashtag.
+- Excludes the campaign creator from winner selection.
+- Sorts candidates by creation time and selects up to the configured winner count.
+- Uses the same creation reply behavior as the top-replies campaign.
+
+## Resolve A Reward Campaign
+
+Use this as a reply to the reward campaign tweet.
+
+```text
+@DugongWallet solve!
+@DugongWallet solve
+@DugongWallet resolve
+@DugongWallet resolve!
+```
+
+Behavior:
+
+- Only the campaign creator can resolve the campaign.
+- For top-replies campaigns, searches the campaign conversation for eligible reply authors.
+- For first-hashtag campaigns, searches for eligible hashtag authors.
+- Excludes the campaign creator from winner selection.
+- Resolves the campaign on-chain, mirrors selected winners to the database, and refunds unallocated budget to the creator account.
+- Replies with the winner count and Suiscan transaction link.
+- If a non-creator tries to resolve, replies that only the campaign creator can resolve it.

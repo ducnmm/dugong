@@ -115,8 +115,11 @@ async fn enoki_create_sponsored_transaction_unwraps_data() {
         .mount(&server)
         .await;
 
-    let client =
-        EnokiClient::with_base_url("test-enoki-key".to_string(), "testnet".to_string(), server.uri());
+    let client = EnokiClient::with_base_url(
+        "test-enoki-key".to_string(),
+        "testnet".to_string(),
+        server.uri(),
+    );
     let resp = client
         .create_sponsored_transaction("KIND".to_string(), "0xsender".to_string(), vec![])
         .await
@@ -134,8 +137,7 @@ async fn enoki_error_status_is_surfaced() {
         .mount(&server)
         .await;
 
-    let client =
-        EnokiClient::with_base_url("k".to_string(), "testnet".to_string(), server.uri());
+    let client = EnokiClient::with_base_url("k".to_string(), "testnet".to_string(), server.uri());
     let err = client
         .create_sponsored_transaction("KIND".to_string(), "0xs".to_string(), vec![])
         .await
@@ -356,7 +358,10 @@ async fn oauth2_get_user_info_parses() {
         .await;
 
     let client = TwitterOAuth2Client::with_base_url(&test_config(), server.uri());
-    let info = client.get_user_info("tok123").await.expect("me should succeed");
+    let info = client
+        .get_user_info("tok123")
+        .await
+        .expect("me should succeed");
     assert_eq!(info.username, "alice");
 }
 

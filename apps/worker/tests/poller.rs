@@ -1,6 +1,7 @@
 //! Tests for the pure tweet→webhook conversion used by the poller.
 
-use dugong_worker::poller::tweets_to_events;
+use dugong_worker::backend_client::{TweetCreateEvent, WebhookUser};
+use dugong_worker::poller::{select_events_for_poll, split_events_for_poll, tweets_to_events};
 use dugong_worker::twitter_client::{TweetData, TwitterUser};
 
 fn tweet(id: &str, author_id: &str, text: &str) -> TweetData {
@@ -44,4 +45,34 @@ fn drops_tweets_with_missing_author() {
 #[test]
 fn empty_input_yields_no_events() {
     assert!(tweets_to_events(&[], &[]).is_empty());
+}
+
+fn event(id: &str) -> TweetCreateEvent {
+    TweetCreateEvent {
+        id_str: id.to_string(),
+        text: format!("tweet {id}"),
+        user: WebhookUser {
+            id_str: "111".to_string(),
+            screen_name: "alice".to_string(),
+        },
+        in_reply_to_status_id_str: None,
+    }
+}
+
+#[test]
+fn select_events_for_poll_keeps_only_oldest_tweet() {
+    let selected = select_events_for_poll(vec![event("300"), event("100"), event("200")]);
+
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].id_str, "100");
+}
+
+#[test]
+fn split_events_for_poll_queues_remaining_tweets_in_order() {
+    let (selected, queued) = split_events_for_poll(vec![event("300"), event("100"), event("200")]);
+
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].id_str, "100");
+    let queued_ids: Vec<_> = queued.into_iter().map(|event| event.id_str).collect();
+    assert_eq!(queued_ids, vec!["200", "300"]);
 }

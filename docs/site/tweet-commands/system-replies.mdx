@@ -1,0 +1,44 @@
+---
+title: System Replies
+description: User-facing success, error, and current gap behavior for tweet commands.
+---
+
+Dugong replies to command tweets after the processor reaches the reply step.
+The reply is posted through TwitterAPI.io and is always a direct reply to the
+command tweet that triggered the flow.
+
+## Success Replies
+
+- Account creation: welcomes the user and links the account creation transaction.
+- Transfer: shows sent amount, sender, recipient, and transaction link.
+- Market creation: explains how to bet and resolve.
+- Bet placement: confirms the stake and side.
+- Market resolution: summarizes the winning outcome and payout count.
+- Reward campaign creation: shows reward amount, max winners, resolve instruction, and claim instruction.
+- Reward campaign resolution: shows selected winner count.
+- Reward claim: confirms the reward was credited.
+- Market payout claim: confirms winnings were credited.
+
+## User-Facing Error Or Status Replies
+
+- Unsupported or unrecognized command, with a short explanation and command docs link.
+- Account already exists.
+- Market not found for the parent tweet.
+- Market already closed.
+- Market has no bets yet.
+- Market is not resolved yet when a payout claim is attempted.
+- Unauthorized market resolver.
+- Reward campaign already exists.
+- Reward campaign not found for the parent tweet.
+- Reward campaign already resolved.
+- Reward campaign is not resolved yet when a reward claim is attempted.
+- Unauthorized campaign resolver.
+- Reward already claimed.
+- Nothing to claim.
+- Generic command failure for tweet processing, transaction submission, account auto-create, winner search, or missing mirrored account state.
+
+## Current Gaps
+
+- Updating a handle is supported on-chain, but not currently exposed as a tweet command.
+- Wallet linking is handled through the web app flow, not through tweets.
+- Webhook delivery or queue failures that happen before Dugong has a tweet id may still only be logged.

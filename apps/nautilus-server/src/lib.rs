@@ -44,6 +44,8 @@ pub struct AppState {
     pub twitterapi_io_base_url: String,
     /// Base URL for the official Twitter/X API (overridable in tests).
     pub twitter_api_base_url: String,
+    /// Latest Dugong package id used to resolve the DUG coin type.
+    pub dugong_package_id: String,
 }
 
 /// Build the Axum router exposing the dugong enclave HTTP handlers.
@@ -59,7 +61,10 @@ pub fn build_router(state: std::sync::Arc<AppState>) -> axum::Router {
     axum::Router::new()
         .route("/process_tweet", post(process_tweet))
         .route("/process_init_account", post(process_init_account))
-        .route("/process_secure_link_wallet", post(process_secure_link_wallet))
+        .route(
+            "/process_secure_link_wallet",
+            post(process_secure_link_wallet),
+        )
         .with_state(state)
 }
 

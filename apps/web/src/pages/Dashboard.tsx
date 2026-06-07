@@ -30,6 +30,7 @@ import {
   type PaginatedTransactionsResponse,
   type TokenBalance,
 } from '../utils/api';
+import { getCoinSymbol } from '../utils/constants';
 import { AccountMenu } from '../components/Header';
 
 type DashboardTab = 'overview' | 'activity';
@@ -347,7 +348,7 @@ export const Dashboard: React.FC = () => {
     amount: primaryBalance?.balance_formatted ?? '0',
     symbol: primaryBalance?.symbol ?? 'SUI',
   };
-  const supportedTokenBalances = (['SUI', 'WAL', 'USDC'] as const).map((symbol) => {
+  const supportedTokenBalances = (['SUI', 'DUG', 'WAL', 'USDC'] as const).map((symbol) => {
     const token = balances.find((balance) => balance.symbol.toUpperCase() === symbol);
     return {
       symbol,
@@ -414,6 +415,7 @@ export const Dashboard: React.FC = () => {
           };
   const fundButtonClass =
     'flex min-h-[56px] w-full items-center justify-center gap-2 rounded-lg border-4 border-black px-4 text-sm font-black lowercase text-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-lg disabled:cursor-not-allowed disabled:border-gray-500 disabled:bg-gray-300 disabled:text-gray-600 disabled:opacity-70 disabled:shadow-none disabled:hover:translate-x-0 disabled:hover:translate-y-0 sm:px-5 sm:text-base';
+  const preparingHandle = user?.twitterHandle ? `@${user.twitterHandle}` : 'your X account';
 
   if (isPublicDashboard && isLoadingPublicAccount) {
     return (
@@ -442,12 +444,54 @@ export const Dashboard: React.FC = () => {
   if (isPreparingOwnAccount) {
     return (
       <div className="neo-page flex min-h-screen items-center justify-center p-4 text-black">
-        <div className="neo-card-strong w-full max-w-md bg-white p-6 text-center">
-          <div className="mx-auto mb-5 h-14 w-14 animate-spin rounded-full border-4 border-black border-t-cyan-300 bg-white shadow-neo-md" />
-          <h2 className="mb-3 text-2xl font-black text-black">Initializing your Dugong account</h2>
-          <p className="text-sm font-bold text-gray-700">
-            @{user?.twitterHandle || 'account'} is being registered on-chain. This usually takes a few seconds.
-          </p>
+        <div className="neo-card-strong w-full max-w-[560px] overflow-hidden bg-white text-black">
+          <div className="border-b-4 border-black bg-cyan-200 p-4 sm:p-5">
+            <div className="flex items-center gap-4 sm:gap-5">
+              <div className="relative flex h-20 w-20 shrink-0 items-center justify-center rounded-full border-4 border-black bg-white shadow-neo-md sm:h-24 sm:w-24">
+                <span className="absolute inset-2 rounded-full bg-cyan-300 opacity-70 animate-pulse" />
+                <TokenIcon
+                  symbol="DUG"
+                  size="lg"
+                  framed={false}
+                  className="relative h-14 w-14 sm:h-16 sm:w-16"
+                />
+              </div>
+              <div className="min-w-0 text-left">
+                <p className="mb-1 text-xs font-black uppercase text-gray-700">Account setup</p>
+                <h2 className="hero-font text-3xl font-black leading-none text-black sm:text-4xl">
+                  Setting up Dugong
+                </h2>
+                <p className="mt-2 truncate text-sm font-black text-gray-700" title={preparingHandle}>
+                  {preparingHandle}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4 sm:p-5">
+            <div className="mb-5 h-5 overflow-hidden rounded-full border-2 border-black bg-white shadow-neo-sm">
+              <div className="h-full w-2/3 animate-pulse bg-lime-200" />
+            </div>
+
+            <div className="divide-y-2 divide-black border-y-2 border-black">
+              <div className="flex min-h-[58px] items-center justify-between gap-4 bg-lime-200 px-3 py-3">
+                <span className="text-sm font-black text-black">Verified X identity</span>
+                <Check className="h-5 w-5 shrink-0 text-black" strokeWidth={4} />
+              </div>
+              <div className="flex min-h-[58px] items-center justify-between gap-4 bg-yellow-200 px-3 py-3">
+                <span className="text-sm font-black text-black">Creating on-chain account</span>
+                <span className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-black border-t-transparent" />
+              </div>
+              <div className="flex min-h-[58px] items-center justify-between gap-4 bg-white px-3 py-3">
+                <span className="text-sm font-black text-black">Syncing dashboard</span>
+                <span className="h-5 w-5 shrink-0 rounded-full border-2 border-black bg-cyan-200" />
+              </div>
+            </div>
+
+            <p className="mt-5 text-center text-sm font-bold leading-6 text-gray-700">
+              Your account is being registered on-chain. This usually takes a few seconds.
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -508,7 +552,7 @@ export const Dashboard: React.FC = () => {
                       symbol={displayedBalance.symbol}
                       size="lg"
                       framed={false}
-                      className="h-16 w-16 sm:h-20 sm:w-20"
+                      className="h-20 w-20 sm:h-28 sm:w-28"
                     />
                     <div className="min-w-0">
                       <p className="flex min-w-0 items-baseline text-black">
@@ -626,15 +670,20 @@ export const Dashboard: React.FC = () => {
                 </button>
 
                 <div className="-m-1 min-h-0 flex-1 p-1">
-                  <div className="grid h-full w-full grid-cols-1 grid-rows-3 gap-3 md:grid-cols-3 md:grid-rows-1 md:gap-4">
+                  <div className="grid h-full w-full grid-cols-2 grid-rows-2 gap-3 md:gap-4">
                     {supportedTokenBalances.map((token) => (
                       <div
                         key={token.symbol}
-                        className="flex min-h-0 min-w-0 flex-row items-center justify-center gap-5 rounded-md border-2 border-black bg-white p-3 text-center text-black shadow-neo-sm transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-md md:flex-col md:gap-5 md:p-4"
+                        className="flex min-h-0 min-w-0 items-center justify-center gap-4 rounded-md border-2 border-black bg-white p-3 text-left text-black shadow-neo-sm transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-md sm:gap-5 md:p-4"
                       >
-                        <TokenIcon symbol={token.symbol} size="lg" framed={false} className="h-12 w-12 md:h-20 md:w-20" />
+                        <TokenIcon
+                          symbol={token.symbol}
+                          size="lg"
+                          framed={false}
+                          className="h-12 w-12 shrink-0 sm:h-16 sm:w-16 md:h-20 md:w-20"
+                        />
                         <span
-                          className="block max-w-full truncate text-xl font-black leading-tight text-black md:text-4xl"
+                          className="block min-w-0 max-w-[9ch] truncate text-2xl font-black leading-tight text-black sm:text-3xl md:text-4xl"
                           title={token.amount}
                         >
                           {token.amount}
@@ -680,7 +729,7 @@ export const Dashboard: React.FC = () => {
                           <div className="min-w-0 text-left sm:text-right">
                             <p className="break-words text-sm font-black text-black sm:text-base">
                               {tx.tx_type === 'deposit' ? '+' : tx.tx_type === 'withdraw' ? '-' : ''}
-                              {tx.amount} {tx.coin_type.split('::').pop() || 'SUI'}
+                              {tx.amount} {getCoinSymbol(tx.coin_type)}
                             </p>
                             <p className="text-xs font-bold text-gray-700 sm:text-sm">
                               {formatRelativeTime(tx.timestamp)}

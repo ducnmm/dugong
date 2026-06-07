@@ -24,6 +24,25 @@ use dugong_core::db::models::{
 /// login cadence (the stored refresh token keeps Twitter access alive underneath).
 const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
+fn coin_display_metadata(coin_type: &str) -> (String, u8) {
+    if coin_type.ends_with("::sui::SUI") {
+        ("SUI".to_string(), 9)
+    } else if coin_type.ends_with("::wal::WAL") {
+        ("WAL".to_string(), 9)
+    } else if coin_type.ends_with("::usdc::USDC") {
+        ("USDC".to_string(), 6)
+    } else if coin_type.ends_with("::dug::DUG") || coin_type.ends_with("::core::CORE") {
+        ("DUG".to_string(), 9)
+    } else {
+        let symbol = coin_type
+            .split("::")
+            .last()
+            .unwrap_or("UNKNOWN")
+            .to_string();
+        (symbol, 9)
+    }
+}
+
 /// Issue a backend session token binding a request to a verified `xid`.
 fn issue_session(config: &Config, xid: &str) -> anyhow::Result<String> {
     dugong_core::session::issue(config.session_token_secret()?, xid, SESSION_TTL)
@@ -33,7 +52,10 @@ fn issue_session(config: &Config, xid: &str) -> anyhow::Result<String> {
 /// header, or `None` if absent/invalid/expired.
 fn session_xid(config: &Config, headers: &HeaderMap) -> Option<String> {
     let secret = config.session_token_secret().ok()?;
-    let raw = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+    let raw = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
     let token = raw
         .strip_prefix("Bearer ")
         .or_else(|| raw.strip_prefix("bearer "))?
@@ -99,8 +121,9 @@ async fn mint_fresh_access_token(state: &AppState, xid: &str) -> Result<String, 
             FreshTokenError::ReauthRequired("no stored X session for this user".to_string())
         })?;
 
-    let refresh = dugong_core::crypto::open(key, &stored.refresh_token_enc)
-        .map_err(|_| FreshTokenError::ReauthRequired("stored X credential unreadable".to_string()))?;
+    let refresh = dugong_core::crypto::open(key, &stored.refresh_token_enc).map_err(|_| {
+        FreshTokenError::ReauthRequired("stored X credential unreadable".to_string())
+    })?;
 
     let oauth =
         TwitterOAuth2Client::with_base_url(&state.config, state.config.twitter_api_base.clone());
@@ -397,9 +420,7 @@ pub async fn secure_link_wallet(
             )));
         }
         None => {
-            return Ok(Json(LinkWalletResponse::failure(
-                "Malformed link message.",
-            )));
+            return Ok(Json(LinkWalletResponse::failure("Malformed link message.")));
         }
     }
 
@@ -673,6 +694,42 @@ pub async fn get_transactions_by_account(
     }))
 }
 
+/// Get one transaction by transaction digest
+pub async fn get_transaction_by_digest(
+    State(state): State<Arc<AppState>>,
+    Path(tx_digest): Path<String>,
+) -> Result<Json<TransactionResponse>, StatusCode> {
+    let transfer = match Transfer::find_by_transaction_digest(&state.db, &tx_digest).await {
+        Ok(Some(transfer)) => transfer,
+        Ok(None) => return Err(StatusCode::NOT_FOUND),
+        Err(err) => {
+            tracing::error!("Failed to query transaction by digest: {:?}", err);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    let query_coin_type = if transfer.coin_type.starts_with("0x") {
+        transfer.coin_type.clone()
+    } else {
+        format!("0x{}", transfer.coin_type)
+    };
+    let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_rpc_url);
+    let decimals = match sui_client.get_coin_metadata(&query_coin_type).await {
+        Ok(Some(metadata)) => metadata.decimals,
+        Ok(None) | Err(_) => {
+            if transfer.coin_type.ends_with("::usdc::USDC") {
+                6
+            } else {
+                9
+            }
+        }
+    };
+
+    Ok(Json(TransactionResponse::from_transfer_with_decimals(
+        transfer, decimals,
+    )))
+}
+
 /// Token balance info
 #[derive(Debug, Serialize)]
 pub struct TokenBalance {
@@ -716,22 +773,10 @@ pub async fn get_account_balance(
     let mut sui_balance: i64 = 0;
 
     for (coin_type, balance) in rows {
-        let (symbol, decimals) = if coin_type.ends_with("::sui::SUI") {
+        if coin_type.ends_with("::sui::SUI") {
             sui_balance = balance;
-            ("SUI".to_string(), 9u8)
-        } else if coin_type.ends_with("::wal::WAL") {
-            ("WAL".to_string(), 9u8)
-        } else if coin_type.ends_with("::usdc::USDC") {
-            ("USDC".to_string(), 6u8)
-        } else {
-            // Unknown token - extract symbol from coin_type
-            let symbol = coin_type
-                .split("::")
-                .last()
-                .unwrap_or("UNKNOWN")
-                .to_string();
-            (symbol, 9u8) // Default to 9 decimals for unknown tokens
         };
+        let (symbol, decimals) = coin_display_metadata(&coin_type);
 
         let divisor = 10f64.powi(decimals as i32);
         let formatted = format!("{:.9}", balance as f64 / divisor)
@@ -958,6 +1003,7 @@ pub(crate) async fn ensure_dugong_account_for_xid(
     state: &Arc<AppState>,
     enclave: &EnclaveClient,
     xid: &str,
+    handle: Option<&str>,
 ) -> anyhow::Result<(DugongAccountInfo, Option<String>)> {
     use anyhow::Context;
 
@@ -972,12 +1018,12 @@ pub(crate) async fn ensure_dugong_account_for_xid(
     tracing::info!(xid = %xid, "No Dugong account found; auto-initializing via Nautilus enclave");
 
     let signed = enclave
-        .sign_init_account(xid)
+        .sign_init_account(xid, handle)
         .await
         .context("Failed to sign init account")?;
 
-    let signed_xid =
-        String::from_utf8(signed.response.data.xid.clone()).context("Invalid xid encoding from enclave")?;
+    let signed_xid = String::from_utf8(signed.response.data.xid.clone())
+        .context("Invalid xid encoding from enclave")?;
     let handle = String::from_utf8(signed.response.data.handle.clone())
         .context("Invalid handle encoding from enclave")?;
 
@@ -1049,7 +1095,10 @@ pub async fn ensure_dugong_account(
         .get_user_info(&request.access_token)
         .await
         .map_err(|err| {
-            tracing::error!("Failed to verify access token for ensure-account: {:?}", err);
+            tracing::error!(
+                "Failed to verify access token for ensure-account: {:?}",
+                err
+            );
             (
                 StatusCode::UNAUTHORIZED,
                 Json(AuthErrorResponse {
@@ -1067,7 +1116,7 @@ pub async fn ensure_dugong_account(
     let enclave = EnclaveClient::new(state.config.enclave_url.clone());
 
     let (dugong_account, created_account_tx_digest) =
-        ensure_dugong_account_for_xid(&state, &enclave, &user_info.id)
+        ensure_dugong_account_for_xid(&state, &enclave, &user_info.id, Some(&user_info.username))
             .await
             .map_err(|err| {
                 tracing::error!(

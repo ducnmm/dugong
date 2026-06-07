@@ -1,0 +1,42 @@
+---
+title: Getting Started
+description: Open Dugong, sign in with X, and find an account.
+---
+
+# Getting Started
+
+This guide covers the basic Dugong app flow: open the app, search for an
+account, and sign in when you want to manage your own account.
+
+## Open The App
+
+In local development, the web app runs at:
+
+```text
+http://localhost:43173
+```
+
+The production URL depends on the deployed environment.
+
+## Search For An Account
+
+Use the search field on the home page. It accepts:
+
+- an X handle, such as `@dugongwallet`
+- an X user id
+- a Sui object id beginning with `0x`
+
+Search results show the account handle and link to the account dashboard.
+
+## Sign In With X
+
+Use `Dashboard` when you want to manage your own Dugong account. If you are
+not signed in, Dugong starts the X OAuth flow and returns you to the app after
+the callback completes.
+
+## Next Steps
+
+- [Using Dugong](./using-dugong.mdx) explains the main account and wallet
+  flows.
+- [How Dugong Works](./how-it-works.mdx) gives the system model behind those
+  flows.

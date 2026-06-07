@@ -6,7 +6,7 @@ module dugong::reward_campaigns_tests {
     use sui::test_scenario::{Self as ts, Scenario};
     use sui::coin;
     use sui::sui::SUI;
-    use dugong::core::{Self, DugongRegistry, DugongAccount};
+    use dugong::dug::{Self, DugongRegistry, DugongAccount};
     use dugong::reward_campaigns::{Self, RewardCampaign};
     use dugong::account;
     use dugong::assets;
@@ -20,7 +20,7 @@ module dugong::reward_campaigns_tests {
 
     fun init_core(scenario: &mut Scenario) {
         ts::next_tx(scenario, creator());
-        { core::init_for_testing(ts::ctx(scenario)); };
+        { dug::init_for_testing(ts::ctx(scenario)); };
     }
 
     fun setup_account(scenario: &mut Scenario, owner: address, xid: vector<u8>, handle: vector<u8>) {
@@ -30,13 +30,22 @@ module dugong::reward_campaigns_tests {
             account::init_account_no_signature(&mut registry, xid, handle, ts::ctx(scenario));
             ts::return_shared(registry);
         };
+        ts::next_tx(scenario, owner);
+        {
+            let registry = ts::take_shared<DugongRegistry>(scenario);
+            let account_id = dug::registry_get_account_id(&registry, std::string::utf8(xid));
+            let mut account = ts::take_shared_by_id<DugongAccount>(scenario, account_id);
+            dug::account_set_owner_address(&mut account, owner);
+            ts::return_shared(account);
+            ts::return_shared(registry);
+        };
     }
 
     fun deposit_sui(scenario: &mut Scenario, sender: address, xid: vector<u8>, amount: u64) {
         ts::next_tx(scenario, sender);
         {
             let registry = ts::take_shared<DugongRegistry>(scenario);
-            let account_id = core::registry_get_account_id(&registry, std::string::utf8(xid));
+            let account_id = dug::registry_get_account_id(&registry, std::string::utf8(xid));
             let mut account = ts::take_shared_by_id<DugongAccount>(scenario, account_id);
             let coin = coin::mint_for_testing<SUI>(amount, ts::ctx(scenario));
             assets::deposit_coin<SUI>(&mut account, coin, ts::ctx(scenario));
@@ -46,13 +55,13 @@ module dugong::reward_campaigns_tests {
     }
 
     fun sui_type(): vector<u8> {
-        std::type_name::get<SUI>().into_string().into_bytes()
+        std::type_name::with_defining_ids<SUI>().into_string().into_bytes()
     }
 
     fun balance_of(scenario: &mut Scenario, sender: address, xid: vector<u8>): u64 {
         ts::next_tx(scenario, sender);
         let registry = ts::take_shared<DugongRegistry>(scenario);
-        let account_id = core::registry_get_account_id(&registry, std::string::utf8(xid));
+        let account_id = dug::registry_get_account_id(&registry, std::string::utf8(xid));
         let account = ts::take_shared_by_id<DugongAccount>(scenario, account_id);
         let bal = assets::get_balance<SUI>(&account);
         ts::return_shared(account);
@@ -65,7 +74,7 @@ module dugong::reward_campaigns_tests {
         ts::next_tx(scenario, creator());
         {
             let registry = ts::take_shared<DugongRegistry>(scenario);
-            let creator_id = core::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
+            let creator_id = dug::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(scenario, creator_id);
             reward_campaigns::create_campaign<SUI>(
                 &mut creator_account,
@@ -101,7 +110,7 @@ module dugong::reward_campaigns_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 22)] // EInvalidCampaignType
+    #[expected_failure(abort_code = 22, location = dugong::reward_campaigns)] // EInvalidCampaignType
     fun test_invalid_campaign_type_rejected() {
         let mut scenario = ts::begin(creator());
         init_core(&mut scenario);
@@ -111,7 +120,7 @@ module dugong::reward_campaigns_tests {
         ts::next_tx(&mut scenario, creator());
         {
             let registry = ts::take_shared<DugongRegistry>(&scenario);
-            let creator_id = core::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
+            let creator_id = dug::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(&scenario, creator_id);
             reward_campaigns::create_campaign<SUI>(
                 &mut creator_account, b"campaign_tweet", 9, b"replies",
@@ -124,7 +133,7 @@ module dugong::reward_campaigns_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 23)] // EInvalidRewardAmount
+    #[expected_failure(abort_code = 23, location = dugong::reward_campaigns)] // EInvalidRewardAmount
     fun test_zero_reward_rejected() {
         let mut scenario = ts::begin(creator());
         init_core(&mut scenario);
@@ -133,7 +142,7 @@ module dugong::reward_campaigns_tests {
         ts::next_tx(&mut scenario, creator());
         {
             let registry = ts::take_shared<DugongRegistry>(&scenario);
-            let creator_id = core::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
+            let creator_id = dug::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(&scenario, creator_id);
             reward_campaigns::create_campaign<SUI>(
                 &mut creator_account, b"campaign_tweet", reward_campaigns::campaign_top_replies(),
@@ -157,7 +166,7 @@ module dugong::reward_campaigns_tests {
         ts::next_tx(&mut scenario, creator());
         {
             let registry = ts::take_shared<DugongRegistry>(&scenario);
-            let creator_id = core::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
+            let creator_id = dug::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(&scenario, creator_id);
             let mut campaign = ts::take_shared<RewardCampaign>(&scenario);
             let winners = vector[b"xid_a", b"xid_b"];
@@ -189,7 +198,7 @@ module dugong::reward_campaigns_tests {
         ts::next_tx(&mut scenario, creator());
         {
             let registry = ts::take_shared<DugongRegistry>(&scenario);
-            let creator_id = core::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
+            let creator_id = dug::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(&scenario, creator_id);
             let mut campaign = ts::take_shared<RewardCampaign>(&scenario);
             reward_campaigns::resolve_campaign<SUI>(
@@ -205,7 +214,7 @@ module dugong::reward_campaigns_tests {
         ts::next_tx(&mut scenario, winner_a());
         {
             let registry = ts::take_shared<DugongRegistry>(&scenario);
-            let winner_id = core::registry_get_account_id(&registry, std::string::utf8(b"xid_a"));
+            let winner_id = dug::registry_get_account_id(&registry, std::string::utf8(b"xid_a"));
             let mut winner_account = ts::take_shared_by_id<DugongAccount>(&scenario, winner_id);
             let mut campaign = ts::take_shared<RewardCampaign>(&scenario);
             reward_campaigns::claim_reward<SUI>(&mut campaign, &mut winner_account, sui_type(), 3000);
@@ -219,7 +228,7 @@ module dugong::reward_campaigns_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 27)] // ERewardAlreadyClaimed
+    #[expected_failure(abort_code = 27, location = dugong::reward_campaigns)] // ERewardAlreadyClaimed
     fun test_double_claim_rejected() {
         let mut scenario = ts::begin(creator());
         init_core(&mut scenario);
@@ -231,7 +240,7 @@ module dugong::reward_campaigns_tests {
         ts::next_tx(&mut scenario, creator());
         {
             let registry = ts::take_shared<DugongRegistry>(&scenario);
-            let creator_id = core::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
+            let creator_id = dug::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(&scenario, creator_id);
             let mut campaign = ts::take_shared<RewardCampaign>(&scenario);
             reward_campaigns::resolve_campaign<SUI>(
@@ -246,7 +255,7 @@ module dugong::reward_campaigns_tests {
         ts::next_tx(&mut scenario, winner_a());
         {
             let registry = ts::take_shared<DugongRegistry>(&scenario);
-            let winner_id = core::registry_get_account_id(&registry, std::string::utf8(b"xid_a"));
+            let winner_id = dug::registry_get_account_id(&registry, std::string::utf8(b"xid_a"));
             let mut winner_account = ts::take_shared_by_id<DugongAccount>(&scenario, winner_id);
             let mut campaign = ts::take_shared<RewardCampaign>(&scenario);
             reward_campaigns::claim_reward<SUI>(&mut campaign, &mut winner_account, sui_type(), 3000);
@@ -260,7 +269,7 @@ module dugong::reward_campaigns_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 25)] // ENotCampaignCreator
+    #[expected_failure(abort_code = 25, location = dugong::reward_campaigns)] // ENotCampaignCreator
     fun test_non_creator_resolve_rejected() {
         let mut scenario = ts::begin(creator());
         init_core(&mut scenario);
@@ -273,7 +282,7 @@ module dugong::reward_campaigns_tests {
         ts::next_tx(&mut scenario, winner_a());
         {
             let registry = ts::take_shared<DugongRegistry>(&scenario);
-            let other_id = core::registry_get_account_id(&registry, std::string::utf8(b"xid_a"));
+            let other_id = dug::registry_get_account_id(&registry, std::string::utf8(b"xid_a"));
             let mut other_account = ts::take_shared_by_id<DugongAccount>(&scenario, other_id);
             let mut campaign = ts::take_shared<RewardCampaign>(&scenario);
             reward_campaigns::resolve_campaign<SUI>(
@@ -288,7 +297,7 @@ module dugong::reward_campaigns_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 21)] // ECampaignNotResolved
+    #[expected_failure(abort_code = 21, location = dugong::reward_campaigns)] // ECampaignNotResolved
     fun test_claim_before_resolve_rejected() {
         let mut scenario = ts::begin(creator());
         init_core(&mut scenario);
@@ -301,7 +310,7 @@ module dugong::reward_campaigns_tests {
         ts::next_tx(&mut scenario, winner_a());
         {
             let registry = ts::take_shared<DugongRegistry>(&scenario);
-            let winner_id = core::registry_get_account_id(&registry, std::string::utf8(b"xid_a"));
+            let winner_id = dug::registry_get_account_id(&registry, std::string::utf8(b"xid_a"));
             let mut winner_account = ts::take_shared_by_id<DugongAccount>(&scenario, winner_id);
             let mut campaign = ts::take_shared<RewardCampaign>(&scenario);
             reward_campaigns::claim_reward<SUI>(&mut campaign, &mut winner_account, sui_type(), 3000);

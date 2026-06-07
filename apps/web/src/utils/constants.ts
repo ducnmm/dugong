@@ -27,7 +27,18 @@ export const COIN_TYPES = {
   SUI: '0x2::sui::SUI',
   WAL: '0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL',
   USDC: '0xa1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC',
+  DUG: DUGONG_PACKAGE_ID ? `${DUGONG_PACKAGE_ID}::dug::DUG` : '',
 } as const;
+
+export function isDugCoinType(coinType?: string | null): boolean {
+  return !!coinType && (coinType.endsWith('::dug::DUG') || coinType.endsWith('::core::CORE'));
+}
+
+export function getCoinSymbol(coinType?: string | null, fallback = 'SUI'): string {
+  if (!coinType) return fallback;
+  if (isDugCoinType(coinType)) return 'DUG';
+  return coinType.split('::').pop() || fallback;
+}
 
 // Default Values
 export const DEFAULT_DECIMALS = 9; // SUI decimals

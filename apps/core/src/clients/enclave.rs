@@ -268,13 +268,20 @@ impl EnclaveClient {
     // Non-tweet methods (still needed for specific flows)
     // ========================================================================
 
-    /// Sign init account by XID (for auto-creating recipient accounts)
-    pub async fn sign_init_account(&self, xid: &str) -> Result<SignedIntent<InitAccountPayload>> {
+    /// Sign init account by XID (for auto-creating recipient accounts).
+    /// When the caller already knows the Twitter handle, pass it through so the
+    /// created DugongAccount does not need to fall back to a synthetic handle.
+    pub async fn sign_init_account(
+        &self,
+        xid: &str,
+        handle: Option<&str>,
+    ) -> Result<SignedIntent<InitAccountPayload>> {
         self.post(
             enclave::PROCESS_INIT_ACCOUNT_ENDPOINT,
             &ProcessDataRequest {
                 payload: InitAccountRequest {
                     xid: xid.to_string(),
+                    handle: handle.map(|h| h.trim_start_matches('@').to_string()),
                 },
             },
             "process_init_account",
@@ -332,7 +339,8 @@ impl EnclaveClient {
             match self.http.post(&url).json(body).send().await {
                 Ok(resp) => {
                     let status = resp.status();
-                    if matches!(status.as_u16(), 502 | 503 | 504) && attempt < ENCLAVE_MAX_ATTEMPTS {
+                    if matches!(status.as_u16(), 502 | 503 | 504) && attempt < ENCLAVE_MAX_ATTEMPTS
+                    {
                         let backoff = enclave_retry_backoff(attempt);
                         warn!(
                             "enclave {label} returned {status}; retrying (attempt {attempt}/{ENCLAVE_MAX_ATTEMPTS}) after {backoff:?}"
@@ -394,6 +402,7 @@ pub struct ProcessDataRequest<T> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InitAccountRequest {
     pub xid: String,
+    pub handle: Option<String>,
 }
 
 /// Secure link wallet request - verifies both Twitter token and wallet signature

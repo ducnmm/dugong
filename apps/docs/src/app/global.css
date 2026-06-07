@@ -1,0 +1,23 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+:root {
+  --color-fd-primary: hsl(174, 78%, 23%);
+  --color-fd-primary-foreground: hsl(0, 0%, 100%);
+  --color-fd-ring: hsl(174, 52%, 48%);
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+body {
+  letter-spacing: 0;
+}
+
+.dugong-wordmark {
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}

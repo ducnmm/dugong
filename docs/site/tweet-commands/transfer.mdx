@@ -1,0 +1,27 @@
+---
+title: Transfer
+description: Transfer assets between Dugong accounts.
+---
+
+Use this to transfer assets between Dugong accounts.
+
+```text
+@DugongWallet send <amount> <coin> to @<recipient>
+```
+
+Examples:
+
+```text
+@DugongWallet send 0.01 DUG to @NautilusXBot
+@DugongWallet send 5 SUI to @alice
+@DugongWallet send 10.5 USDC to @bob
+```
+
+Behavior:
+
+- Transfers from the tweet author's Dugong account to the mentioned recipient.
+- Resolves the recipient X user id from tweet mentions or a TwitterAPI.io user lookup.
+- Auto-creates the recipient account first if it does not exist, using the recipient handle when available.
+- Requires the sender account to exist and have enough balance.
+- Replies with a transfer success message showing the amount, sender, recipient, and Suiscan transaction link.
+- Generic transfer failures are recorded in `webhook_events`; not every low-level transfer failure currently gets a user-facing error reply.

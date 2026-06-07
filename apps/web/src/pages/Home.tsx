@@ -7,6 +7,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 const HOME_BACKGROUND_SRC = '/dugong-home-background-new.png';
 const HOME_MASCOT_SRC = '/dugong-home-mascot.png';
+const HOME_DOCS_URL = import.meta.env.VITE_DOCS_URL || 'http://127.0.0.1:3004';
 const X_DEFAULT_AVATAR_SRC = 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
 
 const getXAvatarUrl = (handle: string) =>
@@ -31,6 +32,7 @@ export const Home: React.FC = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string>('');
   const [hasSearched, setHasSearched] = useState(false);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,6 +119,8 @@ export const Home: React.FC = () => {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onFocus={() => setIsSearchFocused(true)}
+                onBlur={() => setIsSearchFocused(false)}
                 placeholder="Search by @handle, user ID, or 0x... address"
                 className="account-search-input h-16 rounded-lg pl-14 pr-12 text-base sm:text-lg"
                 autoComplete="off"
@@ -129,6 +133,19 @@ export const Home: React.FC = () => {
               )}
             </div>
           </form>
+
+          <a
+            href={HOME_DOCS_URL}
+            target="_blank"
+            rel="noreferrer"
+            className={`home-docs-link mt-6 ${isSearchFocused ? 'home-docs-link-hidden' : ''}`}
+            aria-label="Open Dugong documentation"
+            aria-hidden={isSearchFocused}
+            tabIndex={isSearchFocused ? -1 : undefined}
+          >
+            <span>Docs</span>
+            <ExternalLink className="h-4 w-4 shrink-0 text-black" aria-hidden="true" />
+          </a>
 
           {searchError && (
             <div className="mt-6 rounded-lg border-2 border-black bg-red-200 p-4 shadow-neo-md">
@@ -153,7 +170,7 @@ export const Home: React.FC = () => {
                       <img
                         src={account.profile_image_url || getXAvatarUrl(account.x_handle)}
                         alt={`@${account.x_handle}`}
-                        className="h-11 w-11 shrink-0 rounded-md border-2 border-black bg-white object-cover shadow-neo-sm"
+                        className="h-11 w-11 shrink-0 rounded-md border border-black bg-white object-cover shadow-neo-sm"
                         referrerPolicy="no-referrer"
                         onError={(event) => {
                           event.currentTarget.onerror = null;

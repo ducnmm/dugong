@@ -1,11 +1,15 @@
 // Copyright (c) Dugong
 // SPDX-License-Identifier: Apache-2.0
 
-/// Core structs, constants, and initialization for dugong
-module dugong::core {
+    /// DUG coin, core structs, constants, and initialization for dugong
+module dugong::dug {
+    use std::ascii;
     use std::string::String;
+    use std::type_name;
+    use sui::balance::Balance;
     use sui::table::{Self, Table};
     use sui::bag::{Self, Bag};
+    use sui::coin::{Self, TreasuryCap};
     use enclave::enclave;
 
     // ====== Error Codes ======
@@ -28,6 +32,7 @@ module dugong::core {
     const EBetAlreadyProcessed: u64 = 14;
     const EInvalidBetSide: u64 = 15;
     const EMarketTweetAlreadyUsed: u64 = 16;
+    const EInvalidMarketFee: u64 = 17;
 
     // ====== Reward Campaign Error Codes ======
     const ECampaignClosed: u64 = 20;
@@ -52,10 +57,15 @@ module dugong::core {
     const RESOLVE_REWARD_CAMPAIGN_INTENT: u8 = 9;
     const CLAIM_INTENT: u8 = 10;
 
+    // ====== Dug Starter Coin Constants ======
+
+    const DUG_DECIMALS: u8 = 9;
+    const STARTER_DUG_BALANCE: u64 = 1_000_000_000; // 1 DUG
+
     // ====== Core Structs ======
 
-    /// One-Time Witness for core module (required for init function)
-    public struct CORE has drop {}
+    /// One-Time Witness for the DUG coin module (required for init function)
+    public struct DUG has drop {}
 
     /// Application identity struct (used for enclave)
     public struct DUGONG has drop {}
@@ -64,6 +74,7 @@ module dugong::core {
     public struct DugongRegistry has key {
         id: UID,
         xid_to_account: Table<String, ID>,
+        dug_treasury_cap: TreasuryCap<DUG>,
     }
 
     /// Shared account object
@@ -162,7 +173,8 @@ module dugong::core {
 
     // ====== Init Function ======
 
-    fun init(_otw: CORE, ctx: &mut TxContext) {
+    #[allow(deprecated_usage)]
+    fun init(otw: DUG, ctx: &mut TxContext) {
         // Create enclave capability and config using DUGONG identity
         let cap = enclave::new_cap(DUGONG {}, ctx);
 
@@ -174,10 +186,22 @@ module dugong::core {
             ctx,
         );
 
+        let (dug_treasury_cap, dug_metadata) = coin::create_currency<DUG>(
+            otw,
+            DUG_DECIMALS,
+            b"DUG",
+            b"Dug",
+            b"Dugong starter coin",
+            option::none(),
+            ctx,
+        );
+        transfer::public_freeze_object(dug_metadata);
+
         // Create and share DugongRegistry
         let registry = DugongRegistry {
             id: object::new(ctx),
             xid_to_account: table::new(ctx),
+            dug_treasury_cap,
         };
         transfer::share_object(registry);
 
@@ -203,6 +227,7 @@ module dugong::core {
     public fun e_bet_already_processed(): u64 { EBetAlreadyProcessed }
     public fun e_invalid_bet_side(): u64 { EInvalidBetSide }
     public fun e_market_tweet_already_used(): u64 { EMarketTweetAlreadyUsed }
+    public fun e_invalid_market_fee(): u64 { EInvalidMarketFee }
     public fun e_campaign_closed(): u64 { ECampaignClosed }
     public fun e_campaign_not_resolved(): u64 { ECampaignNotResolved }
     public fun e_invalid_campaign_type(): u64 { EInvalidCampaignType }
@@ -224,6 +249,11 @@ module dugong::core {
     public fun create_reward_campaign_intent(): u8 { CREATE_REWARD_CAMPAIGN_INTENT }
     public fun resolve_reward_campaign_intent(): u8 { RESOLVE_REWARD_CAMPAIGN_INTENT }
     public fun claim_intent(): u8 { CLAIM_INTENT }
+
+    // ====== Public Getter Functions for Dug Starter Coin ======
+
+    public fun dug_decimals(): u8 { DUG_DECIMALS }
+    public fun starter_dug_balance(): u64 { STARTER_DUG_BALANCE }
 
     // ====== Public Functions for Registry Operations ======
 
@@ -257,20 +287,16 @@ module dugong::core {
         account.last_timestamp
     }
 
-    public(package) fun account_balances(account: &DugongAccount): &Bag {
+    fun account_balances(account: &DugongAccount): &Bag {
         &account.balances
     }
 
-    public(package) fun account_balances_mut(account: &mut DugongAccount): &mut Bag {
+    fun account_balances_mut(account: &mut DugongAccount): &mut Bag {
         &mut account.balances
     }
 
     public(package) fun account_processed_tweets(account: &DugongAccount): &Table<String, bool> {
         &account.processed_tweets
-    }
-
-    public(package) fun account_processed_tweets_mut(account: &mut DugongAccount): &mut Table<String, bool> {
-        &mut account.processed_tweets
     }
 
     public(package) fun account_set_handle(account: &mut DugongAccount, new_handle: String) {
@@ -287,6 +313,68 @@ module dugong::core {
 
     public(package) fun account_add_processed_tweet(account: &mut DugongAccount, tweet_id: String) {
         account.processed_tweets.add(tweet_id, true);
+    }
+
+    public(package) fun coin_type<T>(): ascii::String {
+        type_name::with_defining_ids<T>().into_string()
+    }
+
+    public(package) fun coin_type_string<T>(): String {
+        coin_type<T>().to_string()
+    }
+
+    public(package) fun assert_coin_type<T>(coin_type_bytes: vector<u8>) {
+        assert!(coin_type_bytes == coin_type<T>().into_bytes(), ECoinTypeMismatch);
+    }
+
+    public(package) fun account_credit_balance<T>(
+        account: &mut DugongAccount,
+        balance: Balance<T>,
+    ) {
+        let type_key = coin_type<T>();
+        let balances = account_balances_mut(account);
+        if (balances.contains(type_key)) {
+            let existing = balances.borrow_mut<ascii::String, Balance<T>>(type_key);
+            existing.join(balance);
+        } else {
+            balances.add(type_key, balance);
+        };
+    }
+
+    public(package) fun account_debit_balance<T>(
+        account: &mut DugongAccount,
+        amount: u64,
+    ): Balance<T> {
+        let type_key = coin_type<T>();
+        let balances = account_balances_mut(account);
+        assert!(balances.contains(type_key), EInsufficientBalance);
+
+        let balance = balances.borrow_mut<ascii::String, Balance<T>>(type_key);
+        assert!(balance.value() >= amount, EInsufficientBalance);
+        balance.split(amount)
+    }
+
+    public(package) fun account_balance_value<T>(account: &DugongAccount): u64 {
+        let type_key = coin_type<T>();
+        let balances = account_balances(account);
+        if (balances.contains(type_key)) {
+            balances.borrow<ascii::String, Balance<T>>(type_key).value()
+        } else {
+            0
+        }
+    }
+
+    public(package) fun grant_starter_dug(
+        registry: &mut DugongRegistry,
+        account: &mut DugongAccount,
+    ): (String, u64) {
+        let starter_balance = coin::mint_balance<DUG>(
+            &mut registry.dug_treasury_cap,
+            STARTER_DUG_BALANCE,
+        );
+        account_credit_balance(account, starter_balance);
+
+        (coin_type_string<DUG>(), STARTER_DUG_BALANCE)
     }
 
     // ====== Public Function to Create New Account ======
@@ -416,6 +504,6 @@ module dugong::core {
 
     #[test_only]
     public fun init_for_testing(ctx: &mut TxContext) {
-        init(CORE {}, ctx);
+        init(DUG {}, ctx);
     }
 }

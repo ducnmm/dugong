@@ -24,7 +24,10 @@ macro_rules! redis_or_skip {
         match try_redis().await {
             Some(r) => r,
             None => {
-                eprintln!("skipping: Redis unreachable at {}", common::test_redis_url());
+                eprintln!(
+                    "skipping: Redis unreachable at {}",
+                    common::test_redis_url()
+                );
                 return;
             }
         }
@@ -108,6 +111,59 @@ async fn search_accounts_matches_handle(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../core/migrations")]
+async fn get_transaction_by_digest_returns_seeded_transfer(pool: PgPool) {
+    let redis = redis_or_skip!();
+    sqlx::query(
+        r#"
+        INSERT INTO transfers
+            (transaction_digest, transfer_type, from_xid, to_xid, coin_type, amount, tweet_id, timestamp)
+        VALUES
+            ('0xtx123', 'transfer'::transfer_type, 'alice-xid', 'bob-xid', '0x2::usdc::USDC', 1234567, 'tweet-1', 42)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("seed transfer");
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {
+                "decimals": 6,
+                "name": "USDC",
+                "symbol": "USDC",
+                "description": null,
+                "icon_url": null,
+                "id": null
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let mut config = test_config();
+    config.sui_rpc_url = server.uri();
+    let app = build_router(app_state(config, pool, redis));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/transaction/0xtx123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["tx_digest"], json!("0xtx123"));
+    assert_eq!(body["amount"], json!("1.234567"));
+    assert_eq!(body["from_xid"], json!("alice-xid"));
+    assert_eq!(body["to_xid"], json!("bob-xid"));
+}
+
+#[sqlx::test(migrations = "../core/migrations")]
 async fn exchange_twitter_token_returns_auth(pool: PgPool) {
     let redis = redis_or_skip!();
     let server = MockServer::start().await;
@@ -187,9 +243,7 @@ async fn ensure_account_returns_existing_account(pool: PgPool) {
                 .method("POST")
                 .uri("/api/auth/twitter/ensure-account")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "access_token": "tok123" }).to_string(),
-                ))
+                .body(Body::from(json!({ "access_token": "tok123" }).to_string()))
                 .unwrap(),
         )
         .await
@@ -403,7 +457,10 @@ async fn secure_link_wallet_refreshes_then_reaches_enclave(pool: PgPool) {
     let body = body_json(response).await;
     assert_eq!(body["success"], json!(false));
     assert_eq!(body["reauth_required"], json!(false));
-    assert!(body["error"].as_str().unwrap().contains("Verification failed"));
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("Verification failed"));
 }
 
 #[sqlx::test(migrations = "../core/migrations")]

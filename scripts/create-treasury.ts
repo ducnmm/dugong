@@ -76,6 +76,17 @@ function readEnvKey(envFile: string, key: string): string | null {
   return m?.[1]?.trim() || null;
 }
 
+function patchEnvKey(envFile: string, key: string, value: string): void {
+  const raw = existsSync(envFile) ? readFileSync(envFile, "utf8") : "";
+  const line = `${key}=${value}`;
+  const re = new RegExp(`^${key}=.*$`, "m");
+  const next = re.test(raw)
+    ? raw.replace(re, line)
+    : raw.trimEnd() + (raw.length ? "\n" : "") + line + "\n";
+  writeFileSync(envFile, next.endsWith("\n") ? next : next + "\n", "utf8");
+  info(`Patched ${apiEnv}: ${key}`);
+}
+
 /** Encode a UTF-8 string as the JSON byte-array literal Sui CLI expects. */
 function encodeVecU8(s: string): string {
   return `[${[...Buffer.from(s, "utf8")].join(",")}]`;
@@ -261,9 +272,10 @@ function main(): void {
     handle,
     createdAt: new Date().toISOString(),
   });
+  patchEnvKey(apiEnv, "MARKET_TREASURY_ACCOUNT_ID", accountId);
 
-  info("Done. deploy-contract.ts will pick this up automatically.");
-  info(`To sync to apps/api/.env now: scripts/deploy-contract.ts --network ${network}`);
+  info("Done. apps/api/.env and Treasury.toml are updated.");
+  info("Railway is unchanged; run scripts/railway-set-env.ts when you are ready to sync it.");
 }
 
 main();

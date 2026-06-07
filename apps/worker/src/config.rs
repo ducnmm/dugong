@@ -11,7 +11,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        dotenv::dotenv().ok();
+        dotenv::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/.env")).ok();
 
         let twitterapi_io_api_key =
             env::var("TWITTERAPI_IO_API_KEY").context("TWITTERAPI_IO_API_KEY must be set")?;

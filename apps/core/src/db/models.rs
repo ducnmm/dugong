@@ -511,6 +511,23 @@ impl Transfer {
         Ok(count.0)
     }
 
+    /// Find one transfer by its Sui transaction digest.
+    pub async fn find_by_transaction_digest(
+        pool: &sqlx::PgPool,
+        transaction_digest: &str,
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query_as::<_, Transfer>(
+            r#"
+            SELECT id, transaction_digest, transfer_type, from_xid, to_xid, coin_type, amount, tweet_id, timestamp, created_at
+            FROM transfers
+            WHERE transaction_digest = $1
+            "#,
+        )
+        .bind(transaction_digest)
+        .fetch_optional(pool)
+        .await
+    }
+
     /// Find transfers by sui_object_id (lookup account first, then find transfers)
     #[allow(dead_code)]
     pub async fn find_by_sui_object_id(
@@ -582,6 +599,19 @@ pub struct MarketBet {
     pub side: bool,
     pub coin_type: String,
     pub amount: i64,
+    pub tx_digest: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Mirrored market payout, whether submitted automatically during resolve or
+/// later through a user claim fallback.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct MarketPayout {
+    pub id: i32,
+    pub market_tweet_id: String,
+    pub winner_xid: String,
+    pub coin_type: String,
+    pub payout_tweet_id: Option<String>,
     pub tx_digest: Option<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -714,6 +744,108 @@ impl MarketBet {
         .bind(side)
         .bind(coin_type)
         .bind(amount)
+        .bind(tx_digest)
+        .fetch_one(pool)
+        .await
+    }
+
+    /// Return market accounts that should receive a payout per coin type.
+    ///
+    /// Normal case: bettors on the resolved winning side.
+    /// Refund case for a coin pool: if no one bet the winning side for that
+    /// coin, every bettor in that coin pool is eligible for a refund.
+    pub async fn find_payout_recipients(
+        pool: &sqlx::PgPool,
+        market_tweet_id: &str,
+        outcome: bool,
+    ) -> Result<Vec<(String, String)>, sqlx::Error> {
+        sqlx::query_as::<_, (String, String)>(
+            r#"
+            SELECT DISTINCT b.better_xid, b.coin_type
+            FROM market_bets b
+            WHERE b.market_tweet_id = $1
+              AND (
+                b.side = $2
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM market_bets winners
+                    WHERE winners.market_tweet_id = b.market_tweet_id
+                      AND winners.coin_type = b.coin_type
+                      AND winners.side = $2
+                )
+              )
+            "#,
+        )
+        .bind(market_tweet_id)
+        .bind(outcome)
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Return coin types a bettor can still claim for a resolved market.
+    pub async fn find_claimable_coin_types(
+        pool: &sqlx::PgPool,
+        market_tweet_id: &str,
+        better_xid: &str,
+        outcome: bool,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT DISTINCT b.coin_type
+            FROM market_bets b
+            WHERE b.market_tweet_id = $1
+              AND b.better_xid = $2
+              AND (
+                b.side = $3
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM market_bets winners
+                    WHERE winners.market_tweet_id = b.market_tweet_id
+                      AND winners.coin_type = b.coin_type
+                      AND winners.side = $3
+                )
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM market_payouts payouts
+                  WHERE payouts.market_tweet_id = b.market_tweet_id
+                    AND payouts.winner_xid = b.better_xid
+                    AND payouts.coin_type = b.coin_type
+              )
+            "#,
+        )
+        .bind(market_tweet_id)
+        .bind(better_xid)
+        .bind(outcome)
+        .fetch_all(pool)
+        .await
+    }
+}
+
+impl MarketPayout {
+    pub async fn upsert(
+        pool: &sqlx::PgPool,
+        market_tweet_id: &str,
+        winner_xid: &str,
+        coin_type: &str,
+        payout_tweet_id: Option<&str>,
+        tx_digest: Option<&str>,
+    ) -> Result<Self, sqlx::Error> {
+        sqlx::query_as::<_, MarketPayout>(
+            r#"
+            INSERT INTO market_payouts
+                (market_tweet_id, winner_xid, coin_type, payout_tweet_id, tx_digest)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (market_tweet_id, winner_xid, coin_type) DO UPDATE SET
+                payout_tweet_id = COALESCE(market_payouts.payout_tweet_id, EXCLUDED.payout_tweet_id),
+                tx_digest = COALESCE(market_payouts.tx_digest, EXCLUDED.tx_digest)
+            RETURNING id, market_tweet_id, winner_xid, coin_type, payout_tweet_id, tx_digest, created_at
+            "#,
+        )
+        .bind(market_tweet_id)
+        .bind(winner_xid)
+        .bind(coin_type)
+        .bind(payout_tweet_id)
         .bind(tx_digest)
         .fetch_one(pool)
         .await

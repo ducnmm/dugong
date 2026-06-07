@@ -1,0 +1,23 @@
+---
+title: Claim
+description: Claim reward campaign rewards or fallback market payouts.
+---
+
+Use this as a reply to a resolved reward campaign tweet or a resolved market
+tweet.
+
+```text
+@DugongWallet claim
+@DugongWallet claim reward
+@DugongWallet claim payout
+@DugongWallet claim winnings
+@DugongWallet claim!
+```
+
+Behavior:
+
+- For reward campaigns, the claimant must be a selected winner and the campaign must be resolved.
+- Auto-creates the claimant account if needed.
+- Credits the reward to the claimant's Dugong account and replies with a reward-claimed message and Suiscan transaction link.
+- For markets, this is a fallback payout path when a resolved market has claimable payout coin types for the claimant. Market resolution normally pays winners automatically.
+- If there is no claimable reward or payout, replies that there is nothing to claim.

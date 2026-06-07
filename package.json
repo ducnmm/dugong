@@ -1,0 +1,12 @@
+{
+  "name": "dugong",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "dev:docs": "pnpm --filter @dugong/docs dev",
+    "build:docs": "pnpm --filter @dugong/docs build",
+    "check:docs": "pnpm --filter @dugong/docs check"
+  }
+}

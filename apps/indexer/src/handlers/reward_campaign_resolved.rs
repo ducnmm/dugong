@@ -12,10 +12,9 @@ pub struct RewardCampaignResolvedHandler;
 #[async_trait]
 impl EventHandler for RewardCampaignResolvedHandler {
     async fn handle(pool: &PgPool, event: &SuiEvent) -> Result<()> {
-        let parsed_json = event
-            .parsed_json
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Missing parsed_json in RewardCampaignResolved event"))?;
+        let parsed_json = event.parsed_json.clone().ok_or_else(|| {
+            anyhow::anyhow!("Missing parsed_json in RewardCampaignResolved event")
+        })?;
 
         let event_data: RewardCampaignResolvedEvent = serde_json::from_value(parsed_json)
             .context("Failed to parse RewardCampaignResolved event")?;

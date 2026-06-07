@@ -1,0 +1,10 @@
+---
+title: Webhook Flow
+description: How tweet events move from X or TwitterAPI.io into Dugong processing.
+---
+
+1. X or TwitterAPI.io sends a tweet event to Dugong.
+2. Dugong verifies or normalizes the webhook and queues the event.
+3. The processor sends the work through the enclave-facing service when needed.
+4. Dugong submits the relevant Sui transaction.
+5. Indexed Sui events update account and transaction views.

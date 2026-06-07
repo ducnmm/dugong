@@ -1,0 +1,21 @@
+---
+title: Account Creation
+description: Initialize a Dugong account from X.
+---
+
+Use this when a user wants to initialize a Dugong account from X.
+
+```text
+@DugongWallet create
+@DugongWallet create account
+@DugongWallet init
+@DugongWallet init account
+```
+
+Behavior:
+
+- Creates a Dugong account for the tweet author.
+- Uses the author's current X handle from the fetched tweet.
+- Gives the starter `DUG` balance configured in the current contract.
+- Replies with a welcome message and a Suiscan transaction link.
+- If the account already exists, replies that the account already exists and may include the account object id.

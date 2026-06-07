@@ -1,0 +1,11 @@
+{
+  "title": "Using Dugong",
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "account-search",
+    "dashboard",
+    "wallet-linking",
+    "transactions"
+  ]
+}

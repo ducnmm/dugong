@@ -32,6 +32,7 @@ mod hex {
 fn get_coin_decimals(coin_type: &str) -> u32 {
     match coin_type.to_uppercase().as_str() {
         "SUI" => 9,
+        "DUG" | "CORE" => 9,
         "WAL" => 9,
         "USDC" => 6,
         _ => 9, // Default to 9 decimals if unknown
@@ -40,13 +41,14 @@ fn get_coin_decimals(coin_type: &str) -> u32 {
 
 /// Expand shorthand coin types to full type paths
 /// Testnet addresses - update these for mainnet deployment
-fn expand_coin_type(coin_type: &str) -> String {
+fn expand_coin_type(coin_type: &str, dugong_package_id: &str) -> String {
     match coin_type.to_uppercase().as_str() {
         "SUI" => "0x2::sui::SUI".to_string(),
         "USDC" => "0xa1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC"
             .to_string(),
         "WAL" => "0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL"
             .to_string(),
+        "DUG" | "CORE" => format!("{}::dug::DUG", dugong_package_id),
         _ => {
             if coin_type.contains("::") {
                 coin_type.to_string()
@@ -59,8 +61,8 @@ fn expand_coin_type(coin_type: &str) -> String {
 
 /// Convert coin type to canonical format expected by Move's `type_name::get<T>()`
 /// Example: "0x2::sui::SUI" -> "0000000000000000000000000000000000000000000000000000000000000002::sui::SUI"
-fn to_canonical_coin_type(coin_type: &str) -> String {
-    let expanded = expand_coin_type(coin_type);
+fn to_canonical_coin_type(coin_type: &str, dugong_package_id: &str) -> String {
+    let expanded = expand_coin_type(coin_type, dugong_package_id);
 
     if let Some(rest) = expanded.strip_prefix("0x") {
         if let Some(idx) = rest.find("::") {
@@ -103,6 +105,7 @@ pub struct InitAccountPayload {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InitAccountRequest {
     pub xid: String, // Twitter user ID
+    pub handle: Option<String>,
 }
 
 /// Link wallet payload that will be signed and sent to Sui blockchain
@@ -385,9 +388,20 @@ pub async fn process_tweet(
         ParsedCommand::CreateMarket { question } => {
             process_create_market_command(&state, &tweet_data, &question, current_timestamp).await
         }
-        ParsedCommand::PlaceBet { amount, coin_type, side } => {
-            process_place_bet_command(&state, &tweet_data, amount, &coin_type, side, current_timestamp)
-                .await
+        ParsedCommand::PlaceBet {
+            amount,
+            coin_type,
+            side,
+        } => {
+            process_place_bet_command(
+                &state,
+                &tweet_data,
+                amount,
+                &coin_type,
+                side,
+                current_timestamp,
+            )
+            .await
         }
         ParsedCommand::ResolveMarket { outcome } => {
             process_resolve_market_command(&state, &tweet_data, outcome, current_timestamp).await
@@ -414,9 +428,7 @@ pub async fn process_tweet(
         ParsedCommand::ResolveRewardCampaign => {
             process_resolve_reward_campaign_command(&state, &tweet_data, current_timestamp).await
         }
-        ParsedCommand::Claim => {
-            process_claim_command(&state, &tweet_data, current_timestamp).await
-        }
+        ParsedCommand::Claim => process_claim_command(&state, &tweet_data, current_timestamp).await,
     }
 }
 
@@ -440,10 +452,20 @@ struct TweetMention {
 #[derive(Debug)]
 enum ParsedCommand {
     CreateAccount,
-    Transfer { receiver_username: String },
-    CreateMarket { question: String },
-    PlaceBet { amount: f64, coin_type: String, side: bool },
-    ResolveMarket { outcome: bool },
+    Transfer {
+        receiver_username: String,
+    },
+    CreateMarket {
+        question: String,
+    },
+    PlaceBet {
+        amount: f64,
+        coin_type: String,
+        side: bool,
+    },
+    ResolveMarket {
+        outcome: bool,
+    },
     CreateRewardCampaign {
         campaign_type: u8,
         target: String,
@@ -669,7 +691,10 @@ fn parse_tweet_command_type(
             .get(2)
             .and_then(|m| m.as_str().parse().ok())
             .ok_or_else(|| EnclaveError::GenericError("Invalid reward amount".to_string()))?;
-        let coin_type = caps.get(3).map(|m| m.as_str().to_uppercase()).unwrap_or_default();
+        let coin_type = caps
+            .get(3)
+            .map(|m| m.as_str().to_uppercase())
+            .unwrap_or_default();
         info!(
             "Detected CreateRewardCampaign (top replies): top {} {} {} each",
             max_winners, reward_amount, coin_type
@@ -689,12 +714,18 @@ fn parse_tweet_command_type(
             .get(1)
             .and_then(|m| m.as_str().parse().ok())
             .ok_or_else(|| EnclaveError::GenericError("Invalid reward amount".to_string()))?;
-        let coin_type = caps.get(2).map(|m| m.as_str().to_uppercase()).unwrap_or_default();
+        let coin_type = caps
+            .get(2)
+            .map(|m| m.as_str().to_uppercase())
+            .unwrap_or_default();
         let max_winners: u64 = caps
             .get(3)
             .and_then(|m| m.as_str().parse().ok())
             .ok_or_else(|| EnclaveError::GenericError("Invalid max winners".to_string()))?;
-        let target = caps.get(4).map(|m| m.as_str().to_string()).unwrap_or_default();
+        let target = caps
+            .get(4)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default();
         info!(
             "Detected CreateRewardCampaign (first hashtag): first {} {} {} for {}",
             max_winners, reward_amount, coin_type, target
@@ -713,7 +744,9 @@ fn parse_tweet_command_type(
         let question = caps
             .get(1)
             .map(|m| m.as_str().trim().to_string())
-            .ok_or_else(|| EnclaveError::GenericError("Failed to extract market question".to_string()))?;
+            .ok_or_else(|| {
+                EnclaveError::GenericError("Failed to extract market question".to_string())
+            })?;
         info!("Detected CreateMarket command: {}", question);
         return Ok(ParsedCommand::CreateMarket { question });
     }
@@ -732,8 +765,15 @@ fn parse_tweet_command_type(
             .get(3)
             .map(|m| m.as_str().to_lowercase() == "yes")
             .unwrap_or(false);
-        info!("Detected PlaceBet command: {} {} side={}", amount, coin_type, side);
-        return Ok(ParsedCommand::PlaceBet { amount, coin_type, side });
+        info!(
+            "Detected PlaceBet command: {} {} side={}",
+            amount, coin_type, side
+        );
+        return Ok(ParsedCommand::PlaceBet {
+            amount,
+            coin_type,
+            side,
+        });
     }
 
     // Check resolve market
@@ -863,7 +903,7 @@ async fn process_transfer_command(
     let amount_units = (amount_float * multiplier as f64) as u64;
 
     // Convert coin type to canonical format (matches Move type_name::get<T>())
-    let canonical_coin_type = to_canonical_coin_type(&coin_type);
+    let canonical_coin_type = to_canonical_coin_type(&coin_type, &state.dugong_package_id);
 
     // Resolve receiver user ID from the fetched tweet entities first. If the
     // provider did not return mention entities, fall back to a separate user
@@ -988,16 +1028,13 @@ async fn process_place_bet_command(
     side: bool,
     timestamp_ms: u64,
 ) -> Result<Json<ProcessTweetResponse>, EnclaveError> {
-    let market_tweet_id = tweet_data
-        .parent_tweet_id
-        .clone()
-        .ok_or_else(|| EnclaveError::GenericError(
-            "Bet tweet must be a reply to the market tweet".to_string(),
-        ))?;
+    let market_tweet_id = tweet_data.parent_tweet_id.clone().ok_or_else(|| {
+        EnclaveError::GenericError("Bet tweet must be a reply to the market tweet".to_string())
+    })?;
 
     let decimals = get_coin_decimals(coin_type);
     let amount = (amount_float * 10_u64.pow(decimals) as f64) as u64;
-    let canonical_coin_type = to_canonical_coin_type(coin_type);
+    let canonical_coin_type = to_canonical_coin_type(coin_type, &state.dugong_package_id);
 
     let payload = PlaceBetPayload {
         better_xid: tweet_data.author_xid.clone().into_bytes(),
@@ -1008,12 +1045,7 @@ async fn process_place_bet_command(
         side,
     };
 
-    let signed = to_signed_response(
-        &state.eph_kp,
-        payload,
-        timestamp_ms,
-        IntentScope::PlaceBet,
-    );
+    let signed = to_signed_response(&state.eph_kp, payload, timestamp_ms, IntentScope::PlaceBet);
 
     let response = ProcessTweetResponse {
         command_type: CommandType::PlaceBet,
@@ -1052,12 +1084,9 @@ async fn process_resolve_market_command(
     outcome: bool,
     timestamp_ms: u64,
 ) -> Result<Json<ProcessTweetResponse>, EnclaveError> {
-    let market_tweet_id = tweet_data
-        .parent_tweet_id
-        .clone()
-        .ok_or_else(|| EnclaveError::GenericError(
-            "Resolve tweet must be a reply to the market tweet".to_string(),
-        ))?;
+    let market_tweet_id = tweet_data.parent_tweet_id.clone().ok_or_else(|| {
+        EnclaveError::GenericError("Resolve tweet must be a reply to the market tweet".to_string())
+    })?;
 
     let payload = ResolveMarketPayload {
         resolver_xid: tweet_data.author_xid.clone().into_bytes(),
@@ -1113,7 +1142,7 @@ async fn process_create_reward_campaign_command(
     let campaign_tweet_id = tweet_data.tweet_id.clone();
     let decimals = get_coin_decimals(coin_type);
     let reward_amount = (reward_amount_float * 10_u64.pow(decimals) as f64) as u64;
-    let canonical_coin_type = to_canonical_coin_type(coin_type);
+    let canonical_coin_type = to_canonical_coin_type(coin_type, &state.dugong_package_id);
 
     let payload = CreateRewardCampaignPayload {
         creator_xid: tweet_data.author_xid.clone().into_bytes(),
@@ -1275,15 +1304,18 @@ pub async fn process_init_account(
         .map_err(|e| EnclaveError::GenericError(format!("Failed to get current timestamp: {}", e)))?
         .as_millis() as u64;
 
-    // MOCK: Fetch Twitter handle by XID
-    // TODO: Uncomment when rate limit is resolved
-    /*
-    let handle = fetch_twitter_handle_by_xid(&state.api_key, &xid).await?;
-    */
-
-    // MOCK: Simulate handle
-    let handle = format!("user_{}", &xid[..std::cmp::min(xid.len(), 8)]);
-    info!("MOCK: Handle: @{}", handle);
+    let handle = request
+        .payload
+        .handle
+        .as_deref()
+        .map(|h| h.trim().trim_start_matches('@'))
+        .filter(|h| !h.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            // Last-resort fallback for call sites that only know the XID.
+            format!("user_{}", &xid[..std::cmp::min(xid.len(), 8)])
+        });
+    info!("Using handle for account init: @{}", handle);
 
     // Create payload
     let payload = InitAccountPayload {
@@ -1627,7 +1659,7 @@ mod test {
             from_xid: b"123456789".to_vec(),
             to_xid: b"987654321".to_vec(),
             amount: 5_000_000_000, // 5 SUI in MIST
-            coin_type: to_canonical_coin_type("SUI").into_bytes(),
+            coin_type: to_canonical_coin_type("SUI", "0x0").into_bytes(),
             tweet_id: b"1234567890123456789".to_vec(),
         };
 
@@ -1657,7 +1689,7 @@ mod test {
         let signature_hex = "a99d5bbd8ac60a17d1e21404c41f192ea7e8496255ab3e75e05d1e18d37249432e0b85fe00d083e1682020917d4baf923595ad2063b61e342ff15129ef06350b";
         let pk_hex = "09cba98f149884f6d0ec0b06045e966c6b6e2043eca3643712d169dd935d6804";
 
-        let canonical_coin_type = to_canonical_coin_type("SUI");
+        let canonical_coin_type = to_canonical_coin_type("SUI", "0x0");
 
         let payload = TransferPayload {
             from_xid: from_xid.as_bytes().to_vec(),
@@ -1841,9 +1873,18 @@ mod test {
     #[test]
     fn test_parse_tweet_command_type_create_market() {
         let test_cases = vec![
-            ("@DugongWallet create market: BTC over 100K before March?", "BTC over 100K before March?"),
-            ("@dugongwallet CREATE MARKET: Will ETH flip BTC?", "Will ETH flip BTC?"),
-            ("@DugongWallet create market:  leading spaces trimmed  ", "leading spaces trimmed"),
+            (
+                "@DugongWallet create market: BTC over 100K before March?",
+                "BTC over 100K before March?",
+            ),
+            (
+                "@dugongwallet CREATE MARKET: Will ETH flip BTC?",
+                "Will ETH flip BTC?",
+            ),
+            (
+                "@DugongWallet create market:  leading spaces trimmed  ",
+                "leading spaces trimmed",
+            ),
         ];
 
         for (tweet, expected_question) in test_cases {
@@ -1851,7 +1892,12 @@ mod test {
             assert!(result.is_ok(), "Failed for tweet: {}", tweet);
             match result.unwrap() {
                 ParsedCommand::CreateMarket { question } => {
-                    assert_eq!(question.trim_end(), expected_question, "Wrong question for: {}", tweet);
+                    assert_eq!(
+                        question.trim_end(),
+                        expected_question,
+                        "Wrong question for: {}",
+                        tweet
+                    );
                 }
                 other => panic!("Expected CreateMarket, got {:?} for: {}", other, tweet),
             }
@@ -1870,8 +1916,16 @@ mod test {
             let result = parse_tweet_command_type(tweet, "123");
             assert!(result.is_ok(), "Failed for tweet: {}", tweet);
             match result.unwrap() {
-                ParsedCommand::PlaceBet { amount, coin_type, side } => {
-                    assert!((amount - expected_amount).abs() < 0.001, "Wrong amount for: {}", tweet);
+                ParsedCommand::PlaceBet {
+                    amount,
+                    coin_type,
+                    side,
+                } => {
+                    assert!(
+                        (amount - expected_amount).abs() < 0.001,
+                        "Wrong amount for: {}",
+                        tweet
+                    );
                     assert_eq!(coin_type, expected_coin, "Wrong coin for: {}", tweet);
                     assert_eq!(side, expected_side, "Wrong side for: {}", tweet);
                 }
@@ -1925,7 +1979,7 @@ mod test {
             market_tweet_id: b"1800000000000000001".to_vec(),
             bet_tweet_id: b"1800000000000000002".to_vec(),
             amount: 5_000_000_000,
-            coin_type: to_canonical_coin_type("SUI").into_bytes(),
+            coin_type: to_canonical_coin_type("SUI", "0x0").into_bytes(),
             side: true,
         };
 
@@ -1955,8 +2009,10 @@ mod test {
 
     #[test]
     fn test_parse_reward_campaign_top_replies() {
-        let result =
-            parse_tweet_command_type("@DugongWallet reward top 3 replies to this tweet with 5 SUI each", "123");
+        let result = parse_tweet_command_type(
+            "@DugongWallet reward top 3 replies to this tweet with 5 SUI each",
+            "123",
+        );
         match result.unwrap() {
             ParsedCommand::CreateRewardCampaign {
                 campaign_type,
@@ -2015,7 +2071,11 @@ mod test {
 
     #[test]
     fn test_parse_claim() {
-        for tweet in ["@DugongWallet claim", "@DugongWallet claim reward", "@DugongWallet CLAIM!"] {
+        for tweet in [
+            "@DugongWallet claim",
+            "@DugongWallet claim reward",
+            "@DugongWallet CLAIM!",
+        ] {
             match parse_tweet_command_type(tweet, "123").unwrap() {
                 ParsedCommand::Claim => {}
                 other => panic!("Expected Claim, got {:?} for {}", other, tweet),
@@ -2034,7 +2094,7 @@ mod test {
             target: b"replies".to_vec(),
             reward_amount: 5_000_000_000,
             max_winners: 3,
-            coin_type: to_canonical_coin_type("SUI").into_bytes(),
+            coin_type: to_canonical_coin_type("SUI", "0x0").into_bytes(),
         };
         let msg = IntentMessage::new(create, timestamp, IntentScope::CreateRewardCampaign);
         let bytes = bcs::to_bytes(&msg).expect("BCS serialize failed");

@@ -6,11 +6,10 @@
 module dugong::markets {
     use std::ascii;
     use std::string::{Self, String};
-    use std::type_name;
     use sui::balance::{Self, Balance};
     use sui::bag::{Self, Bag};
     use sui::table::{Self, Table};
-    use dugong::core::{Self, DugongAccount};
+    use dugong::dug::{Self, DugongAccount};
     use dugong::events;
 
     // ====== Market Status Constants ======
@@ -106,9 +105,10 @@ module dugong::markets {
         let creator_xid_str = string::utf8(creator_xid);
         let question_str = string::utf8(question);
 
+        assert!(fee_bps <= 10_000, dug::e_invalid_market_fee());
         assert!(
             !registry.tweet_id_to_market.contains(market_tweet_id_str),
-            core::e_market_tweet_already_used(),
+            dug::e_market_tweet_already_used(),
         );
 
         let market = PredictionMarket {
@@ -148,15 +148,13 @@ module dugong::markets {
         _signature: &vector<u8>,
         ctx: &mut TxContext,
     ) {
-        assert!(market.status == STATUS_OPEN, core::e_market_closed());
+        assert!(market.status == STATUS_OPEN, dug::e_market_closed());
 
-        // Verify coin_type matches generic T
-        let expected_type = type_name::get<T>().into_string().into_bytes();
-        assert!(coin_type == expected_type, core::e_coin_type_mismatch());
+        dug::assert_coin_type<T>(coin_type);
 
         let bet_tweet_id_str = string::utf8(bet_tweet_id);
-        let type_key = type_name::get<T>().into_string();
-        let better_xid = core::account_xid(better_account);
+        let type_key = dug::coin_type<T>();
+        let better_xid = dug::account_xid(better_account);
 
         // Lazily create pool for this coin type
         if (!market.pools.contains(type_key)) {
@@ -174,14 +172,9 @@ module dugong::markets {
         };
 
         let pool = market.pools.borrow_mut<ascii::String, CoinPool<T>>(type_key);
-        assert!(!pool.processed_bets.contains(bet_tweet_id_str), core::e_bet_already_processed());
+        assert!(!pool.processed_bets.contains(bet_tweet_id_str), dug::e_bet_already_processed());
 
-        // Debit from better's balance
-        let account_balances = core::account_balances_mut(better_account);
-        assert!(account_balances.contains(type_key), core::e_insufficient_balance());
-        let from_bal = account_balances.borrow_mut<ascii::String, Balance<T>>(type_key);
-        assert!(from_bal.value() >= amount, core::e_insufficient_balance());
-        let staked = from_bal.split(amount);
+        let staked = dug::account_debit_balance<T>(better_account, amount);
 
         if (side) {
             pool.yes_balance.join(staked);
@@ -210,7 +203,7 @@ module dugong::markets {
             bet_tweet_id_str,
             better_xid,
             side,
-            type_name::get<T>().into_string().to_string(),
+            dug::coin_type_string<T>(),
             amount,
             timestamp_ms,
         );
@@ -234,17 +227,17 @@ module dugong::markets {
         timestamp_ms: u64,
         _signature: &vector<u8>,
     ) {
-        assert!(market.status == STATUS_OPEN, core::e_market_already_resolved());
+        assert!(market.status == STATUS_OPEN, dug::e_market_already_resolved());
         assert!(
             string::utf8(resolver_xid) == market.creator_xid,
-            core::e_not_market_creator(),
+            dug::e_not_market_creator(),
         );
 
         market.status = STATUS_RESOLVED;
         market.outcome = outcome;
         market.resolved_at_ms = timestamp_ms;
 
-        let type_key = type_name::get<T>().into_string();
+        let type_key = dug::coin_type<T>();
         if (!market.pools.contains(type_key)) {
             // No bets in this coin; nothing to settle.
             events::emit_market_resolved(
@@ -268,8 +261,8 @@ module dugong::markets {
         // Normal: skim fee, merge losing pool into winning pool for distribution
         if (winning_total > 0 && losing_total > 0) {
             let grand_total = winning_total + losing_total;
-            let fee_bps = (market.fee_bps as u64);
-            let fee = grand_total * fee_bps / 10_000;
+            let raw_fee = mul_div_floor(grand_total, (market.fee_bps as u64), 10_000);
+            let fee = if (raw_fee > losing_total) { losing_total } else { raw_fee };
 
             // Split fee from losing pool and credit to treasury
             if (fee > 0) {
@@ -278,14 +271,7 @@ module dugong::markets {
                 } else {
                     pool.yes_balance.split(fee)
                 };
-                let treasury_balances = core::account_balances_mut(treasury);
-                if (treasury_balances.contains(type_key)) {
-                    treasury_balances
-                        .borrow_mut<ascii::String, Balance<T>>(type_key)
-                        .join(fee_balance);
-                } else {
-                    treasury_balances.add(type_key, fee_balance);
-                };
+                dug::account_credit_balance(treasury, fee_balance);
             };
 
             // Merge remaining losing pool into winning pool
@@ -334,13 +320,13 @@ module dugong::markets {
         market: &mut PredictionMarket,
         winner_account: &mut DugongAccount,
     ) {
-        assert!(market.status == STATUS_RESOLVED, core::e_market_closed());
+        assert!(market.status == STATUS_RESOLVED, dug::e_market_closed());
 
-        let type_key = type_name::get<T>().into_string();
-        assert!(market.pools.contains(type_key), core::e_market_not_found());
+        let type_key = dug::coin_type<T>();
+        assert!(market.pools.contains(type_key), dug::e_market_not_found());
 
         let pool = market.pools.borrow_mut<ascii::String, CoinPool<T>>(type_key);
-        let winner_xid = core::account_xid(winner_account);
+        let winner_xid = dug::account_xid(winner_account);
 
         // Idempotency
         if (pool.paid_winners.contains(winner_xid)) { return };
@@ -379,7 +365,7 @@ module dugong::markets {
             };
             let stake = *winning_stakes.borrow(winner_xid);
             // Parimutuel: floor(distributable * stake / winning_total)
-            let payout = pool.distributable * stake / winning_total;
+            let payout = mul_div_floor(pool.distributable, stake, winning_total);
             (stake, payout, true)
         };
 
@@ -423,28 +409,16 @@ module dugong::markets {
         };
 
         if (payout_balance.value() > 0) {
-            let winner_balances = core::account_balances_mut(winner_account);
-            if (winner_balances.contains(type_key)) {
-                winner_balances
-                    .borrow_mut<ascii::String, Balance<T>>(type_key)
-                    .join(payout_balance);
-            } else {
-                winner_balances.add(type_key, payout_balance);
-            };
+            dug::account_credit_balance(winner_account, payout_balance);
         } else {
             payout_balance.destroy_zero();
         };
 
-        // Update distributable after each payout (tracks remaining for dust)
-        if (winning_total > 0) {
-            pool.distributable = if (outcome) {
-                pool.yes_balance.value()
-            } else {
-                pool.no_balance.value()
-            };
-        };
-
         pool.paid_winners.add(winner_xid, true);
+    }
+
+    fun mul_div_floor(a: u64, b: u64, denominator: u64): u64 {
+        (((a as u128) * (b as u128) / (denominator as u128)) as u64)
     }
 
     // ====== Test-Only Helpers ======
@@ -456,21 +430,21 @@ module dugong::markets {
 
     #[test_only]
     public fun pool_yes_total<T>(market: &PredictionMarket): u64 {
-        let type_key = type_name::get<T>().into_string();
+        let type_key = dug::coin_type<T>();
         if (!market.pools.contains(type_key)) { return 0 };
         market.pools.borrow<ascii::String, CoinPool<T>>(type_key).yes_total
     }
 
     #[test_only]
     public fun pool_no_total<T>(market: &PredictionMarket): u64 {
-        let type_key = type_name::get<T>().into_string();
+        let type_key = dug::coin_type<T>();
         if (!market.pools.contains(type_key)) { return 0 };
         market.pools.borrow<ascii::String, CoinPool<T>>(type_key).no_total
     }
 
     #[test_only]
     public fun pool_distributable<T>(market: &PredictionMarket): u64 {
-        let type_key = type_name::get<T>().into_string();
+        let type_key = dug::coin_type<T>();
         if (!market.pools.contains(type_key)) { return 0 };
         market.pools.borrow<ascii::String, CoinPool<T>>(type_key).distributable
     }

@@ -85,7 +85,7 @@ impl TwitterClient {
             format!("@{}", mention)
         };
 
-        let query = format!(
+        let mut query = format!(
             "{} (send OR link OR create OR update OR transfer)",
             mention_query
         );
@@ -93,6 +93,14 @@ impl TwitterClient {
         let start_time = start_time
             .and_then(|time| DateTime::parse_from_rfc3339(time).ok())
             .map(|time| time.with_timezone(&Utc));
+
+        if let Some(start_time) = start_time {
+            query.push_str(&format!(
+                " since_time:{} until_time:{}",
+                start_time.timestamp(),
+                Utc::now().timestamp()
+            ));
+        }
 
         // Retry logic for network issues
         let mut retries = 3;

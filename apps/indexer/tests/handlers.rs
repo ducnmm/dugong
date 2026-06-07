@@ -4,6 +4,7 @@
 mod common;
 
 use common::sui_event;
+use dugong_core::db::models::{AccountBalance, DugongAccount, Market};
 use dugong_indexer::handlers::account_created::AccountCreatedHandler;
 use dugong_indexer::handlers::bet_placed::BetPlacedHandler;
 use dugong_indexer::handlers::coin_deposited::CoinDepositedHandler;
@@ -14,7 +15,6 @@ use dugong_indexer::handlers::market_created::MarketCreatedHandler;
 use dugong_indexer::handlers::market_resolved::MarketResolvedHandler;
 use dugong_indexer::handlers::wallet_linked::WalletLinkedHandler;
 use dugong_indexer::handlers::EventHandler;
-use dugong_core::db::models::{AccountBalance, DugongAccount, Market};
 use serde_json::json;
 use sqlx::PgPool;
 
@@ -47,7 +47,9 @@ async fn wallet_linked_sets_owner(pool: PgPool) {
         "DIGEST-wl",
         json!({ "xid": "user-2", "owner_address": "0xowner2" }),
     );
-    WalletLinkedHandler::handle(&pool, &event).await.expect("handle");
+    WalletLinkedHandler::handle(&pool, &event)
+        .await
+        .expect("handle");
 
     let acc = DugongAccount::find_by_owner_address(&pool, "0xowner2")
         .await
@@ -66,7 +68,9 @@ async fn handle_updated_changes_handle(pool: PgPool) {
         "DIGEST-hu",
         json!({ "xid": "user-3", "old_handle": "old", "new_handle": "new" }),
     );
-    HandleUpdatedHandler::handle(&pool, &event).await.expect("handle");
+    HandleUpdatedHandler::handle(&pool, &event)
+        .await
+        .expect("handle");
 
     let acc = DugongAccount::find_by_x_user_id(&pool, "user-3")
         .await
@@ -82,7 +86,9 @@ async fn coin_deposited_increases_balance(pool: PgPool) {
         "DIGEST-dep",
         json!({ "xid": "user-4", "coin_type": "0x2::sui::SUI", "amount": "1000" }),
     );
-    CoinDepositedHandler::handle(&pool, &event).await.expect("handle");
+    CoinDepositedHandler::handle(&pool, &event)
+        .await
+        .expect("handle");
 
     let balances = AccountBalance::find_by_x_user_id(&pool, "user-4")
         .await

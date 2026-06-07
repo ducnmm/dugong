@@ -3,7 +3,7 @@
 # It SHOULD be committed to source control.
 
 [treasury.testnet]
-account-id = "0xc1533c8bbff9b6756a3fde84b20b033291f675941a64ea9257dd5e9b74e99acc"
+account-id = "0x64db13ffa7621602d4479915ea51ba6463a9a5c7ecefde53334e024c4f545241"
 xid = "TREASURY"
 handle = "treasury"
-created-at = "2026-05-28T14:41:45.349Z"
+created-at = "2026-06-06T15:27:56.689Z"

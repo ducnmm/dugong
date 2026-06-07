@@ -1,0 +1,72 @@
+---
+title: Prediction Markets
+description: Create markets, place bets, resolve outcomes, and handle payouts.
+---
+
+## Create A Market
+
+Use this to create a prediction market.
+
+```text
+@DugongWallet create market: <question>
+```
+
+Example:
+
+```text
+@DugongWallet create market: Will Sui testnet stay healthy today?
+```
+
+Behavior:
+
+- Creates a market anchored to the command tweet id.
+- Stores the tweet author as the market creator.
+- Uses the default market fee configured in the processor flow.
+- Replies with the market question, bet instructions, resolve instructions, and a Suiscan transaction link.
+
+## Place A Bet
+
+Use this as a reply to the market creation tweet.
+
+```text
+@DugongWallet bet <amount> <coin> on yes
+@DugongWallet bet <amount> <coin> on no
+@DugongWallet bet <amount> <coin> with yes
+@DugongWallet bet <amount> <coin> with no
+```
+
+Examples:
+
+```text
+@DugongWallet bet 1 DUG on yes
+@DugongWallet bet 0.25 SUI with no
+```
+
+Behavior:
+
+- Finds the market from the parent tweet id.
+- Auto-creates the bettor's Dugong account if needed.
+- Escrows the stake in the market pool.
+- Replies with a bet confirmation and Suiscan transaction link.
+- If the market is missing, replies that no market was found for the tweet.
+- If the market is closed, replies that bets are no longer accepted.
+
+## Resolve A Market
+
+Use this as a reply to the market creation tweet.
+
+```text
+@DugongWallet resolve yes
+@DugongWallet resolve no
+@DugongWallet solve yes
+@DugongWallet solve no
+```
+
+Behavior:
+
+- Only the market creator can resolve the market.
+- Resolves the market for each coin type that has bets.
+- Pays winning bettors automatically. If a side has no winning bettors for a coin pool, the payout logic refunds eligible bettors for that pool.
+- Replies with the winning outcome, number of paid winner entries, and the last Suiscan transaction link.
+- If the resolver is not the creator, replies that only the creator can resolve the market.
+- If the market is missing or already closed, replies with the matching error message.

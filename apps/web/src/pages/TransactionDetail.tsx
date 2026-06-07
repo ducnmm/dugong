@@ -19,6 +19,7 @@ import {
   shortenDigest,
   type TransactionResponse,
 } from '../utils/api';
+import { getCoinSymbol } from '../utils/constants';
 
 const formatTxLabel = (type: string) => {
   switch (type) {
@@ -115,7 +116,7 @@ export const TransactionDetail: React.FC = () => {
   });
 
   const tx = fetchedTx;
-  const symbol = tx?.coin_type.split('::').pop() || 'SUI';
+  const symbol = getCoinSymbol(tx?.coin_type);
   const direction = tx ? getDirection(tx) : null;
   const fromHandleQuery = useQuery({
     queryKey: ['account-by-xid', direction?.fromXid],

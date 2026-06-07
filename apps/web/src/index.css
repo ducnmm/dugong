@@ -372,6 +372,46 @@
     color: #3f3f46;
   }
 
+  .account-search-field {
+    width: min(100%, calc(100vw - 3.5rem));
+    margin-inline: auto;
+  }
+
+  .home-docs-link {
+    @apply relative z-20 mx-auto flex items-center justify-center gap-3 px-5 py-3;
+    width: fit-content;
+    min-width: 8.75rem;
+    max-width: calc(100vw - 3.5rem);
+    color: var(--neo-black);
+    text-decoration: none;
+    background: var(--neo-yellow);
+    border: 3px solid var(--neo-black);
+    border-radius: 0.5rem;
+    box-shadow: 4px 5px 0 var(--neo-black);
+    font-weight: 900;
+    line-height: 1;
+    transition:
+      transform 180ms ease,
+      box-shadow 180ms ease,
+      background-color 180ms ease;
+  }
+
+  .home-docs-link:hover {
+    background: var(--neo-yellow-hover);
+    box-shadow: 6px 7px 0 var(--neo-black);
+    transform: translate(-1px, -1px);
+  }
+
+  .home-docs-link:active {
+    box-shadow: 4px 5px 0 var(--neo-black);
+    transform: translate(0, 0);
+  }
+
+  .home-docs-link-hidden {
+    pointer-events: none;
+    visibility: hidden;
+  }
+
   .text-gradient,
   .text-gradient-cyber {
     color: var(--neo-black);
@@ -381,8 +421,8 @@
   .dugong-logo-mark {
     @apply flex items-center justify-center;
     background: var(--neo-paper);
-    border: 2px solid var(--neo-black);
-    box-shadow: 2px 3px 0 var(--neo-black);
+    border: 1px solid var(--neo-black);
+    box-shadow: 1px 2px 0 var(--neo-black);
   }
 
   .dugong-logo-img {

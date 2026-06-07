@@ -40,6 +40,9 @@
 //                                Default: dugong.
 //   --network testnet|mainnet    Sui network to target (default: testnet).
 //   --gas-budget <MIST>          Gas budget in MIST (default: 500000000).
+//   --fresh-publish              Ignore any recorded upgrade capability and
+//                                publish a new package. This creates new shared
+//                                objects and orphans existing package state.
 //   --treasury-account <id>      Sui object ID of the treasury DugongAccount.
 //                                Written as MARKET_TREASURY_ACCOUNT_ID to .env.
 //                                Only applies when deploying `dugong`. If
@@ -82,7 +85,12 @@ function warn(msg: string): void {
 function run(
   cmd: string,
   args: string[],
-  opts: { dryRun?: boolean; cwd?: string; captureStdout?: boolean } = {}
+  opts: {
+    dryRun?: boolean;
+    cwd?: string;
+    captureStdout?: boolean;
+    onFailure?: () => void;
+  } = {}
 ): string {
   const pretty = [cmd, ...args].join(" ");
   if (opts.dryRun) {
@@ -96,7 +104,13 @@ function run(
     encoding: "utf8",
   });
   if (result.error) die(`spawn failed: ${result.error.message}`);
-  if (result.status !== 0) die(`command exited with status ${result.status}`);
+  if (result.status !== 0) {
+    if (opts.captureStdout && result.stdout) {
+      process.stderr.write(result.stdout);
+    }
+    opts.onFailure?.();
+    die(`command exited with status ${result.status}`);
+  }
   return (result.stdout as string | null) ?? "";
 }
 
@@ -113,7 +127,7 @@ function run(
 //                       DUGONG_PACKAGE_ID to scope its event query and needs
 //                       the other contract IDs to satisfy Config::from_env.
 //   apps/web/.env     → apps/web/src/utils/constants.ts (VITE_*)
-// worker and nautilus-server read no contract IDs and are intentionally omitted.
+//   apps/nautilus-server/.env → signs tweet payloads with the latest DUG coin type.
 //
 // `treasuryAccountId` is NOT parsed from chain output. It comes from either the
 // --treasury-account flag or contracts/move/dugong/Treasury.toml (written by
@@ -136,6 +150,7 @@ type PackageConfig = {
 
 const API_ENV = "apps/api/.env";
 const INDEXER_ENV = "apps/indexer/.env";
+const NAUTILUS_ENV = "apps/nautilus-server/.env";
 const WEB_ENV = "apps/web/.env";
 
 const packageDir = (name: string) => resolve(repoRoot, "contracts/move", name);
@@ -147,8 +162,8 @@ const PACKAGE_CONFIGS: Record<PackageName, PackageConfig> = {
     dir: packageDir("dugong"),
     publishedTomlPath: publishedTomlFor("dugong"),
     objectTypeMatch: {
-      // DugongRegistry (core.move) — distinct from MarketRegistry below.
-      dugongRegistryId: "::core::DugongRegistry",
+      // DugongRegistry (dug module) — distinct from MarketRegistry below.
+      dugongRegistryId: "::dug::DugongRegistry",
       // MarketRegistry (markets.move).
       marketRegistryId: "::markets::MarketRegistry",
     },
@@ -156,6 +171,7 @@ const PACKAGE_CONFIGS: Record<PackageName, PackageConfig> = {
       packageId: [
         { envFile: API_ENV, envKey: "DUGONG_PACKAGE_ID" },
         { envFile: INDEXER_ENV, envKey: "DUGONG_PACKAGE_ID" },
+        { envFile: NAUTILUS_ENV, envKey: "DUGONG_PACKAGE_ID" },
         { envFile: WEB_ENV, envKey: "VITE_DUGONG_PACKAGE_ID" },
       ],
       // Original (defining) package id — preserved across upgrades. The indexer
@@ -218,11 +234,9 @@ const PACKAGE_CONFIGS: Record<PackageName, PackageConfig> = {
 // sponsor API rejects the tx as not allow-listed. Printed after a dugong deploy.
 const DUGONG_SPONSORED_TARGETS: string[] = [
   "transfers::transfer_coin",
-  "dugong::transfer_coin_no_signature",
   "dugong::init_account",
   "account::init_account_no_signature",
   "dugong::link_wallet",
-  "dugong::link_wallet_no_signature",
   "markets::create_market",
   "markets::place_bet",
   "markets::resolve_market",
@@ -242,6 +256,7 @@ const DEFAULT_DEPLOY_ORDER: PackageName[] = ["enclave", "seal-policy", "dugong"]
 const RAILWAY_SERVICES_BY_ENV_FILE: Record<string, string[]> = {
   [API_ENV]: ["api"],
   [INDEXER_ENV]: ["indexer"],
+  [NAUTILUS_ENV]: ["nautilus"],
   [WEB_ENV]: ["web"],
 };
 
@@ -326,6 +341,22 @@ function writePublishedToml(
 
   writeFileSync(publishedTomlPath, raw, "utf8");
   info(`Updated ${publishedTomlPath}`);
+}
+
+function removePublishedTomlSection(
+  publishedTomlPath: string,
+  network: string
+): string | null {
+  if (!existsSync(publishedTomlPath)) return null;
+  const raw = readFileSync(publishedTomlPath, "utf8");
+  const sectionRe = new RegExp(
+    `\\n?\\[published\\.${network}\\][^\\[]*`,
+    "s"
+  );
+  if (!sectionRe.test(raw)) return null;
+  const next = raw.replace(sectionRe, "").trimEnd() + "\n";
+  writeFileSync(publishedTomlPath, next, "utf8");
+  return raw;
 }
 
 // ── Treasury.toml (read-only fallback for --treasury-account) ────────────────
@@ -438,6 +469,7 @@ Flags:
                                Default: dugong.
   --network testnet|mainnet    Sui network to target (default: testnet).
   --gas-budget <MIST>          Gas budget in MIST (default: 500000000).
+  --fresh-publish              Publish a new package even when an upgrade cap exists.
   --treasury-account <id>      Object ID of the treasury DugongAccount.
                                Written as MARKET_TREASURY_ACCOUNT_ID to .env.
                                Only applies when deploying 'dugong'. If omitted,
@@ -492,9 +524,10 @@ function deployPackage(opts: {
   network: string;
   gasBudget: string;
   dryRun: boolean;
+  freshPublish: boolean;
   treasury?: string;
 }): Set<string> {
-  const { pkg, network, gasBudget, dryRun, treasury } = opts;
+  const { pkg, network, gasBudget, dryRun, freshPublish, treasury } = opts;
   const cfg = PACKAGE_CONFIGS[pkg];
   const patchedFiles = new Set<string>();
 
@@ -509,7 +542,21 @@ function deployPackage(opts: {
   const upgradeCap = existing?.upgradeCap;
 
   let suiArgs: string[];
-  if (upgradeCap) {
+  if (freshPublish) {
+    if (existing?.publishedAt) {
+      warn(
+        `--fresh-publish requested for ${pkg}/${network}; this will publish a NEW package ` +
+          `instead of upgrading ${existing.publishedAt}. Existing accounts/markets stay on ` +
+          `the old package and new env values will point at fresh shared objects.`
+      );
+    }
+    info("Fresh publish forced (--fresh-publish)");
+    suiArgs = [
+      "client", "publish",
+      "--gas-budget", gasBudget,
+      "--json",
+    ];
+  } else if (upgradeCap) {
     info(`Upgrading existing package (cap: ${upgradeCap})`);
     suiArgs = [
       "client", "upgrade",
@@ -535,10 +582,20 @@ function deployPackage(opts: {
   }
 
   // 3. Deploy.
+  const restorePublishedToml =
+    freshPublish && !dryRun
+      ? removePublishedTomlSection(cfg.publishedTomlPath, network)
+      : null;
   const rawJson = run("sui", suiArgs, {
     cwd: cfg.dir,
     dryRun,
     captureStdout: true,
+    onFailure: () => {
+      if (restorePublishedToml != null) {
+        writeFileSync(cfg.publishedTomlPath, restorePublishedToml, "utf8");
+        warn(`Restored ${cfg.publishedTomlPath} after failed fresh publish.`);
+      }
+    },
   });
 
   if (dryRun) {
@@ -562,11 +619,11 @@ function deployPackage(opts: {
   const packageId = outputs.packageId!;
   // original-id is preserved across upgrades; on a fresh publish it equals the
   // new package id. Expose it as a synced output (indexer event-filter id).
-  const originalId = existing?.originalId ?? packageId;
+  const originalId = freshPublish ? packageId : (existing?.originalId ?? packageId);
   outputs.originalId = originalId;
   // Prefer the existing recorded cap (an upgrade reuses the same cap object);
   // on a fresh publish, fall back to the cap just parsed from the output.
-  const capToRecord = existing?.upgradeCap ?? outputs.upgradeCap;
+  const capToRecord = freshPublish ? outputs.upgradeCap : (existing?.upgradeCap ?? outputs.upgradeCap);
   info(`Package ID:        ${packageId}`);
   info(`Original ID:       ${originalId}`);
   for (const key of Object.keys(cfg.objectTypeMatch)) {
@@ -618,7 +675,7 @@ function deployPackage(opts: {
     for (const target of DUGONG_SPONSORED_TARGETS) {
       info(`  ${packageId}::${target}`);
     }
-    info("(Enoki dashboard → sponsored transaction allowlist; see §8.3.)");
+    info("(Enoki dashboard -> sponsored transaction allowlist; see docs/contract-operations.md.)");
   }
 
   return patchedFiles;
@@ -632,6 +689,7 @@ function main(): void {
       package:           { type: "string",  default: "dugong" },
       network:           { type: "string",  default: "testnet" },
       "gas-budget":      { type: "string",  default: "500000000" },
+      "fresh-publish":   { type: "boolean", default: false },
       "treasury-account":{ type: "string" },
       environment:       { type: "string" },
       railway:           { type: "boolean", default: false },
@@ -646,6 +704,7 @@ function main(): void {
   const network     = values.network!;
   const gasBudget   = values["gas-budget"]!;
   const dryRun      = !!values["dry-run"];
+  const freshPublish = !!values["fresh-publish"];
   const syncRailway = !!values.railway;
   const treasury    = values["treasury-account"];
   const environment = values.environment;
@@ -658,12 +717,26 @@ function main(): void {
   }
 
   info(`Selected packages: ${packages.join(", ")}`);
+  if (!dryRun) {
+    const activeEnv = run("sui", ["client", "active-env"], {
+      captureStdout: true,
+    }).trim();
+    if (activeEnv !== network) {
+      die(
+        `sui active env is '${activeEnv}', but --network is '${network}'. ` +
+          `Run 'sui client switch --env ${network}' first.`
+      );
+    }
+  }
+  if (freshPublish) {
+    warn("--fresh-publish is enabled; this intentionally creates new package state.");
+  }
 
   // Deploy each package in dependency order, accumulating patched env files
   // for a single Railway sync at the end.
   const allPatched = new Set<string>();
   for (const pkg of packages) {
-    const patched = deployPackage({ pkg, network, gasBudget, dryRun, treasury });
+    const patched = deployPackage({ pkg, network, gasBudget, dryRun, freshPublish, treasury });
     for (const f of patched) allPatched.add(f);
   }
 

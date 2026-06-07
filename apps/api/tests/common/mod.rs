@@ -30,7 +30,12 @@ pub async fn lock_queue() -> tokio::sync::MutexGuard<'static, ()> {
 /// Drain any leftover items from the shared tweet queue.
 #[allow(dead_code)]
 pub async fn drain_queue(redis: &RedisClient) {
-    while redis.pop_queue(redis::QUEUE_TWEETS).await.unwrap().is_some() {}
+    while redis
+        .pop_queue(redis::QUEUE_TWEETS)
+        .await
+        .unwrap()
+        .is_some()
+    {}
 }
 
 /// Redis URL for tests: honor `REDIS_URL` (set in CI), else the local

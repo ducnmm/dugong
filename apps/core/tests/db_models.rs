@@ -79,15 +79,13 @@ async fn dugong_account_search_matches_handle(pool: PgPool) {
 
 #[sqlx::test]
 async fn account_balance_round_trip(pool: PgPool) {
-    sqlx::query(
-        "INSERT INTO account_balances (x_user_id, coin_type, balance) VALUES ($1, $2, $3)",
-    )
-    .bind("user-5")
-    .bind("0x2::sui::SUI")
-    .bind(1_500i64)
-    .execute(&pool)
-    .await
-    .expect("insert balance");
+    sqlx::query("INSERT INTO account_balances (x_user_id, coin_type, balance) VALUES ($1, $2, $3)")
+        .bind("user-5")
+        .bind("0x2::sui::SUI")
+        .bind(1_500i64)
+        .execute(&pool)
+        .await
+        .expect("insert balance");
 
     let balances = AccountBalance::find_by_x_user_id(&pool, "user-5")
         .await
@@ -106,12 +104,22 @@ async fn webhook_event_lifecycle(pool: PgPool) {
     assert!(!event.is_done());
 
     assert!(WebhookEvent::exists(&pool, "evt-1").await.expect("exists"));
-    assert!(!WebhookEvent::exists(&pool, "evt-x").await.expect("not exists"));
+    assert!(!WebhookEvent::exists(&pool, "evt-x")
+        .await
+        .expect("not exists"));
 
-    WebhookEvent::set_processing(&pool, "evt-1").await.expect("processing");
-    WebhookEvent::set_submitting(&pool, "evt-1").await.expect("submitting");
-    WebhookEvent::set_replying(&pool, "evt-1", "0xdigest").await.expect("replying");
-    WebhookEvent::set_completed(&pool, "evt-1").await.expect("completed");
+    WebhookEvent::set_processing(&pool, "evt-1")
+        .await
+        .expect("processing");
+    WebhookEvent::set_submitting(&pool, "evt-1")
+        .await
+        .expect("submitting");
+    WebhookEvent::set_replying(&pool, "evt-1", "0xdigest")
+        .await
+        .expect("replying");
+    WebhookEvent::set_completed(&pool, "evt-1")
+        .await
+        .expect("completed");
 
     let reloaded = WebhookEvent::find_by_event_id(&pool, "evt-1")
         .await
@@ -245,7 +253,9 @@ async fn twitter_oauth_token_upsert_lookup_and_rotation(pool: PgPool) {
     );
 
     // Delete removes the credential so it cannot be retried.
-    TwitterOAuthToken::delete(&pool, "xid-1").await.expect("delete");
+    TwitterOAuthToken::delete(&pool, "xid-1")
+        .await
+        .expect("delete");
     assert!(TwitterOAuthToken::find_by_x_user_id(&pool, "xid-1")
         .await
         .expect("query")

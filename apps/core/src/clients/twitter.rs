@@ -5,6 +5,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::env;
 use tracing::{info, warn};
 
 use crate::config::Config;
@@ -24,6 +25,14 @@ const CAMPAIGN_SEARCH_ATTEMPTS: u64 = 12;
 /// the total retry window spans ~3 minutes (covers the observed search convergence lag).
 fn campaign_search_backoff_secs(attempt: u64) -> u64 {
     (3 * attempt).min(25)
+}
+
+fn configured_docs_url() -> String {
+    env::var("DOCS_URL")
+        .or_else(|_| env::var("NEXT_PUBLIC_DOCS_URL"))
+        .unwrap_or_else(|_| "http://127.0.0.1:3004".to_string())
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// A candidate winner discovered for a reward campaign (a reply author or hashtag tweeter).
@@ -193,12 +202,16 @@ impl TwitterOAuth2Client {
             .send()
             .await
             .map_err(|e| {
-                RefreshError::Transient(anyhow::Error::new(e).context("refresh token request failed"))
+                RefreshError::Transient(
+                    anyhow::Error::new(e).context("refresh token request failed"),
+                )
             })?;
 
         let status = response.status();
         let response_text = response.text().await.map_err(|e| {
-            RefreshError::Transient(anyhow::Error::new(e).context("failed to read refresh response"))
+            RefreshError::Transient(
+                anyhow::Error::new(e).context("failed to read refresh response"),
+            )
         })?;
 
         if !status.is_success() {
@@ -209,8 +222,7 @@ impl TwitterOAuth2Client {
                 || body_l.contains("invalid_grant")
                 || body_l.contains("invalid_request")
                 || body_l.contains("unauthorized_client")
-                || (status.is_client_error()
-                    && status != reqwest::StatusCode::TOO_MANY_REQUESTS);
+                || (status.is_client_error() && status != reqwest::StatusCode::TOO_MANY_REQUESTS);
             // Do NOT log the response body — it can echo token material.
             let msg = format!("Twitter refresh failed ({status})");
             return Err(if is_reauth {
@@ -220,8 +232,8 @@ impl TwitterOAuth2Client {
             });
         }
 
-        let token_response: OAuth2TokenResponse = serde_json::from_str(&response_text)
-            .map_err(|e| {
+        let token_response: OAuth2TokenResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
                 RefreshError::Transient(
                     anyhow::Error::new(e).context("failed to parse refresh response"),
                 )
@@ -277,6 +289,7 @@ pub struct TwitterClient {
     twitterapi_io_login_cookies: Option<String>,
     twitterapi_io_proxy: Option<String>,
     twitterapi_io_base: String,
+    docs_url: String,
 }
 
 /// Request body for creating a tweet through TwitterAPI.io.
@@ -343,6 +356,7 @@ impl TwitterClient {
             twitterapi_io_login_cookies: config.twitterapi_io_login_cookies.clone(),
             twitterapi_io_proxy: config.twitterapi_io_proxy.clone(),
             twitterapi_io_base,
+            docs_url: configured_docs_url(),
         }
     }
 
@@ -638,6 +652,30 @@ impl TwitterClient {
         self.reply_to_tweet(tweet_id, &message).await
     }
 
+    /// Reply when a market has no bets to resolve.
+    pub async fn reply_market_has_no_bets(&self, tweet_id: &str, handle: &str) -> Result<String> {
+        let message = format!(
+            "❌ @{} — this market has no bets yet.\n\n\
+            Resolve it after at least one valid bet has been placed.",
+            handle
+        );
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when a market payout claim is attempted before resolution.
+    pub async fn reply_market_not_resolved_yet(
+        &self,
+        tweet_id: &str,
+        handle: &str,
+    ) -> Result<String> {
+        let message = format!(
+            "❌ @{} — this market is not resolved yet.\n\n\
+            Payouts can only be claimed after the creator resolves the market.",
+            handle
+        );
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
     /// Reply confirming a reward campaign was created
     pub async fn reply_campaign_created(
         &self,
@@ -695,9 +733,50 @@ impl TwitterClient {
         self.reply_to_tweet(tweet_id, &message).await
     }
 
+    /// Reply confirming a prediction-market payout was claimed
+    pub async fn reply_market_payout_claimed(
+        &self,
+        tweet_id: &str,
+        handle: &str,
+        tx_digest: &str,
+    ) -> Result<String> {
+        let message = format!(
+            "✅ Market payout claimed, @{}!\n\n\
+            💸 Your winnings have been credited to your @DugongWallet account.\n\n\
+            🔗 https://suiscan.xyz/testnet/tx/{}",
+            handle, tx_digest
+        );
+        info!(tweet_id = %tweet_id, handle = %handle, "Replying with market payout claimed message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
     /// Reply when a campaign already exists for this tweet
     pub async fn reply_campaign_already_exists(&self, tweet_id: &str) -> Result<String> {
         let message = "ℹ️ A reward campaign already exists for this tweet.".to_string();
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when a reward campaign cannot be found for a resolve command.
+    pub async fn reply_campaign_not_found(&self, tweet_id: &str, handle: &str) -> Result<String> {
+        let message = format!(
+            "❌ @{} — no reward campaign found for this tweet.\n\n\
+            Make sure you are replying directly to the reward campaign tweet.",
+            handle
+        );
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when a reward campaign is already resolved.
+    pub async fn reply_campaign_already_resolved(
+        &self,
+        tweet_id: &str,
+        handle: &str,
+    ) -> Result<String> {
+        let message = format!(
+            "ℹ️ @{} — this reward campaign is already resolved.\n\n\
+            Winners can reply with @DugongWallet claim if they have not claimed yet.",
+            handle
+        );
         self.reply_to_tweet(tweet_id, &message).await
     }
 
@@ -720,6 +799,37 @@ impl TwitterClient {
             "❌ @{} — nothing to claim here.\n\n\
             You can only claim a reward or payout you are entitled to, after the creator resolves.",
             handle
+        );
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when a reward claim is attempted before campaign resolution.
+    pub async fn reply_campaign_not_resolved_yet(
+        &self,
+        tweet_id: &str,
+        handle: &str,
+    ) -> Result<String> {
+        let message = format!(
+            "❌ @{} — this reward campaign is not resolved yet.\n\n\
+            Winners can claim only after the creator resolves the campaign.",
+            handle
+        );
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when a user tries to claim the same reward twice.
+    pub async fn reply_already_claimed(&self, tweet_id: &str, handle: &str) -> Result<String> {
+        let message = format!("ℹ️ @{} — this reward has already been claimed.", handle);
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when a tweet mentions the bot but does not match a supported command.
+    pub async fn reply_unsupported_command(&self, tweet_id: &str) -> Result<String> {
+        let message = format!(
+            "❌ I don't understand this Dugong command yet.\n\n\
+            You can check the command docs here:\n\
+            {}/tweet-commands",
+            self.docs_url
         );
         self.reply_to_tweet(tweet_id, &message).await
     }
@@ -782,7 +892,10 @@ impl TwitterClient {
                 }
             }
             if attempt < CAMPAIGN_SEARCH_ATTEMPTS {
-                tokio::time::sleep(std::time::Duration::from_secs(campaign_search_backoff_secs(attempt))).await;
+                tokio::time::sleep(std::time::Duration::from_secs(
+                    campaign_search_backoff_secs(attempt),
+                ))
+                .await;
             }
         }
 
@@ -829,13 +942,17 @@ impl TwitterClient {
                 }
             }
             if attempt < CAMPAIGN_SEARCH_ATTEMPTS {
-                tokio::time::sleep(std::time::Duration::from_secs(campaign_search_backoff_secs(attempt))).await;
+                tokio::time::sleep(std::time::Duration::from_secs(
+                    campaign_search_backoff_secs(attempt),
+                ))
+                .await;
             }
         }
 
         match last_err {
-            Some(e) => Err(e)
-                .with_context(|| format!("Failed to search hashtag candidates for {}", query)),
+            Some(e) => {
+                Err(e).with_context(|| format!("Failed to search hashtag candidates for {}", query))
+            }
             None => Ok(Vec::new()),
         }
     }

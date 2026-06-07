@@ -55,7 +55,7 @@ impl Indexer {
 
     /// Start the indexer in real-time mode
     pub async fn start(&self) -> Result<()> {
-        info!("🚀 Starting Dugong Indexer");
+        info!("Starting Dugong Indexer");
 
         // Load the last cursor for each watched package.
         let mut streams: Vec<PackageCursor> = Vec::new();
@@ -63,7 +63,7 @@ impl Indexer {
             let state_name = cursor_state_name(index, package_id);
             let cursor = self.cursor_manager.load_cursor(&state_name).await?;
             info!(
-                "📍 Watching {} from cursor: {:?} (state {})",
+                "Watching {} from cursor: {:?} (state {})",
                 package_id, cursor, state_name
             );
             streams.push(PackageCursor {
@@ -85,7 +85,7 @@ impl Indexer {
                 {
                     Ok(processed) => {
                         if processed > 0 {
-                            info!("✅ Processed {} events ({})", processed, stream.package_id);
+                            info!("Processed {} events ({})", processed, stream.package_id);
                             // Save cursor after processing
                             self.cursor_manager
                                 .save_cursor(&stream.state_name, stream.cursor.as_ref())
@@ -93,11 +93,7 @@ impl Indexer {
                         }
                     }
                     Err(e) => {
-                        tracing::error!(
-                            "❌ Error processing events for {}: {}",
-                            stream.package_id,
-                            e
-                        );
+                        tracing::error!("Error processing events for {}: {}", stream.package_id, e);
                         // Continue with the next package / next tick
                     }
                 }
@@ -120,7 +116,7 @@ impl Indexer {
             return Ok(0);
         }
 
-        info!("📥 Fetched {} events ({})", page.data.len(), package_id);
+        info!("Fetched {} events ({})", page.data.len(), package_id);
 
         // Process events
         let processed = self.event_processor.process_events(&page.data).await?;
@@ -134,7 +130,7 @@ impl Indexer {
     /// Sync all historical events from genesis (across every watched package).
     #[allow(dead_code)]
     pub async fn sync_historical(&self) -> Result<()> {
-        info!("🔄 Starting historical sync");
+        info!("Starting historical sync");
 
         let mut total_processed = 0;
 
@@ -156,7 +152,7 @@ impl Indexer {
                 total_processed += processed;
 
                 info!(
-                    "📊 Historical sync progress ({}): {} events processed",
+                    "Historical sync progress ({}): {} events processed",
                     package_id, total_processed
                 );
 
@@ -177,7 +173,7 @@ impl Indexer {
         }
 
         info!(
-            "✅ Historical sync complete: {} events processed",
+            "Historical sync complete: {} events processed",
             total_processed
         );
         Ok(())

@@ -30,6 +30,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/account/:sui_object_id/transactions",
             get(routes::get_transactions_by_account),
         )
+        .route(
+            "/api/transaction/:tx_digest",
+            get(routes::get_transaction_by_digest),
+        )
         .route("/api/accounts/search", get(routes::search_accounts))
         .route(
             "/api/accounts/:twitter_user_id",
@@ -55,7 +59,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/auth/twitter/ensure-account",
             axum::routing::post(routes::ensure_dugong_account),
         )
-        .route("/api/sponsor", axum::routing::post(routes::sponsor_transaction))
+        .route(
+            "/api/sponsor",
+            axum::routing::post(routes::sponsor_transaction),
+        )
         .route(
             "/api/execute",
             axum::routing::post(routes::execute_sponsored_transaction),

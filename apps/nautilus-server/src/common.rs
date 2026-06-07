@@ -37,13 +37,13 @@ pub struct IntentMessage<T: Serialize> {
 #[derive(Serialize_repr, Deserialize_repr, Debug)]
 #[repr(u8)]
 pub enum IntentScope {
-    ProcessData = 0,    // INIT_ACCOUNT_INTENT
-    LinkWallet = 1,     // LINK_WALLET_INTENT
-    TransferCoin = 2,   // TRANSFER_COIN_INTENT
-    UpdateHandle = 4,   // UPDATE_HANDLE_INTENT
-    CreateMarket = 5,   // CREATE_MARKET_INTENT
-    PlaceBet = 6,       // PLACE_BET_INTENT
-    ResolveMarket = 7,  // RESOLVE_MARKET_INTENT
+    ProcessData = 0,           // INIT_ACCOUNT_INTENT
+    LinkWallet = 1,            // LINK_WALLET_INTENT
+    TransferCoin = 2,          // TRANSFER_COIN_INTENT
+    UpdateHandle = 4,          // UPDATE_HANDLE_INTENT
+    CreateMarket = 5,          // CREATE_MARKET_INTENT
+    PlaceBet = 6,              // PLACE_BET_INTENT
+    ResolveMarket = 7,         // RESOLVE_MARKET_INTENT
     CreateRewardCampaign = 8,  // CREATE_REWARD_CAMPAIGN_INTENT
     ResolveRewardCampaign = 9, // RESOLVE_REWARD_CAMPAIGN_INTENT
     Claim = 10,                // CLAIM_INTENT

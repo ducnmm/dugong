@@ -72,15 +72,16 @@ support a `--dry-run` mode that requires no Twitter credentials.
 #### Scenario: Default real-post mode
 
 - **WHEN** the script runs without `--dry-run`
-- **THEN** it posts real command tweets through the TwitterAPI.io flow (as
-  `dugong-test-tweet` does), reusing `TWITTERAPI_IO_*` env vars, and uses the returned
-  tweet ids for webhook triggering and reply threading
+- **THEN** it posts real command tweets through the official X API flow (as
+  `dugong-test-tweet` does), reusing `TWITTER_BEARER_TOKEN`, `TWITTER_API_KEY`,
+  `TWITTER_API_SECRET`, `TWITTER_ACCESS_TOKEN`, and `TWITTER_ACCESS_TOKEN_SECRET`,
+  and uses the returned tweet ids for webhook triggering and reply threading
 
 #### Scenario: Dry-run mode without credentials
 
 - **WHEN** the script runs with `--dry-run` and no Twitter credentials
 - **THEN** it skips posting and injects synthetic `tweet_create_events` payloads
-- **AND** does not error due to missing `TWITTERAPI_IO_*` variables
+- **AND** does not error due to missing official X API variables
 
 #### Scenario: Configurable target and parameters
 

@@ -17,8 +17,8 @@ impl EventHandler for MarketResolvedHandler {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Missing parsed_json in MarketResolved event"))?;
 
-        let event_data: MarketResolvedEvent = serde_json::from_value(parsed_json)
-            .context("Failed to parse MarketResolved event")?;
+        let event_data: MarketResolvedEvent =
+            serde_json::from_value(parsed_json).context("Failed to parse MarketResolved event")?;
 
         info!(
             market_tweet_id = %event_data.market_tweet_id,
