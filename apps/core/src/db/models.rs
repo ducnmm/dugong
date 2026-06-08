@@ -719,6 +719,7 @@ impl Market {
 }
 
 impl MarketBet {
+    #[allow(clippy::too_many_arguments)]
     pub async fn upsert(
         pool: &sqlx::PgPool,
         market_tweet_id: &str,

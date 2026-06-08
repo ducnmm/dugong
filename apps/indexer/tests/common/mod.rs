@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 
 /// Build a `SuiEvent` with the given event type, parsed JSON payload, and a
 /// deterministic tx digest used for transfer/bet/market dedup.
+#[allow(dead_code)]
 pub fn sui_event(event_type: &str, tx_digest: &str, parsed_json: Value) -> SuiEvent {
     serde_json::from_value(json!({
         "id": { "txDigest": tx_digest, "eventSeq": "0" },
@@ -21,7 +22,7 @@ pub fn sui_event(event_type: &str, tx_digest: &str, parsed_json: Value) -> SuiEv
 }
 
 /// Minimal `Config` for the event fetcher, with `sui_rpc_url` and
-/// `dugong_package_id` overridable by the caller (the only fields it reads).
+/// `dugong_event_package_id` overridable by the caller (the fields it reads).
 #[allow(dead_code)]
 pub fn test_config(sui_rpc_url: String, package_id: String) -> Config {
     Config {
@@ -30,11 +31,9 @@ pub fn test_config(sui_rpc_url: String, package_id: String) -> Config {
         database_url: "postgres://localhost/dugong_test".to_string(),
         redis_url: "redis://localhost:6379".to_string(),
 
-        twitter_bearer_token: "test-bearer-token".to_string(),
-        twitter_api_key: "test-api-key".to_string(),
-        twitter_api_secret: "test-api-secret".to_string(),
-        twitter_access_token: "test-access-token".to_string(),
-        twitter_access_token_secret: "test-access-secret".to_string(),
+        twitterapi_io_api_key: "test-twitterapi-io-key".to_string(),
+        twitterapi_io_login_cookies: None,
+        twitterapi_io_proxy: None,
         twitter_webhook_secret: None,
 
         twitter_oauth2_client_id: "test-client-id".to_string(),
@@ -59,6 +58,7 @@ pub fn test_config(sui_rpc_url: String, package_id: String) -> Config {
 
         enoki_base_url: "http://localhost".to_string(),
         twitter_api_base: "http://localhost".to_string(),
+        twitterapi_io_base: "http://localhost".to_string(),
 
         backend_signer_private_key: "test-signer-key".to_string(),
 

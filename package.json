@@ -7,6 +7,10 @@
   "scripts": {
     "dev:docs": "pnpm --filter @dugong/docs dev",
     "build:docs": "pnpm --filter @dugong/docs build",
-    "check:docs": "pnpm --filter @dugong/docs check"
+    "check:docs": "pnpm --filter @dugong/docs check",
+    "dev:web": "pnpm --dir apps/web --ignore-workspace dev",
+    "build:web": "pnpm --dir apps/web --ignore-workspace build",
+    "lint:web": "pnpm --dir apps/web --ignore-workspace lint",
+    "preview:web": "pnpm --dir apps/web --ignore-workspace preview"
   }
 }

@@ -36,7 +36,7 @@ async fn fetch_events_parses_page() {
     let fetcher = EventFetcher::new(test_config(server.uri(), "0x9".to_string()))
         .await
         .expect("fetcher");
-    let page = fetcher.fetch_events(None, 50).await.expect("fetch");
+    let page = fetcher.fetch_events("0x9", None, 50).await.expect("fetch");
 
     assert_eq!(page.data.len(), 1);
     assert!(page.has_next_page);
@@ -60,7 +60,7 @@ async fn fetch_events_empty_page() {
         .await
         .expect("fetcher");
     let page = fetcher
-        .fetch_events(Some("CURSOR:1"), 50)
+        .fetch_events("0x9", Some("CURSOR:1"), 50)
         .await
         .expect("fetch");
 

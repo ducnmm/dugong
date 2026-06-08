@@ -1,40 +1,52 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { AuthContext, STORAGE_KEYS } from './auth-context';
 import type { LoginData, User } from './auth-context';
 
+type StoredAuth = {
+  user: User | null;
+  accessToken: string | null;
+  sessionToken: string | null;
+};
+
+const emptyStoredAuth: StoredAuth = {
+  user: null,
+  accessToken: null,
+  sessionToken: null,
+};
+
+const clearStoredAuth = () => {
+  localStorage.removeItem(STORAGE_KEYS.USER);
+  localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
+  localStorage.removeItem(STORAGE_KEYS.SESSION_TOKEN);
+};
+
+const loadStoredAuth = (): StoredAuth => {
+  if (typeof window === 'undefined') {
+    return emptyStoredAuth;
+  }
+
+  try {
+    const storedUser = localStorage.getItem(STORAGE_KEYS.USER);
+
+    return {
+      user: storedUser ? JSON.parse(storedUser) : null,
+      accessToken: localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN),
+      sessionToken: localStorage.getItem(STORAGE_KEYS.SESSION_TOKEN),
+    };
+  } catch (error) {
+    console.error('Failed to load user from storage:', error);
+    clearStoredAuth();
+    return emptyStoredAuth;
+  }
+};
+
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true); // Start true for initial load
-
-  // Load user from localStorage on mount
-  useEffect(() => {
-    try {
-      const storedUser = localStorage.getItem(STORAGE_KEYS.USER);
-      const storedToken = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
-      const storedSession = localStorage.getItem(STORAGE_KEYS.SESSION_TOKEN);
-
-      if (storedUser) {
-        setUser(JSON.parse(storedUser));
-      }
-      if (storedToken) {
-        setAccessToken(storedToken);
-      }
-      if (storedSession) {
-        setSessionToken(storedSession);
-      }
-    } catch (error) {
-      console.error('Failed to load user from storage:', error);
-      // Clear corrupted data
-      localStorage.removeItem(STORAGE_KEYS.USER);
-      localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
-      localStorage.removeItem(STORAGE_KEYS.SESSION_TOKEN);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const [storedAuth] = useState(loadStoredAuth);
+  const [user, setUser] = useState<User | null>(storedAuth.user);
+  const [accessToken, setAccessToken] = useState<string | null>(storedAuth.accessToken);
+  const [sessionToken, setSessionToken] = useState<string | null>(storedAuth.sessionToken);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Login with X OAuth data
   const login = useCallback((data: LoginData, token?: string, session?: string) => {
@@ -83,9 +95,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setUser(null);
     setAccessToken(null);
     setSessionToken(null);
-    localStorage.removeItem(STORAGE_KEYS.USER);
-    localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
-    localStorage.removeItem(STORAGE_KEYS.SESSION_TOKEN);
+    clearStoredAuth();
   }, []);
 
   // Update local state after wallet is linked (called by useLinkWallet hook)

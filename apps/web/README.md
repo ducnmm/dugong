@@ -89,7 +89,7 @@ VITE_TWITTER_CLIENT_ID=your_x_client_id
 
 Start the development server:
 ```bash
-npm run dev
+pnpm dev
 ```
 
 The app will be available at `http://localhost:43173`
@@ -98,12 +98,12 @@ The app will be available at `http://localhost:43173`
 
 Build for production:
 ```bash
-npm run build
+pnpm build
 ```
 
 Preview production build:
 ```bash
-npm run preview
+pnpm preview
 ```
 
 ## Configuration
@@ -157,10 +157,10 @@ VITE_DUGONG_ENCLAVE_ADDRESS=0x...
 
 ## Available Scripts
 
-- `npm run dev` - Start development server
-- `npm run build` - Build for production
-- `npm run preview` - Preview production build
-- `npm run lint` - Run ESLint
+- `pnpm dev` - Start development server
+- `pnpm build` - Build for production
+- `pnpm preview` - Preview production build
+- `pnpm lint` - Run ESLint
 
 ## Contributing
 

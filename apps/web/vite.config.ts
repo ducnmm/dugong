@@ -13,4 +13,29 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      onwarn(warning, warn) {
+        if (warning.code === 'INVALID_ANNOTATION' && warning.id?.includes('@noble/curves')) {
+          return
+        }
+        warn(warning)
+      },
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('@mysten') || id.includes('@noble') || id.includes('@scure')) {
+            return 'sui-vendor'
+          }
+          if (id.includes('react') || id.includes('@tanstack')) {
+            return 'react-vendor'
+          }
+          if (id.includes('lucide-react') || id.includes('lottie-react')) {
+            return 'ui-vendor'
+          }
+          return 'vendor'
+        },
+      },
+    },
+  },
 })

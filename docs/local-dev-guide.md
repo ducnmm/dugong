@@ -257,12 +257,12 @@ cargo test --workspace
 cargo test -p dugong-core
 ```
 
-Frontend tests live in `apps/web`:
+Frontend checks live in `apps/web`:
 
 ```bash
 cd apps/web
-pnpm test --run        # vitest unit/component/hook tests
-pnpm test:e2e          # Playwright E2E (builds + serves the app)
+pnpm lint
+pnpm build
 ```
 
 ## Suggested startup order

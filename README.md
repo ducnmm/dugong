@@ -35,5 +35,5 @@ cargo run -p dugong-tools --bin dugong-login
 cargo run -p dugong-tools --bin dugong-test-tweet
 ```
 
-See [docs/local-dev.md](docs/local-dev.md) for the full local development
+See [docs/local-dev-guide.md](docs/local-dev-guide.md) for the full local development
 guide.
