@@ -339,8 +339,7 @@ impl EnclaveClient {
             match self.http.post(&url).json(body).send().await {
                 Ok(resp) => {
                     let status = resp.status();
-                    if matches!(status.as_u16(), 502 | 503 | 504) && attempt < ENCLAVE_MAX_ATTEMPTS
-                    {
+                    if matches!(status.as_u16(), 502..=504) && attempt < ENCLAVE_MAX_ATTEMPTS {
                         let backoff = enclave_retry_backoff(attempt);
                         warn!(
                             "enclave {label} returned {status}; retrying (attempt {attempt}/{ENCLAVE_MAX_ATTEMPTS}) after {backoff:?}"

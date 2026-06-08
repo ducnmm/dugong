@@ -129,7 +129,7 @@ impl PollerService {
 
         // Calculate start_time: current time - poll_interval - 5s buffer
         let now = chrono::Utc::now();
-        let last_poll = self.last_poll_time.lock().await.clone();
+        let last_poll = *self.last_poll_time.lock().await;
 
         let start_time = if let Some(last) = last_poll {
             // Use last poll time minus 5s buffer to avoid missing tweets

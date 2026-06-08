@@ -12,7 +12,7 @@ use fastcrypto::traits::{KeyPair, Signer, ToFromBytes};
 use nautilus_server::{build_router, AppState};
 use rand::SeedableRng;
 use serde_json::{json, Value};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Lowercase hex without a `0x` prefix, matching the enclave's internal helper.
@@ -54,16 +54,15 @@ async fn spawn_app(twitter_api_base_url: String) -> String {
 async fn process_tweet_create_account_returns_signed_payload() {
     let twitter = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/2/tweets/123"))
+        .and(path("/twitter/tweets"))
+        .and(query_param("tweet_ids", "123"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": {
+            "status": "success",
+            "tweets": [{
                 "id": "123",
                 "text": "@dugong create account",
-                "author_id": "555"
-            },
-            "includes": {
-                "users": [{ "id": "555", "username": "alice" }]
-            }
+                "author": { "id": "555", "userName": "alice" }
+            }]
         })))
         .mount(&twitter)
         .await;
@@ -89,21 +88,20 @@ async fn process_tweet_create_account_returns_signed_payload() {
 async fn process_tweet_transfer_resolves_mentioned_user() {
     let twitter = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/2/tweets/200"))
+        .and(path("/twitter/tweets"))
+        .and(query_param("tweet_ids", "200"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": {
+            "status": "success",
+            "tweets": [{
                 "id": "200",
                 "text": "@dugong send 5 SUI to @bob",
-                "author_id": "111",
+                "author": { "id": "111", "userName": "alice" },
                 "entities": {
-                    "mentions": [
-                        { "id": "999", "username": "bob" }
+                    "user_mentions": [
+                        { "id_str": "999", "screen_name": "bob" }
                     ]
                 }
-            },
-            "includes": {
-                "users": [{ "id": "111", "username": "alice" }]
-            }
+            }]
         })))
         .mount(&twitter)
         .await;

@@ -49,13 +49,7 @@ fn expand_coin_type(coin_type: &str, dugong_package_id: &str) -> String {
         "WAL" => "0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL"
             .to_string(),
         "DUG" | "CORE" => format!("{}::dug::DUG", dugong_package_id),
-        _ => {
-            if coin_type.contains("::") {
-                coin_type.to_string()
-            } else {
-                coin_type.to_string()
-            }
-        }
+        _ => coin_type.to_string(),
     }
 }
 
@@ -76,10 +70,10 @@ fn to_canonical_coin_type(coin_type: &str, dugong_package_id: &str) -> String {
     expanded
 }
 
-/// ====
-/// Dugong Enclave Server Logic
-/// Processes Twitter-based transfer commands
-/// ====
+// ====
+// Dugong Enclave Server Logic
+// Processes Twitter-based transfer commands
+// ====
 
 /// Transfer payload that will be signed and sent to Sui blockchain
 /// This must match TransferCoinPayload in dugong.move
@@ -1129,6 +1123,7 @@ async fn process_resolve_market_command(
 
 /// Process create reward campaign command.
 /// The campaign tweet itself (`tweet_data.tweet_id`) is the campaign identifier.
+#[allow(clippy::too_many_arguments)]
 async fn process_create_reward_campaign_command(
     state: &Arc<AppState>,
     tweet_data: &TweetData,
@@ -1548,11 +1543,7 @@ fn verify_sui_wallet_signature(
     let computed_address = Blake2b256::digest(&data);
     let computed_address_hex = hex::encode(computed_address.as_ref());
 
-    let expected_address = if wallet_address.starts_with("0x") {
-        &wallet_address[2..]
-    } else {
-        wallet_address
-    };
+    let expected_address = wallet_address.strip_prefix("0x").unwrap_or(wallet_address);
 
     if computed_address_hex.to_lowercase() != expected_address.to_lowercase() {
         return Err(EnclaveError::GenericError(format!(

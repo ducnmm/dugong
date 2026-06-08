@@ -826,8 +826,14 @@ impl TwitterClient {
     /// Reply when a tweet mentions the bot but does not match a supported command.
     pub async fn reply_unsupported_command(&self, tweet_id: &str) -> Result<String> {
         let message = format!(
-            "❌ I don't understand this Dugong command yet.\n\n\
-            You can check the command docs here:\n\
+            "⚠️ I didn't recognize that command.\n\n\
+            Try one of Dugong's supported commands:\n\
+            1) @DugongWallet create account\n\
+            2) @DugongWallet send <amount> <coin> to @<user>\n\
+            3) @DugongWallet create market: <question>\n\
+            4) @DugongWallet bet <amount> <coin> on yes/no\n\
+            5) @DugongWallet resolve | solve yes/no\n\n\
+            You can check all docs here:\n\
             {}/tweet-commands",
             self.docs_url
         );
@@ -1023,14 +1029,46 @@ impl TwitterClient {
         Ok(candidates)
     }
 
+    /// Build a friendly, user-facing error message for transaction failures.
+    /// We keep raw error details only in server logs to avoid leaking technical text to users.
+    fn friendly_error_message(error_message: &str) -> &'static str {
+        let lower = error_message.to_lowercase();
+
+        if lower.contains("insufficient")
+            || lower.contains("balance") && lower.contains("insufficient")
+        {
+            "It looks like the sender may not have enough balance for this action."
+        } else if lower.contains("already") && lower.contains("exists") {
+            "This action appears to have already been completed."
+        } else if lower.contains("already claimed") || lower.contains("already paid") {
+            "This reward or payout has already been claimed."
+        } else if lower.contains("permission")
+            || lower.contains("unauthorized")
+            || lower.contains("not authorized")
+        {
+            "You don't have permission for this action right now."
+        } else if lower.contains("not found") || lower.contains("missing") {
+            "Some required item couldn't be found. Please check context and try again."
+        } else if lower.contains("timeout") || lower.contains("timed out") {
+            "The network was busy while processing your request."
+        } else if lower.contains("rate limit") || lower.contains("429") {
+            "The service is rate-limited. Please try again in a minute."
+        } else {
+            "Something went wrong while processing your request."
+        }
+    }
+
     /// Reply to a tweet with error message
     #[allow(dead_code)]
     pub async fn reply_error(&self, tweet_id: &str, error_message: &str) -> Result<String> {
+        let user_friendly = Self::friendly_error_message(error_message);
         let message = format!(
-            "❌ Transaction failed\n\n\
-            Error: {}\n\n\
-            Please check your command and try again.",
-            error_message
+            "⚠️ Sorry, I couldn't finish this request.\n\n\
+            {}\n\n\
+            Tip: Double-check the command format and try again in a minute.\n\
+            If this keeps happening, check the guide:\n\
+            {}/tweet-commands",
+            user_friendly, self.docs_url
         );
 
         info!(

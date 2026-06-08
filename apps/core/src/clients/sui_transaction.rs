@@ -91,6 +91,7 @@ impl SuiTransactionBuilder {
     ///
     /// # Returns
     /// Transaction digest on success
+    #[allow(clippy::too_many_arguments)]
     pub async fn submit_transfer(
         &self,
         from_xid: &str,
@@ -176,7 +177,7 @@ impl SuiTransactionBuilder {
         let sui_signature = self.keypair.sign(&digest);
         let signature_base64 = BASE64.encode(sui_signature.as_ref());
 
-        info!("Transaction signed, digest: {:?}", hex::encode(&digest));
+        info!("Transaction signed, digest: {:?}", hex::encode(digest));
 
         // 7. Execute sponsored transaction
         let result = self
@@ -293,7 +294,7 @@ impl SuiTransactionBuilder {
         info!(
             "Transaction signed, signature length: {} bytes, digest: {:?}",
             sui_signature.as_ref().len(),
-            hex::encode(&digest)
+            hex::encode(digest)
         );
 
         // Execute sponsored transaction
@@ -395,7 +396,7 @@ impl SuiTransactionBuilder {
         let sui_signature = self.keypair.sign(&digest);
         let signature_base64 = BASE64.encode(sui_signature.as_ref());
 
-        info!("Transaction signed, digest: {:?}", hex::encode(&digest));
+        info!("Transaction signed, digest: {:?}", hex::encode(digest));
 
         // 6. Execute sponsored transaction
         let result = self
@@ -689,11 +690,7 @@ impl SuiTransactionBuilder {
             } = owner
             {
                 // Return ObjectRef with initial_shared_version for shared objects
-                return Ok((
-                    data.object_id,
-                    (*initial_shared_version).into(),
-                    data.digest,
-                ));
+                return Ok((data.object_id, *initial_shared_version, data.digest));
             }
         }
 
@@ -818,6 +815,7 @@ impl SuiTransactionBuilder {
 
     /// Build the transfer_coin transaction
     #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)]
     async fn build_transfer_transaction(
         &self,
         from_account: ObjectRef,
@@ -995,7 +993,7 @@ impl SuiTransactionBuilder {
             package_id,
             "dugong".parse()?,
             "transfer_coin_no_signature".parse()?,
-            vec![coin_type_tag.into()], // Type parameter T (coin type)
+            vec![coin_type_tag], // Type parameter T (coin type)
             vec![from_arg, to_arg, amount_arg],
         ));
 
@@ -1083,7 +1081,7 @@ impl SuiTransactionBuilder {
             package_id,
             "dugong".parse()?,
             "init_account".parse()?,
-            vec![dugong_type_tag.into()], // Type parameter: <DUGONG>
+            vec![dugong_type_tag], // Type parameter: <DUGONG>
             vec![
                 registry_arg,
                 xid_arg,
@@ -1184,7 +1182,7 @@ impl SuiTransactionBuilder {
         let sui_signature = self.keypair.sign(&digest);
         let signature_base64 = BASE64.encode(sui_signature.as_ref());
 
-        info!("Transaction signed, digest: {:?}", hex::encode(&digest));
+        info!("Transaction signed, digest: {:?}", hex::encode(digest));
 
         // Execute sponsored transaction
         let result = self
@@ -1326,7 +1324,7 @@ impl SuiTransactionBuilder {
             package_id,
             "dugong".parse()?,
             "link_wallet".parse()?,
-            vec![dugong_type_tag.into()], // Type parameter: <DUGONG>
+            vec![dugong_type_tag], // Type parameter: <DUGONG>
             vec![
                 account_arg,
                 owner_arg,
@@ -1394,6 +1392,7 @@ impl SuiTransactionBuilder {
         self.sign_and_execute(tx_data).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn build_create_market_transaction(
         &self,
         registry: ObjectRef,
@@ -1442,6 +1441,7 @@ impl SuiTransactionBuilder {
     }
 
     /// Submit a place_bet<T> transaction
+    #[allow(clippy::too_many_arguments)]
     pub async fn submit_place_bet(
         &self,
         market_object_id: &str,
@@ -1480,6 +1480,7 @@ impl SuiTransactionBuilder {
         self.sign_and_execute(tx_data).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn build_place_bet_transaction(
         &self,
         market: ObjectRef,
@@ -1574,6 +1575,7 @@ impl SuiTransactionBuilder {
         self.sign_and_execute(tx_data).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn build_resolve_market_transaction(
         &self,
         market: ObjectRef,
