@@ -34,6 +34,7 @@ export const Home: React.FC = () => {
   const [searchError, setSearchError] = useState<string>('');
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const hasSearchResults = searchResults.length > 0;
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,7 +95,13 @@ export const Home: React.FC = () => {
           </button>
         </div>
 
-        <section className="mx-auto flex h-full w-full max-w-3xl flex-col justify-center px-4 pb-40 pt-6 sm:px-6 sm:pb-44 sm:pt-8 lg:px-8">
+        <section
+          className={`mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col px-4 pt-6 sm:px-6 sm:pt-8 lg:px-8 ${
+            hasSearchResults
+              ? 'justify-start pb-6 sm:pb-8'
+              : 'justify-center pb-40 sm:pb-44'
+          }`}
+        >
           <div className="pointer-events-none relative z-10 mb-[-68px] flex justify-center sm:mb-[-84px]">
             <img
               src={HOME_MASCOT_SRC}
@@ -135,18 +142,20 @@ export const Home: React.FC = () => {
             </div>
           </form>
 
-          <a
-            href={HOME_DOCS_URL}
-            target="_blank"
-            rel="noreferrer"
-            className={`home-docs-link mt-6 ${isSearchFocused ? 'home-docs-link-hidden' : ''}`}
-            aria-label="Open Dugong documentation"
-            aria-hidden={isSearchFocused}
-            tabIndex={isSearchFocused ? -1 : undefined}
-          >
-            <span>Docs</span>
-            <ExternalLink className="h-4 w-4 shrink-0 text-black" aria-hidden="true" />
-          </a>
+          {!hasSearchResults && (
+            <a
+              href={HOME_DOCS_URL}
+              target="_blank"
+              rel="noreferrer"
+              className={`home-docs-link mt-6 ${isSearchFocused ? 'home-docs-link-hidden' : ''}`}
+              aria-label="Open Dugong documentation"
+              aria-hidden={isSearchFocused}
+              tabIndex={isSearchFocused ? -1 : undefined}
+            >
+              <span>Docs</span>
+              <ExternalLink className="h-4 w-4 shrink-0 text-black" aria-hidden="true" />
+            </a>
+          )}
 
           {searchError && (
             <div className="mt-6 rounded-lg border-2 border-black bg-red-200 p-4 shadow-neo-md">
@@ -154,14 +163,14 @@ export const Home: React.FC = () => {
             </div>
           )}
 
-          {searchResults.length > 0 && (
-            <div className="glass mt-6 overflow-hidden rounded-lg">
-              <div className="border-b-2 border-black bg-yellow-200 p-5">
+          {hasSearchResults && (
+            <div className="glass relative z-20 mt-6 flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg">
+              <div className="shrink-0 border-b-2 border-black bg-yellow-200 p-5">
                 <h2 className="hero-font text-3xl font-black text-black">
                   Search Results ({searchResults.length})
                 </h2>
               </div>
-              <div className="divide-y-2 divide-black">
+              <div className="min-h-0 flex-1 divide-y-2 divide-black overflow-y-auto overscroll-contain">
                 {searchResults.map((account) => (
                   <div
                     key={account.x_user_id}
