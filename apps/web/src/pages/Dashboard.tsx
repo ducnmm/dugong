@@ -79,6 +79,8 @@ const getAmountPrefix = (tx: TransactionResponse, viewedXid?: string) => {
 
 const hasDisplayAmount = (tx: TransactionResponse) => tx.amount !== '0';
 
+const getSideLabel = (tx: TransactionResponse) => tx.side?.toUpperCase();
+
 export const Dashboard: React.FC = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -362,6 +364,35 @@ export const Dashboard: React.FC = () => {
         return 'Campaign Claim';
       default:
         return type;
+    }
+  };
+
+  const getActivitySubtitle = (tx: TransactionResponse) => {
+    const symbol = getCoinSymbol(tx.coin_type);
+    const side = getSideLabel(tx);
+
+    switch (tx.tx_type) {
+      case 'market_create':
+        return tx.context_title || 'Prediction market created';
+      case 'market_bet':
+        return [
+          side ? `${side} prediction` : 'Prediction placed',
+          tx.context_title ? `on ${tx.context_title}` : '',
+        ].filter(Boolean).join(' ');
+      case 'market_claim':
+        return tx.context_title ? `Payout from ${tx.context_title}` : 'Market payout claimed';
+      case 'campaign_create':
+        if (tx.reward_amount && tx.max_winners) {
+          return [
+            `${tx.reward_amount} ${symbol} x ${tx.max_winners} winners`,
+            tx.context_title ? `for ${tx.context_title}` : '',
+          ].filter(Boolean).join(' ');
+        }
+        return tx.context_title || 'Reward campaign created';
+      case 'campaign_claim':
+        return tx.context_title ? `Reward from ${tx.context_title}` : 'Campaign reward claimed';
+      default:
+        return '';
     }
   };
 
@@ -753,6 +784,11 @@ export const Dashboard: React.FC = () => {
                             </div>
                             <div className="min-w-0">
                               <p className="font-black text-black">{formatTxLabel(tx.tx_type)}</p>
+                              {getActivitySubtitle(tx) && (
+                                <p className="mt-0.5 line-clamp-2 text-xs font-bold leading-snug text-gray-700 sm:text-sm">
+                                  {getActivitySubtitle(tx)}
+                                </p>
+                              )}
                             </div>
                           </div>
                           <div className="min-w-0 text-left sm:text-right">

@@ -71,6 +71,66 @@ const getAmountPrefix = (tx: TransactionResponse, viewerXid?: string) => {
 
 const hasDisplayAmount = (tx: TransactionResponse) => tx.amount !== '0';
 
+const getSideLabel = (tx: TransactionResponse) => tx.side?.toUpperCase();
+
+const formatStatus = (status?: string | null) => {
+  if (!status) return '';
+  return status.charAt(0).toUpperCase() + status.slice(1);
+};
+
+const getTransactionTitle = (tx: TransactionResponse) => {
+  const contextTitle = tx.context_title?.trim();
+  if (contextTitle) {
+    return contextTitle;
+  }
+
+  return formatTxLabel(tx.tx_type);
+};
+
+const getContextRowLabel = (tx: TransactionResponse) => {
+  if (tx.tx_type.startsWith('market')) return 'Market';
+  if (tx.tx_type.startsWith('campaign')) return 'Campaign';
+  return 'Context';
+};
+
+const getPartyLabels = (tx: TransactionResponse) => {
+  switch (tx.tx_type) {
+    case 'market_create':
+    case 'campaign_create':
+      return { from: 'Creator', to: tx.tx_type === 'market_create' ? 'Market' : 'Campaign' };
+    case 'market_bet':
+      return { from: 'Predictor', to: 'Market' };
+    case 'market_claim':
+      return { from: 'Market', to: 'Winner' };
+    case 'campaign_claim':
+      return { from: 'Campaign', to: 'Winner' };
+    default:
+      return { from: 'From', to: 'To' };
+  }
+};
+
+const getTransactionSubtitle = (tx: TransactionResponse, symbol: string) => {
+  const side = getSideLabel(tx);
+
+  switch (tx.tx_type) {
+    case 'market_create':
+      return tx.status ? `${formatTxLabel(tx.tx_type)} · ${formatStatus(tx.status)}` : formatTxLabel(tx.tx_type);
+    case 'market_bet':
+      return side ? `${side} prediction` : formatTxLabel(tx.tx_type);
+    case 'market_claim':
+      return side ? `Payout from ${side} market` : 'Market payout claimed';
+    case 'campaign_create':
+      if (tx.reward_amount && tx.max_winners) {
+        return `${tx.reward_amount} ${symbol} x ${tx.max_winners} winners`;
+      }
+      return tx.context_subtitle || formatTxLabel(tx.tx_type);
+    case 'campaign_claim':
+      return tx.context_title ? `Reward from ${tx.context_title}` : 'Campaign reward claimed';
+    default:
+      return '';
+  }
+};
+
 const getDirection = (tx: TransactionResponse) => {
   if (tx.tx_type === 'deposit') {
     return { from: 'Linked wallet', toXid: tx.to_xid, to: tx.to_xid ? `XID ${tx.to_xid}` : 'Dugong account' };
@@ -183,6 +243,9 @@ export const TransactionDetail: React.FC = () => {
     : direction?.to ?? 'Unknown';
   const amountPrefix = tx ? getAmountPrefix(tx, user?.twitterUserId) : '';
   const shouldShowAmount = tx ? hasDisplayAmount(tx) : false;
+  const transactionTitle = tx ? getTransactionTitle(tx) : '';
+  const transactionSubtitle = tx ? getTransactionSubtitle(tx, symbol) : '';
+  const partyLabels = tx ? getPartyLabels(tx) : { from: 'From', to: 'To' };
 
   return (
     <main className="neo-page flex h-full min-h-0 items-center justify-center overflow-y-auto p-4 text-black">
@@ -203,23 +266,52 @@ export const TransactionDetail: React.FC = () => {
               </div>
               <div className="flex min-w-0 flex-col items-center">
                 {shouldShowAmount ? (
-                  <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
-                    <p className="break-words text-4xl font-black leading-none sm:text-5xl">
-                      {amountPrefix ? `${amountPrefix} ` : ''}{tx.amount}
-                    </p>
-                    <TokenIcon symbol={symbol} size="lg" framed={false} />
+                  <div className="mt-2 flex flex-col items-center gap-2">
+                    <div className="flex flex-wrap items-center justify-center gap-3">
+                      <p className="break-words text-4xl font-black leading-none sm:text-5xl">
+                        {amountPrefix ? `${amountPrefix} ` : ''}{tx.amount}
+                      </p>
+                      <TokenIcon symbol={symbol} size="lg" framed={false} />
+                    </div>
+                    {transactionSubtitle && (
+                      <p className="max-w-full break-words px-2 text-center text-base font-black text-gray-700 sm:text-lg">
+                        {transactionSubtitle}
+                      </p>
+                    )}
                   </div>
                 ) : (
-                  <p className="mt-2 break-words text-4xl font-black leading-none sm:text-5xl">
-                    {formatTxLabel(tx.tx_type)}
-                  </p>
+                  <div className="mt-2 flex flex-col items-center gap-2">
+                    <p className="max-w-full break-words px-2 text-3xl font-black leading-tight sm:text-4xl">
+                      {transactionTitle}
+                    </p>
+                    {transactionSubtitle && (
+                      <p className="max-w-full break-words px-2 text-center text-base font-black text-gray-700 sm:text-lg">
+                        {transactionSubtitle}
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
 
             <div className="rounded-md border-2 border-black bg-white px-3 py-1 shadow-neo-sm">
-              <DetailRow icon={<Route className="h-4 w-4" />} label="From" value={fromDisplay} />
-              <DetailRow icon={<Route className="h-4 w-4 rotate-180" />} label="To" value={toDisplay} />
+              <DetailRow icon={<Route className="h-4 w-4" />} label={partyLabels.from} value={fromDisplay} />
+              <DetailRow icon={<Route className="h-4 w-4 rotate-180" />} label={partyLabels.to} value={toDisplay} />
+              {tx.context_title && shouldShowAmount && (
+                <DetailRow icon={<Route className="h-4 w-4" />} label={getContextRowLabel(tx)} value={tx.context_title} />
+              )}
+              {tx.side && (
+                <DetailRow icon={<ArrowLeftRight className="h-4 w-4" />} label="Side" value={getSideLabel(tx) ?? ''} />
+              )}
+              {tx.reward_amount && (
+                <DetailRow icon={<ArrowLeftRight className="h-4 w-4" />} label="Reward" value={`${tx.reward_amount} ${symbol}`} />
+              )}
+              {tx.max_winners && (
+                <DetailRow icon={<ArrowLeftRight className="h-4 w-4" />} label="Winners" value={`${tx.max_winners} max`} />
+              )}
+              {tx.status && (
+                <DetailRow icon={<ArrowLeftRight className="h-4 w-4" />} label="Status" value={formatStatus(tx.status)} />
+              )}
               <DetailRow icon={<Clock className="h-4 w-4" />} label="When" value={formatTimeAgo(tx.timestamp)} />
               <DetailRow icon={<ArrowLeftRight className="h-4 w-4" />} label="Type" value={formatTxLabel(tx.tx_type)} />
             </div>

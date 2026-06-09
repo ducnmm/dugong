@@ -26,6 +26,13 @@ export interface TransactionResponse {
   tweet_id: string | null;
   timestamp: number;
   created_at: string;
+  context_title?: string | null;
+  context_subtitle?: string | null;
+  side?: 'yes' | 'no' | null;
+  status?: string | null;
+  reward_amount?: string | null;
+  reward_amount_mist?: number | null;
+  max_winners?: number | null;
 }
 
 export interface PaginatedTransactionsResponse {
