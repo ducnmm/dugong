@@ -633,6 +633,10 @@ fn parse_tweet_command_type(
     tweet_text: &str,
     _author_xid: &str,
 ) -> Result<ParsedCommand, EnclaveError> {
+    // Only parse the first line of the tweet body so additional note lines do not
+    // accidentally alter command parsing.
+    let tweet_text = tweet_text.lines().next().unwrap_or_default().trim();
+
     // Transfer: @dugong send <amount> <coin> to @<receiver>
     let transfer_regex = Regex::new(r"(?i)@\w+\s+send\s+(\d+(?:\.\d+)?)\s+(\w+)\s+to\s+@(\w+)")
         .map_err(|_| EnclaveError::GenericError("Invalid transfer regex".to_string()))?;
@@ -641,10 +645,12 @@ fn parse_tweet_command_type(
     let create_market_regex = Regex::new(r"(?i)@\w+\s+create\s+market:\s*(.+)")
         .map_err(|_| EnclaveError::GenericError("Invalid create market regex".to_string()))?;
 
-    // Place bet: @dugong bet <amount> <coin> on|with yes|no
-    let place_bet_regex =
-        Regex::new(r"(?i)@\w+\s+bet\s+(\d+(?:\.\d+)?)\s+(\w+)\s+(?:on|with)\s+(yes|no)")
-            .map_err(|_| EnclaveError::GenericError("Invalid place bet regex".to_string()))?;
+    // Place prediction: @dugong predict <amount> <coin> on|with yes|no
+    // `bet` is still accepted as a legacy alias for compatibility.
+    let place_bet_regex = Regex::new(
+        r"(?i)@\w+\s+(?:predict|bet)\s+(\d+(?:\.\d+)?)\s+(\w+)\s+(?:on|with)\s+(yes|no)",
+    )
+    .map_err(|_| EnclaveError::GenericError("Invalid prediction regex".to_string()))?;
 
     // Resolve market: @dugong resolve|solve yes|no
     let resolve_market_regex = Regex::new(r"(?i)@\w+\s+(?:resolve|solve)\s+(yes|no)")
@@ -745,12 +751,12 @@ fn parse_tweet_command_type(
         return Ok(ParsedCommand::CreateMarket { question });
     }
 
-    // Check place bet
+    // Check prediction (legacy alias: bet)
     if let Some(caps) = place_bet_regex.captures(tweet_text) {
         let amount_str = caps.get(1).map(|m| m.as_str()).unwrap_or("0");
         let amount: f64 = amount_str
             .parse()
-            .map_err(|_| EnclaveError::GenericError("Invalid bet amount".to_string()))?;
+            .map_err(|_| EnclaveError::GenericError("Invalid prediction amount".to_string()))?;
         let coin_type = caps
             .get(2)
             .map(|m| m.as_str().to_uppercase())
@@ -760,7 +766,7 @@ fn parse_tweet_command_type(
             .map(|m| m.as_str().to_lowercase() == "yes")
             .unwrap_or(false);
         info!(
-            "Detected PlaceBet command: {} {} side={}",
+            "Detected prediction command: {} {} side={}",
             amount, coin_type, side
         );
         return Ok(ParsedCommand::PlaceBet {
@@ -808,7 +814,7 @@ fn parse_tweet_command_type(
     }
 
     Err(EnclaveError::GenericError(
-        "Could not parse tweet command. Supported: 'create market: <q>', 'bet <amt> <coin> on|with yes|no', 'resolve|solve yes|no', 'send <amt> <coin> to @<user>', 'create account'".to_string()
+        "Could not parse tweet command. Supported: 'create market: <q>', 'predict <amt> <coin> on|with yes|no' (legacy: bet), 'resolve|solve yes|no', 'send <amt> <coin> to @<user>', 'create account'".to_string()
     ))
 }
 
@@ -1898,9 +1904,12 @@ mod test {
     #[test]
     fn test_parse_tweet_command_type_place_bet() {
         let test_cases = vec![
-            ("@DugongWallet bet 5 SUI on yes", 5.0, "SUI", true),
-            ("@DugongWallet bet 10.5 USDC with no", 10.5, "USDC", false),
+            ("@DugongWallet predict 5 SUI on yes", 5.0, "SUI", true),
+            ("@DugongWallet predict 10.5 USDC with no", 10.5, "USDC", false),
+            // legacy alias
+            ("@DugongWallet bet 100 WAL ON YES", 100.0, "WAL", true),
             ("@DugongWallet BET 100 WAL ON YES", 100.0, "WAL", true),
+            ("@DugongWallet PREDICT 1.5 DUG with no", 1.5, "DUG", false),
         ];
 
         for (tweet, expected_amount, expected_coin, expected_side) in test_cases {
@@ -2128,6 +2137,39 @@ mod test {
             ParsedCommand::CreateAccount => {}
             other => panic!("Expected CreateAccount, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_parse_tweet_command_type_only_first_line_is_used() {
+        let result = parse_tweet_command_type(
+            "@DugongWallet create market: Will BTC rise tomorrow?\nDo not parse this line",
+            "123",
+        )
+        .unwrap();
+
+        match result {
+            ParsedCommand::CreateMarket { question } => {
+                assert_eq!(question, "Will BTC rise tomorrow?");
+            }
+            other => panic!("Expected CreateMarket, got {:?}", other),
+        }
+
+        let result = parse_tweet_command_type(
+            "@dugong send 10.5 USDC to @alice\n@DugongWallet claim reward",
+            "123",
+        )
+        .unwrap();
+        match result {
+            ParsedCommand::Transfer { receiver_username } => {
+                assert_eq!(receiver_username, "alice");
+            }
+            other => panic!("Expected Transfer, got {:?}", other),
+        }
+
+        assert!(parse_tweet_command_type("@DugongWallet\nresolve yes", "123").is_err());
+        assert!(
+            parse_tweet_command_type("\n@DugongWallet send 1 SUI to @bob", "123").is_err()
+        );
     }
 
     #[test]

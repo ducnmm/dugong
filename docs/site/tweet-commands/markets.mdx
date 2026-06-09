@@ -1,6 +1,6 @@
 ---
 title: Prediction Markets
-description: Create markets, place bets, resolve outcomes, and handle payouts.
+description: Create markets, place predictions, resolve outcomes, and handle payouts.
 ---
 
 ## Create A Market
@@ -22,34 +22,36 @@ Behavior:
 - Creates a market anchored to the command tweet id.
 - Stores the tweet author as the market creator.
 - Uses the default market fee configured in the processor flow.
-- Replies with the market question, bet instructions, resolve instructions, and a Suiscan transaction link.
+- Replies with the market question, prediction instructions, resolve instructions, and a Suiscan transaction link.
 
-## Place A Bet
+## Place A Prediction
 
 Use this as a reply to the market creation tweet.
 
 ```text
-@DugongWallet bet <amount> <coin> on yes
-@DugongWallet bet <amount> <coin> on no
-@DugongWallet bet <amount> <coin> with yes
-@DugongWallet bet <amount> <coin> with no
+@DugongWallet predict <amount> <coin> on yes
+@DugongWallet predict <amount> <coin> on no
+@DugongWallet predict <amount> <coin> with yes
+@DugongWallet predict <amount> <coin> with no
 ```
 
 Examples:
 
 ```text
-@DugongWallet bet 1 DUG on yes
-@DugongWallet bet 0.25 SUI with no
+@DugongWallet predict 1 DUG on yes
+@DugongWallet predict 0.25 SUI with no
+
+(`bet` vẫn được chấp nhận như alias cũ cho tương thích.)
 ```
 
 Behavior:
 
 - Finds the market from the parent tweet id.
-- Auto-creates the bettor's Dugong account if needed.
+- Auto-creates the predictor's Dugong account if needed.
 - Escrows the stake in the market pool.
-- Replies with a bet confirmation and Suiscan transaction link.
+- Replies with a prediction confirmation and Suiscan transaction link.
 - If the market is missing, replies that no market was found for the tweet.
-- If the market is closed, replies that bets are no longer accepted.
+- If the market is closed, replies that predictions are no longer accepted.
 
 ## Resolve A Market
 
