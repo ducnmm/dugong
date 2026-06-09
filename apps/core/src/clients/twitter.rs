@@ -393,6 +393,41 @@ impl TwitterClient {
         format!("{}/tx/{}", self.web_url, tx_digest)
     }
 
+    fn tweet_char_weight(ch: char) -> usize {
+        if ch.is_ascii() {
+            1
+        } else {
+            2
+        }
+    }
+
+    fn truncate_for_tweet(text: &str, max_weight: usize) -> String {
+        let text = text.trim();
+        let suffix = "...";
+        let suffix_weight = suffix.len();
+        let limit = max_weight.saturating_sub(suffix_weight);
+        let mut output = String::new();
+        let mut weight = 0usize;
+        let mut truncated = false;
+
+        for ch in text.chars() {
+            let char_weight = Self::tweet_char_weight(ch);
+            if weight + char_weight > limit {
+                truncated = true;
+                break;
+            }
+
+            output.push(ch);
+            weight += char_weight;
+        }
+
+        if truncated {
+            output.push_str(suffix);
+        }
+
+        output
+    }
+
     /// Reply to a tweet with transaction success message
     pub async fn reply_transfer_success(&self, result: &TransactionResult) -> Result<String> {
         // Get coin decimals and format amount for display
@@ -597,15 +632,13 @@ impl TwitterClient {
         question: &str,
         tx_digest: &str,
     ) -> Result<String> {
+        let question = Self::truncate_for_tweet(question, 120);
         let message = format!(
-            "Prediction market created!\n\n\
+            "Market created.\n\n\
             {}\n\n\
-            To place a prediction, reply to this tweet:\n\
-            @DugongWallet predict <amount> <coin> on yes\n\
-            @DugongWallet predict <amount> <coin> on no\n\n\
-            When ready, resolve with:\n\
-            @DugongWallet resolve yes  (or resolve no)\n\n\
-            View on tx:\n\
+            Predict:\n\
+            @DugongWallet predict <amount> <coin> on yes/no\n\n\
+            Tx:\n\
             {}",
             question, self.tx_url(tx_digest)
         );
