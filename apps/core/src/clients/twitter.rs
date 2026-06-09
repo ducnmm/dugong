@@ -35,14 +35,6 @@ fn configured_docs_url() -> String {
         .to_string()
 }
 
-fn configured_tx_base_url() -> String {
-    env::var("TX_BASE_URL")
-        .or_else(|_| env::var("TX_EXPLORER_URL"))
-        .unwrap_or_else(|_| "http://127.0.0.1:3004".to_string())
-        .trim_end_matches('/')
-        .to_string()
-}
-
 /// A candidate winner discovered for a reward campaign (a reply author or hashtag tweeter).
 #[derive(Debug, Clone)]
 pub struct RewardCampaignCandidate {
@@ -298,7 +290,6 @@ pub struct TwitterClient {
     twitterapi_io_proxy: Option<String>,
     twitterapi_io_base: String,
     docs_url: String,
-    tx_base_url: String,
 }
 
 /// Request body for creating a tweet through TwitterAPI.io.
@@ -366,12 +357,11 @@ impl TwitterClient {
             twitterapi_io_proxy: config.twitterapi_io_proxy.clone(),
             twitterapi_io_base,
             docs_url: configured_docs_url(),
-            tx_base_url: configured_tx_base_url(),
         }
     }
 
     fn tx_url(&self, tx_digest: &str) -> String {
-        format!("{}/tx/{}", self.tx_base_url, tx_digest)
+        format!("{}/tx/{}", self.docs_url, tx_digest)
     }
 
     /// Reply to a tweet with transaction success message
