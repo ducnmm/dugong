@@ -18,6 +18,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(health_check))
         .route("/webhook", get(handle_crc_challenge).post(handle_webhook))
+        .route("/tx/:tx_digest", get(routes::get_transaction_card))
         .route(
             "/api/account/by-wallet/:address",
             get(routes::get_account_by_wallet),

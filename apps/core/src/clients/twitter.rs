@@ -35,6 +35,14 @@ fn configured_docs_url() -> String {
         .to_string()
 }
 
+fn configured_tx_base_url() -> String {
+    env::var("TX_BASE_URL")
+        .or_else(|_| env::var("TX_EXPLORER_URL"))
+        .unwrap_or_else(|_| "http://127.0.0.1:3004".to_string())
+        .trim_end_matches('/')
+        .to_string()
+}
+
 /// A candidate winner discovered for a reward campaign (a reply author or hashtag tweeter).
 #[derive(Debug, Clone)]
 pub struct RewardCampaignCandidate {
@@ -290,6 +298,7 @@ pub struct TwitterClient {
     twitterapi_io_proxy: Option<String>,
     twitterapi_io_base: String,
     docs_url: String,
+    tx_base_url: String,
 }
 
 /// Request body for creating a tweet through TwitterAPI.io.
@@ -357,7 +366,12 @@ impl TwitterClient {
             twitterapi_io_proxy: config.twitterapi_io_proxy.clone(),
             twitterapi_io_base,
             docs_url: configured_docs_url(),
+            tx_base_url: configured_tx_base_url(),
         }
+    }
+
+    fn tx_url(&self, tx_digest: &str) -> String {
+        format!("{}/tx/{}", self.tx_base_url, tx_digest)
     }
 
     /// Reply to a tweet with transaction success message
@@ -398,11 +412,11 @@ impl TwitterClient {
 
         // Build success message
         let message = format!(
-            "✅ Transaction successful!\n\n\
-            💸 Sent {} from @{} to @{}\n\n\
-            🔗 View on Suiscan:\n\
-            https://suiscan.xyz/testnet/tx/{}",
-            display_amount, result.from_handle, result.to_handle, result.tx_digest
+            "Transaction successful!\n\n\
+            Sent {} from @{} to @{}\n\n\
+            View on tx:\n\
+            {}",
+            display_amount, result.from_handle, result.to_handle, self.tx_url(&result.tx_digest)
         );
 
         info!(
@@ -423,12 +437,12 @@ impl TwitterClient {
         tx_digest: &str,
     ) -> Result<String> {
         let message = format!(
-            "✅ Welcome to Dugong, @{}!\n\n\
-            🎉 Your account has been created successfully.\n\n\
+            "Welcome to Dugong, @{}!\n\n\
+            Your account has been created successfully.\n\n\
             You can now receive and send crypto via tweets!\n\n\
-            🔗 View on Suiscan:\n\
-            https://suiscan.xyz/testnet/tx/{}",
-            handle, tx_digest
+            View on tx:\n\
+            {}",
+            handle, self.tx_url(tx_digest)
         );
 
         info!(
@@ -486,13 +500,13 @@ impl TwitterClient {
         };
 
         let message = format!(
-            "✅ Wallet linked successfully, @{}!\n\n\
-            🔗 Your Dugong is now connected to:\n\
+            "Wallet linked successfully, @{}!\n\n\
+            Your Dugong is now connected to:\n\
             {}\n\n\
             You can now deposit/withdraw directly from your wallet!\n\n\
-            📜 View on Suiscan:\n\
-            https://suiscan.xyz/testnet/tx/{}",
-            handle, short_address, tx_digest
+            View on tx:\n\
+            {}",
+            handle, short_address, self.tx_url(tx_digest)
         );
 
         info!(
@@ -565,15 +579,16 @@ impl TwitterClient {
         tx_digest: &str,
     ) -> Result<String> {
         let message = format!(
-            "📊 Prediction market created!\n\n\
-            ❓ {}\n\n\
-            To place a bet, reply to this tweet:\n\
-            @DugongWallet bet <amount> <coin> on yes\n\
-            @DugongWallet bet <amount> <coin> on no\n\n\
+            "Prediction market created!\n\n\
+            {}\n\n\
+            To place a prediction, reply to this tweet:\n\
+            @DugongWallet predict <amount> <coin> on yes\n\
+            @DugongWallet predict <amount> <coin> on no\n\n\
             When ready, resolve with:\n\
             @DugongWallet resolve yes  (or resolve no)\n\n\
-            🔗 https://suiscan.xyz/testnet/tx/{}",
-            question, tx_digest
+            View on tx:\n\
+            {}",
+            question, self.tx_url(tx_digest)
         );
 
         info!(tweet_id = %tweet_id, "Replying with market created message");
@@ -591,11 +606,12 @@ impl TwitterClient {
     ) -> Result<String> {
         let side_str = if side { "YES" } else { "NO" };
         let message = format!(
-            "✅ Bet placed, @{}!\n\n\
-            🎲 {} on {}\n\n\
+            "Prediction placed, @{}!\n\n\
+            {} on {}\n\n\
             Your stake is escrowed — payouts are distributed when the creator resolves the market.\n\n\
-            🔗 https://suiscan.xyz/testnet/tx/{}",
-            handle, amount_display, side_str, tx_digest
+            View on tx:\n\
+            {}",
+            handle, amount_display, side_str, self.tx_url(tx_digest)
         );
 
         info!(tweet_id = %tweet_id, handle = %handle, "Replying with bet placed message");
@@ -612,11 +628,12 @@ impl TwitterClient {
     ) -> Result<String> {
         let outcome_str = if outcome { "YES" } else { "NO" };
         let message = format!(
-            "🏆 Market resolved: {}\n\n\
-            💰 Payouts distributed to {} winner(s)!\n\n\
+            "Market resolved: {}\n\n\
+            Payouts distributed to {} winner(s).\n\n\
             Winnings have been credited to your @DugongWallet accounts.\n\n\
-            🔗 https://suiscan.xyz/testnet/tx/{}",
-            outcome_str, winner_count, tx_digest
+            View on tx:\n\
+            {}",
+            outcome_str, winner_count, self.tx_url(tx_digest)
         );
 
         info!(tweet_id = %tweet_id, outcome = %outcome_str, "Replying with market resolved message");
@@ -626,8 +643,8 @@ impl TwitterClient {
     /// Reply when market is already closed / already resolved
     pub async fn reply_market_closed(&self, tweet_id: &str, handle: &str) -> Result<String> {
         let message = format!(
-            "❌ @{} — this market is already closed.\n\n\
-            Bets are only accepted while the market is open.",
+            "@{} — this market is already closed.\n\n\
+            Predictions are only accepted while the market is open.",
             handle
         );
         self.reply_to_tweet(tweet_id, &message).await
@@ -636,7 +653,7 @@ impl TwitterClient {
     /// Reply when resolver is not the market creator
     pub async fn reply_unauthorized_resolve(&self, tweet_id: &str, handle: &str) -> Result<String> {
         let message = format!(
-            "❌ @{} — only the market creator can resolve this market.",
+            "@{} — only the market creator can resolve this market.",
             handle
         );
         self.reply_to_tweet(tweet_id, &message).await
@@ -645,7 +662,7 @@ impl TwitterClient {
     /// Reply when market tweet cannot be found in the registry
     pub async fn reply_market_not_found(&self, tweet_id: &str, handle: &str) -> Result<String> {
         let message = format!(
-            "❌ @{} — no prediction market found for this tweet.\n\n\
+            "@{} — no prediction market found for this tweet.\n\n\
             Make sure you are replying directly to the market creation tweet.",
             handle
         );
@@ -655,8 +672,8 @@ impl TwitterClient {
     /// Reply when a market has no bets to resolve.
     pub async fn reply_market_has_no_bets(&self, tweet_id: &str, handle: &str) -> Result<String> {
         let message = format!(
-            "❌ @{} — this market has no bets yet.\n\n\
-            Resolve it after at least one valid bet has been placed.",
+            "@{} — this market has no predictions yet.\n\n\
+            Resolve it after at least one valid prediction has been placed.",
             handle
         );
         self.reply_to_tweet(tweet_id, &message).await
@@ -669,7 +686,7 @@ impl TwitterClient {
         handle: &str,
     ) -> Result<String> {
         let message = format!(
-            "❌ @{} — this market is not resolved yet.\n\n\
+            "@{} — this market is not resolved yet.\n\n\
             Payouts can only be claimed after the creator resolves the market.",
             handle
         );
@@ -685,14 +702,15 @@ impl TwitterClient {
         tx_digest: &str,
     ) -> Result<String> {
         let message = format!(
-            "🎁 Reward campaign created!\n\n\
-            💰 {} each for up to {} winner(s).\n\n\
+            "Reward campaign created!\n\n\
+            {} each for up to {} winner(s).\n\n\
             Winners will be chosen by the creator. When ready, the creator resolves with:\n\
             @DugongWallet solve!\n\n\
             Winners then claim with:\n\
             @DugongWallet claim\n\n\
-            🔗 https://suiscan.xyz/testnet/tx/{}",
-            reward_display, max_winners, tx_digest
+            View on tx:\n\
+            {}",
+            reward_display, max_winners, self.tx_url(tx_digest)
         );
         info!(tweet_id = %tweet_id, "Replying with campaign created message");
         self.reply_to_tweet(tweet_id, &message).await
@@ -706,10 +724,11 @@ impl TwitterClient {
         tx_digest: &str,
     ) -> Result<String> {
         let message = format!(
-            "🏁 Campaign resolved!\n\n\
-            🏆 {} winner(s) selected. Reply to the campaign tweet with @DugongWallet claim to collect your reward.\n\n\
-            🔗 https://suiscan.xyz/testnet/tx/{}",
-            winner_count, tx_digest
+            "Campaign resolved!\n\n\
+            {} winner(s) selected. Reply to the campaign tweet with @DugongWallet claim to collect your reward.\n\n\
+            View on tx:\n\
+            {}",
+            winner_count, self.tx_url(tx_digest)
         );
         info!(tweet_id = %tweet_id, "Replying with campaign resolved message");
         self.reply_to_tweet(tweet_id, &message).await
@@ -724,10 +743,11 @@ impl TwitterClient {
         tx_digest: &str,
     ) -> Result<String> {
         let message = format!(
-            "✅ Reward claimed, @{}!\n\n\
-            💸 {} has been credited to your @DugongWallet account.\n\n\
-            🔗 https://suiscan.xyz/testnet/tx/{}",
-            handle, reward_display, tx_digest
+            "Reward claimed, @{}!\n\n\
+            {} has been credited to your @DugongWallet account.\n\n\
+            View on tx:\n\
+            {}",
+            handle, reward_display, self.tx_url(tx_digest)
         );
         info!(tweet_id = %tweet_id, handle = %handle, "Replying with reward claimed message");
         self.reply_to_tweet(tweet_id, &message).await
@@ -741,10 +761,11 @@ impl TwitterClient {
         tx_digest: &str,
     ) -> Result<String> {
         let message = format!(
-            "✅ Market payout claimed, @{}!\n\n\
-            💸 Your winnings have been credited to your @DugongWallet account.\n\n\
-            🔗 https://suiscan.xyz/testnet/tx/{}",
-            handle, tx_digest
+            "Market payout claimed, @{}!\n\n\
+            Your winnings have been credited to your @DugongWallet account.\n\n\
+            View on tx:\n\
+            {}",
+            handle, self.tx_url(tx_digest)
         );
         info!(tweet_id = %tweet_id, handle = %handle, "Replying with market payout claimed message");
         self.reply_to_tweet(tweet_id, &message).await
@@ -752,14 +773,14 @@ impl TwitterClient {
 
     /// Reply when a campaign already exists for this tweet
     pub async fn reply_campaign_already_exists(&self, tweet_id: &str) -> Result<String> {
-        let message = "ℹ️ A reward campaign already exists for this tweet.".to_string();
+        let message = "A reward campaign already exists for this tweet.".to_string();
         self.reply_to_tweet(tweet_id, &message).await
     }
 
     /// Reply when a reward campaign cannot be found for a resolve command.
     pub async fn reply_campaign_not_found(&self, tweet_id: &str, handle: &str) -> Result<String> {
         let message = format!(
-            "❌ @{} — no reward campaign found for this tweet.\n\n\
+            "@{} — no reward campaign found for this tweet.\n\n\
             Make sure you are replying directly to the reward campaign tweet.",
             handle
         );
@@ -773,7 +794,7 @@ impl TwitterClient {
         handle: &str,
     ) -> Result<String> {
         let message = format!(
-            "ℹ️ @{} — this reward campaign is already resolved.\n\n\
+            "@{} — this reward campaign is already resolved.\n\n\
             Winners can reply with @DugongWallet claim if they have not claimed yet.",
             handle
         );
@@ -787,7 +808,7 @@ impl TwitterClient {
         handle: &str,
     ) -> Result<String> {
         let message = format!(
-            "❌ @{} — only the campaign creator can resolve this campaign.",
+            "@{} — only the campaign creator can resolve this campaign.",
             handle
         );
         self.reply_to_tweet(tweet_id, &message).await
@@ -796,7 +817,7 @@ impl TwitterClient {
     /// Reply when a claimant has no entitlement / nothing to claim
     pub async fn reply_nothing_to_claim(&self, tweet_id: &str, handle: &str) -> Result<String> {
         let message = format!(
-            "❌ @{} — nothing to claim here.\n\n\
+            "@{} — nothing to claim here.\n\n\
             You can only claim a reward or payout you are entitled to, after the creator resolves.",
             handle
         );
@@ -810,7 +831,7 @@ impl TwitterClient {
         handle: &str,
     ) -> Result<String> {
         let message = format!(
-            "❌ @{} — this reward campaign is not resolved yet.\n\n\
+            "@{} — this reward campaign is not resolved yet.\n\n\
             Winners can claim only after the creator resolves the campaign.",
             handle
         );
@@ -819,19 +840,19 @@ impl TwitterClient {
 
     /// Reply when a user tries to claim the same reward twice.
     pub async fn reply_already_claimed(&self, tweet_id: &str, handle: &str) -> Result<String> {
-        let message = format!("ℹ️ @{} — this reward has already been claimed.", handle);
+        let message = format!("@{} — this reward has already been claimed.", handle);
         self.reply_to_tweet(tweet_id, &message).await
     }
 
     /// Reply when a tweet mentions the bot but does not match a supported command.
     pub async fn reply_unsupported_command(&self, tweet_id: &str) -> Result<String> {
         let message = format!(
-            "⚠️ I didn't recognize that command.\n\n\
+            "I didn't recognize that command.\n\n\
             Try one of Dugong's supported commands:\n\
             1) @DugongWallet create account\n\
             2) @DugongWallet send <amount> <coin> to @<user>\n\
             3) @DugongWallet create market: <question>\n\
-            4) @DugongWallet bet <amount> <coin> on yes/no\n\
+            4) @DugongWallet predict <amount> <coin> on yes/no\n\
             5) @DugongWallet resolve | solve yes/no\n\n\
             You can check all docs here:\n\
             {}/tweet-commands",
@@ -1063,7 +1084,7 @@ impl TwitterClient {
     pub async fn reply_error(&self, tweet_id: &str, error_message: &str) -> Result<String> {
         let user_friendly = Self::friendly_error_message(error_message);
         let message = format!(
-            "⚠️ Sorry, I couldn't finish this request.\n\n\
+            "Sorry, I couldn't finish this request.\n\n\
             {}\n\n\
             Tip: Double-check the command format and try again in a minute.\n\
             If this keeps happening, check the guide:\n\
