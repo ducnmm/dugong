@@ -11,6 +11,7 @@ import {
   Route,
 } from 'lucide-react';
 import { TokenIcon } from '../components/TokenIcon';
+import { useAuth } from '../contexts/useAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
   getExplorerUrl,
@@ -43,6 +44,16 @@ const getTxIcon = (type: string) => {
     default:
       return <ArrowLeftRight className="h-12 w-12" strokeWidth={3} />;
   }
+};
+
+const getAmountPrefix = (tx: TransactionResponse, viewerXid?: string) => {
+  if (tx.tx_type === 'deposit') return '+';
+  if (tx.tx_type === 'withdraw') return '-';
+
+  if (viewerXid && tx.to_xid === viewerXid) return '+';
+  if (viewerXid && tx.from_xid === viewerXid) return '-';
+
+  return '-';
 };
 
 const getDirection = (tx: TransactionResponse) => {
@@ -103,6 +114,7 @@ const DetailRow: React.FC<{
 export const TransactionDetail: React.FC = () => {
   const { tx_id } = useParams<{ tx_id: string }>();
   const location = useLocation();
+  const { user } = useAuth();
   const stateTx = (location.state as { transaction?: TransactionResponse } | null)?.transaction;
   const decodedTxId = tx_id ? decodeURIComponent(tx_id) : '';
 
@@ -134,6 +146,7 @@ export const TransactionDetail: React.FC = () => {
   const toDisplay = toHandleQuery.data?.account.x_handle
     ? `@${toHandleQuery.data.account.x_handle}`
     : direction?.to ?? 'Unknown';
+  const amountPrefix = tx ? getAmountPrefix(tx, user?.twitterUserId) : '';
 
   return (
     <main className="neo-page flex h-full min-h-0 items-center justify-center overflow-y-auto p-4 text-black">
@@ -155,8 +168,7 @@ export const TransactionDetail: React.FC = () => {
               <div className="flex min-w-0 flex-col items-center">
                 <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
                   <p className="break-words text-4xl font-black leading-none sm:text-5xl">
-                    {tx.tx_type === 'deposit' ? '+' : tx.tx_type === 'withdraw' ? '-' : ''}
-                    {tx.amount}
+                    {amountPrefix}{tx.amount}
                   </p>
                   <TokenIcon symbol={symbol} size="lg" framed={false} />
                 </div>

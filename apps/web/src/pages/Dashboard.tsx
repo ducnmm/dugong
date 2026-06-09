@@ -29,6 +29,7 @@ import {
   getTransactionHistory,
   type PaginatedTransactionsResponse,
   type TokenBalance,
+  type TransactionResponse,
 } from '../utils/api';
 import { getCoinSymbol } from '../utils/constants';
 import { AccountMenu } from '../components/Header';
@@ -61,6 +62,16 @@ const formatRelativeTime = (timestamp: number) => {
   const unit = units.find((item) => elapsedSeconds >= item.seconds) ?? units[units.length - 1];
   const value = Math.floor(elapsedSeconds / unit.seconds);
   return `${value} ${unit.label}${value === 1 ? '' : 's'} ago`;
+};
+
+const getAmountPrefix = (tx: TransactionResponse, viewedXid?: string) => {
+  if (tx.tx_type === 'deposit') return '+';
+  if (tx.tx_type === 'withdraw') return '-';
+
+  if (viewedXid && tx.to_xid === viewedXid) return '+';
+  if (viewedXid && tx.from_xid === viewedXid) return '-';
+
+  return '-';
 };
 
 export const Dashboard: React.FC = () => {
@@ -156,6 +167,9 @@ export const Dashboard: React.FC = () => {
   const publicAccount = publicAccountData?.account ?? null;
   const ensuredAccount = ensuredAccountData?.dugongAccount ?? null;
   const currentOwnAccount = ensuredAccount ?? ownAccount;
+  const viewedXid = isPublicDashboard
+    ? publicAccount?.x_user_id
+    : currentOwnAccount?.x_user_id ?? user?.twitterUserId;
   const viewedTwitterHandle = isPublicDashboard
     ? publicAccount?.x_handle
     : currentOwnAccount?.x_handle ?? user?.twitterHandle;
@@ -728,7 +742,7 @@ export const Dashboard: React.FC = () => {
                           </div>
                           <div className="min-w-0 text-left sm:text-right">
                             <p className="break-words text-sm font-black text-black sm:text-base">
-                              {tx.tx_type === 'deposit' ? '+' : tx.tx_type === 'withdraw' ? '-' : ''}
+                              {getAmountPrefix(tx, viewedXid)}
                               {tx.amount} {getCoinSymbol(tx.coin_type)}
                             </p>
                             <p className="text-xs font-bold text-gray-700 sm:text-sm">

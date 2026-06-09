@@ -4,6 +4,7 @@ import { ExternalLink, Search } from 'lucide-react';
 import { useAuth } from '../contexts/useAuth';
 import { useXAuth } from '../hooks/useXAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { API_BASE_URL } from '../utils/constants';
 
 const HOME_BACKGROUND_SRC = '/dugong-home-background-new.png';
 const HOME_MASCOT_SRC = '/dugong-home-mascot.png';
@@ -49,7 +50,7 @@ export const Home: React.FC = () => {
     setHasSearched(true);
 
     try {
-      const response = await fetch(`/api/accounts/search?q=${encodeURIComponent(query)}`);
+      const response = await fetch(`${API_BASE_URL}/api/accounts/search?q=${encodeURIComponent(query)}`);
 
       if (!response.ok) {
         throw new Error('Search failed');
