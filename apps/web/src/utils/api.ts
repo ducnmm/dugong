@@ -9,7 +9,15 @@ import type {
 // Types
 export interface TransactionResponse {
   tx_digest: string;
-  tx_type: 'transfer' | 'deposit' | 'withdraw';
+  tx_type:
+    | 'transfer'
+    | 'deposit'
+    | 'withdraw'
+    | 'market_create'
+    | 'market_bet'
+    | 'market_claim'
+    | 'campaign_create'
+    | 'campaign_claim';
   from_xid: string | null;
   to_xid: string | null;
   coin_type: string;

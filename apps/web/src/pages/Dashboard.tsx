@@ -67,12 +67,17 @@ const formatRelativeTime = (timestamp: number) => {
 const getAmountPrefix = (tx: TransactionResponse, viewedXid?: string) => {
   if (tx.tx_type === 'deposit') return '+';
   if (tx.tx_type === 'withdraw') return '-';
+  if (tx.tx_type === 'market_bet' || tx.tx_type === 'campaign_create') return '-';
+  if (tx.tx_type === 'market_claim' || tx.tx_type === 'campaign_claim') return '+';
+  if (tx.tx_type === 'market_create') return '';
 
   if (viewedXid && tx.to_xid === viewedXid) return '+';
   if (viewedXid && tx.from_xid === viewedXid) return '-';
 
   return '-';
 };
+
+const hasDisplayAmount = (tx: TransactionResponse) => tx.amount !== '0';
 
 export const Dashboard: React.FC = () => {
   const queryClient = useQueryClient();
@@ -345,6 +350,16 @@ export const Dashboard: React.FC = () => {
         return 'Withdraw';
       case 'transfer':
         return 'Transfer';
+      case 'market_create':
+        return 'Market Created';
+      case 'market_bet':
+        return 'Prediction';
+      case 'market_claim':
+        return 'Market Claim';
+      case 'campaign_create':
+        return 'Campaign Created';
+      case 'campaign_claim':
+        return 'Campaign Claim';
       default:
         return type;
     }
@@ -741,10 +756,13 @@ export const Dashboard: React.FC = () => {
                             </div>
                           </div>
                           <div className="min-w-0 text-left sm:text-right">
-                            <p className="break-words text-sm font-black text-black sm:text-base">
-                              {getAmountPrefix(tx, viewedXid)}
-                              {tx.amount} {getCoinSymbol(tx.coin_type)}
-                            </p>
+                            {hasDisplayAmount(tx) && (
+                              <p className="break-words text-sm font-black text-black sm:text-base">
+                                {getAmountPrefix(tx, viewedXid)}
+                                {' '}
+                                {tx.amount} {getCoinSymbol(tx.coin_type)}
+                              </p>
+                            )}
                             <p className="text-xs font-bold text-gray-700 sm:text-sm">
                               {formatRelativeTime(tx.timestamp)}
                             </p>

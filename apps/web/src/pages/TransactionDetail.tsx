@@ -30,6 +30,16 @@ const formatTxLabel = (type: string) => {
       return 'Withdraw';
     case 'transfer':
       return 'Transfer';
+    case 'market_create':
+      return 'Market Created';
+    case 'market_bet':
+      return 'Prediction';
+    case 'market_claim':
+      return 'Market Claim';
+    case 'campaign_create':
+      return 'Campaign Created';
+    case 'campaign_claim':
+      return 'Campaign Claim';
     default:
       return type;
   }
@@ -49,6 +59,9 @@ const getTxIcon = (type: string) => {
 const getAmountPrefix = (tx: TransactionResponse, viewerXid?: string) => {
   if (tx.tx_type === 'deposit') return '+';
   if (tx.tx_type === 'withdraw') return '-';
+  if (tx.tx_type === 'market_bet' || tx.tx_type === 'campaign_create') return '-';
+  if (tx.tx_type === 'market_claim' || tx.tx_type === 'campaign_claim') return '+';
+  if (tx.tx_type === 'market_create') return '';
 
   if (viewerXid && tx.to_xid === viewerXid) return '+';
   if (viewerXid && tx.from_xid === viewerXid) return '-';
@@ -56,12 +69,34 @@ const getAmountPrefix = (tx: TransactionResponse, viewerXid?: string) => {
   return '-';
 };
 
+const hasDisplayAmount = (tx: TransactionResponse) => tx.amount !== '0';
+
 const getDirection = (tx: TransactionResponse) => {
   if (tx.tx_type === 'deposit') {
     return { from: 'Linked wallet', toXid: tx.to_xid, to: tx.to_xid ? `XID ${tx.to_xid}` : 'Dugong account' };
   }
   if (tx.tx_type === 'withdraw') {
     return { fromXid: tx.from_xid, from: tx.from_xid ? `XID ${tx.from_xid}` : 'Dugong account', to: 'Linked wallet' };
+  }
+  if (tx.tx_type === 'market_create') {
+    return { fromXid: tx.from_xid, from: tx.from_xid ? `XID ${tx.from_xid}` : 'Creator', to: 'Market' };
+  }
+  if (tx.tx_type === 'market_bet') {
+    return { fromXid: tx.from_xid, from: tx.from_xid ? `XID ${tx.from_xid}` : 'Predictor', to: 'Market' };
+  }
+  if (tx.tx_type === 'market_claim') {
+    return { toXid: tx.to_xid, from: 'Market', to: tx.to_xid ? `XID ${tx.to_xid}` : 'Winner' };
+  }
+  if (tx.tx_type === 'campaign_create') {
+    return { fromXid: tx.from_xid, from: tx.from_xid ? `XID ${tx.from_xid}` : 'Creator', to: 'Campaign' };
+  }
+  if (tx.tx_type === 'campaign_claim') {
+    return {
+      fromXid: tx.from_xid,
+      toXid: tx.to_xid,
+      from: tx.from_xid ? `XID ${tx.from_xid}` : 'Campaign',
+      to: tx.to_xid ? `XID ${tx.to_xid}` : 'Winner',
+    };
   }
   return {
     fromXid: tx.from_xid,
@@ -147,6 +182,7 @@ export const TransactionDetail: React.FC = () => {
     ? `@${toHandleQuery.data.account.x_handle}`
     : direction?.to ?? 'Unknown';
   const amountPrefix = tx ? getAmountPrefix(tx, user?.twitterUserId) : '';
+  const shouldShowAmount = tx ? hasDisplayAmount(tx) : false;
 
   return (
     <main className="neo-page flex h-full min-h-0 items-center justify-center overflow-y-auto p-4 text-black">
@@ -166,12 +202,18 @@ export const TransactionDetail: React.FC = () => {
                 {getTxIcon(tx.tx_type)}
               </div>
               <div className="flex min-w-0 flex-col items-center">
-                <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
-                  <p className="break-words text-4xl font-black leading-none sm:text-5xl">
-                    {amountPrefix}{tx.amount}
+                {shouldShowAmount ? (
+                  <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
+                    <p className="break-words text-4xl font-black leading-none sm:text-5xl">
+                      {amountPrefix ? `${amountPrefix} ` : ''}{tx.amount}
+                    </p>
+                    <TokenIcon symbol={symbol} size="lg" framed={false} />
+                  </div>
+                ) : (
+                  <p className="mt-2 break-words text-4xl font-black leading-none sm:text-5xl">
+                    {formatTxLabel(tx.tx_type)}
                   </p>
-                  <TokenIcon symbol={symbol} size="lg" framed={false} />
-                </div>
+                )}
               </div>
             </div>
 

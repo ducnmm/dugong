@@ -3,8 +3,9 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -564,31 +565,42 @@ pub struct TransactionResponse {
     pub created_at: String,
 }
 
-impl TransactionResponse {
-    /// Convert Transfer to TransactionResponse with the given decimals
-    fn from_transfer_with_decimals(tx: Transfer, decimals: u8) -> Self {
-        let divisor = 10f64.powi(decimals as i32);
-        let formatted_amount = tx.amount as f64 / divisor;
+#[derive(Debug, Clone, FromRow)]
+struct TransactionRow {
+    tx_digest: String,
+    tx_type: String,
+    from_xid: Option<String>,
+    to_xid: Option<String>,
+    coin_type: String,
+    amount_mist: i64,
+    tweet_id: Option<String>,
+    timestamp: i64,
+    created_at: DateTime<Utc>,
+}
 
-        let tx_type = match tx.transfer_type {
-            TransferType::Transfer => "transfer",
-            TransferType::Deposit => "deposit",
-            TransferType::Withdraw => "withdraw",
-        };
+fn format_amount_with_decimals(amount: i64, decimals: u8) -> String {
+    let divisor = 10f64.powi(decimals as i32);
+    let formatted_amount = amount as f64 / divisor;
+
+    format!("{:.9}", formatted_amount)
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+impl TransactionResponse {
+    fn from_row_with_decimals(row: TransactionRow, decimals: u8) -> Self {
         Self {
-            tx_digest: tx.transaction_digest,
-            tx_type: tx_type.to_string(),
-            from_xid: tx.from_xid,
-            to_xid: tx.to_xid,
-            coin_type: tx.coin_type,
-            amount: format!("{:.9}", formatted_amount)
-                .trim_end_matches('0')
-                .trim_end_matches('.')
-                .to_string(),
-            amount_mist: tx.amount,
-            tweet_id: tx.tweet_id,
-            timestamp: tx.timestamp,
-            created_at: tx.created_at.to_rfc3339(),
+            tx_digest: row.tx_digest,
+            tx_type: row.tx_type,
+            from_xid: row.from_xid,
+            to_xid: row.to_xid,
+            coin_type: row.coin_type,
+            amount: format_amount_with_decimals(row.amount_mist, decimals),
+            amount_mist: row.amount_mist,
+            tweet_id: row.tweet_id,
+            timestamp: row.timestamp,
+            created_at: row.created_at.to_rfc3339(),
         }
     }
 }
@@ -608,6 +620,292 @@ pub struct PaginatedTransactionsResponse {
     pub total_pages: i64,
 }
 
+async fn resolve_coin_decimals(
+    sui_client: &dugong_core::clients::sui_client::SuiClient,
+    coin_type: &str,
+) -> u8 {
+    let (_, fallback_decimals) = coin_display_metadata(coin_type);
+
+    if !coin_type.contains("::") {
+        return fallback_decimals;
+    }
+
+    let query_coin_type = if coin_type.starts_with("0x") {
+        coin_type.to_string()
+    } else {
+        format!("0x{}", coin_type)
+    };
+
+    match sui_client.get_coin_metadata(&query_coin_type).await {
+        Ok(Some(metadata)) => metadata.decimals,
+        Ok(None) | Err(_) => fallback_decimals,
+    }
+}
+
+async fn count_transaction_rows_by_xid(
+    pool: &sqlx::PgPool,
+    x_user_id: &str,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*) FROM (
+            SELECT transaction_digest AS tx_digest
+            FROM transfers
+            WHERE from_xid = $1 OR to_xid = $1
+
+            UNION ALL
+
+            SELECT tx_digest AS tx_digest
+            FROM markets
+            WHERE creator_xid = $1 AND tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT tx_digest AS tx_digest
+            FROM market_bets
+            WHERE better_xid = $1 AND tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT tx_digest AS tx_digest
+            FROM market_payouts
+            WHERE winner_xid = $1 AND tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT tx_digest AS tx_digest
+            FROM reward_campaigns
+            WHERE creator_xid = $1 AND tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT w.tx_digest AS tx_digest
+            FROM reward_campaign_winners w
+            WHERE w.winner_xid = $1 AND w.tx_digest IS NOT NULL
+        ) txs
+        "#,
+    )
+    .bind(x_user_id)
+    .fetch_one(pool)
+    .await
+}
+
+async fn find_transaction_rows_by_xid_paginated(
+    pool: &sqlx::PgPool,
+    x_user_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<TransactionRow>, sqlx::Error> {
+    sqlx::query_as::<_, TransactionRow>(
+        r#"
+        SELECT *
+        FROM (
+            SELECT
+                transaction_digest AS tx_digest,
+                transfer_type::TEXT AS tx_type,
+                from_xid,
+                to_xid,
+                coin_type,
+                amount AS amount_mist,
+                tweet_id,
+                timestamp,
+                created_at
+            FROM transfers
+            WHERE from_xid = $1 OR to_xid = $1
+
+            UNION ALL
+
+            SELECT
+                tx_digest AS tx_digest,
+                'market_create'::TEXT AS tx_type,
+                creator_xid AS from_xid,
+                NULL::TEXT AS to_xid,
+                'DUG'::TEXT AS coin_type,
+                0::BIGINT AS amount_mist,
+                market_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
+                created_at
+            FROM markets
+            WHERE creator_xid = $1 AND tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT
+                tx_digest AS tx_digest,
+                'market_bet'::TEXT AS tx_type,
+                better_xid AS from_xid,
+                NULL::TEXT AS to_xid,
+                coin_type,
+                amount AS amount_mist,
+                bet_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
+                created_at
+            FROM market_bets
+            WHERE better_xid = $1 AND tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT
+                tx_digest AS tx_digest,
+                'market_claim'::TEXT AS tx_type,
+                NULL::TEXT AS from_xid,
+                winner_xid AS to_xid,
+                coin_type,
+                0::BIGINT AS amount_mist,
+                payout_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
+                created_at
+            FROM market_payouts
+            WHERE winner_xid = $1 AND tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT
+                tx_digest AS tx_digest,
+                'campaign_create'::TEXT AS tx_type,
+                creator_xid AS from_xid,
+                NULL::TEXT AS to_xid,
+                coin_type,
+                (reward_amount * max_winners)::BIGINT AS amount_mist,
+                campaign_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
+                created_at
+            FROM reward_campaigns
+            WHERE creator_xid = $1 AND tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT
+                w.tx_digest AS tx_digest,
+                'campaign_claim'::TEXT AS tx_type,
+                c.creator_xid AS from_xid,
+                w.winner_xid AS to_xid,
+                c.coin_type,
+                w.amount AS amount_mist,
+                w.claim_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM w.created_at) * 1000)::BIGINT AS timestamp,
+                w.created_at
+            FROM reward_campaign_winners w
+            JOIN reward_campaigns c ON c.campaign_tweet_id = w.campaign_tweet_id
+            WHERE w.winner_xid = $1 AND w.tx_digest IS NOT NULL
+        ) txs
+        ORDER BY timestamp DESC, created_at DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(x_user_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+async fn find_transaction_row_by_digest(
+    pool: &sqlx::PgPool,
+    tx_digest: &str,
+) -> Result<Option<TransactionRow>, sqlx::Error> {
+    sqlx::query_as::<_, TransactionRow>(
+        r#"
+        SELECT *
+        FROM (
+            SELECT
+                transaction_digest AS tx_digest,
+                transfer_type::TEXT AS tx_type,
+                from_xid,
+                to_xid,
+                coin_type,
+                amount AS amount_mist,
+                tweet_id,
+                timestamp,
+                created_at
+            FROM transfers
+            WHERE transaction_digest = $1
+
+            UNION ALL
+
+            SELECT
+                tx_digest AS tx_digest,
+                'market_create'::TEXT AS tx_type,
+                creator_xid AS from_xid,
+                NULL::TEXT AS to_xid,
+                'DUG'::TEXT AS coin_type,
+                0::BIGINT AS amount_mist,
+                market_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
+                created_at
+            FROM markets
+            WHERE tx_digest = $1
+
+            UNION ALL
+
+            SELECT
+                tx_digest AS tx_digest,
+                'market_bet'::TEXT AS tx_type,
+                better_xid AS from_xid,
+                NULL::TEXT AS to_xid,
+                coin_type,
+                amount AS amount_mist,
+                bet_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
+                created_at
+            FROM market_bets
+            WHERE tx_digest = $1
+
+            UNION ALL
+
+            SELECT
+                tx_digest AS tx_digest,
+                'market_claim'::TEXT AS tx_type,
+                NULL::TEXT AS from_xid,
+                winner_xid AS to_xid,
+                coin_type,
+                0::BIGINT AS amount_mist,
+                payout_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
+                created_at
+            FROM market_payouts
+            WHERE tx_digest = $1
+
+            UNION ALL
+
+            SELECT
+                tx_digest AS tx_digest,
+                'campaign_create'::TEXT AS tx_type,
+                creator_xid AS from_xid,
+                NULL::TEXT AS to_xid,
+                coin_type,
+                (reward_amount * max_winners)::BIGINT AS amount_mist,
+                campaign_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
+                created_at
+            FROM reward_campaigns
+            WHERE tx_digest = $1
+
+            UNION ALL
+
+            SELECT
+                w.tx_digest AS tx_digest,
+                'campaign_claim'::TEXT AS tx_type,
+                c.creator_xid AS from_xid,
+                w.winner_xid AS to_xid,
+                c.coin_type,
+                w.amount AS amount_mist,
+                w.claim_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM w.created_at) * 1000)::BIGINT AS timestamp,
+                w.created_at
+            FROM reward_campaign_winners w
+            JOIN reward_campaigns c ON c.campaign_tweet_id = w.campaign_tweet_id
+            WHERE w.tx_digest = $1
+        ) txs
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(tx_digest)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Get transaction history by sui_object_id with pagination
 pub async fn get_transactions_by_account(
     State(state): State<Arc<AppState>>,
@@ -618,8 +916,25 @@ pub async fn get_transactions_by_account(
     let page = query.page.unwrap_or(1).max(1); // Default page 1
     let offset = (page - 1) * limit;
 
+    let account = match DugongAccount::find_by_sui_object_id(&state.db, &sui_object_id).await {
+        Ok(Some(account)) => account,
+        Ok(None) => {
+            return Ok(Json(PaginatedTransactionsResponse {
+                data: vec![],
+                total: 0,
+                page,
+                limit,
+                total_pages: 0,
+            }));
+        }
+        Err(err) => {
+            tracing::error!("Failed to query account for transactions: {:?}", err);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
     // Get total count
-    let total = match Transfer::count_by_sui_object_id(&state.db, &sui_object_id).await {
+    let total = match count_transaction_rows_by_xid(&state.db, &account.x_user_id).await {
         Ok(count) => count,
         Err(err) => {
             tracing::error!("Failed to count transactions: {:?}", err);
@@ -627,12 +942,12 @@ pub async fn get_transactions_by_account(
         }
     };
 
-    // Get paginated transfers
-    let transfers =
-        match Transfer::find_by_sui_object_id_paginated(&state.db, &sui_object_id, limit, offset)
+    // Get paginated transaction rows across transfers, markets, campaigns, and claims.
+    let transactions =
+        match find_transaction_rows_by_xid_paginated(&state.db, &account.x_user_id, limit, offset)
             .await
         {
-            Ok(transfers) => transfers,
+            Ok(transactions) => transactions,
             Err(err) => {
                 tracing::error!("Failed to query transactions: {:?}", err);
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -641,45 +956,22 @@ pub async fn get_transactions_by_account(
 
     // Collect unique coin types
     let unique_coin_types: std::collections::HashSet<String> =
-        transfers.iter().map(|t| t.coin_type.clone()).collect();
+        transactions.iter().map(|t| t.coin_type.clone()).collect();
 
     // Fetch decimals for each coin type from Sui RPC
     let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_rpc_url);
     let mut decimals_map: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     for coin_type in unique_coin_types {
-        // Ensure coin_type has 0x prefix for RPC query
-        let query_coin_type = if coin_type.starts_with("0x") {
-            coin_type.clone()
-        } else {
-            format!("0x{}", coin_type)
-        };
-        let decimals = match sui_client.get_coin_metadata(&query_coin_type).await {
-            Ok(Some(metadata)) => metadata.decimals,
-            Ok(None) => {
-                tracing::debug!(
-                    "No metadata found for coin type: {}, defaulting to 9 decimals",
-                    coin_type
-                );
-                9 // Default to 9 decimals if metadata not found
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to fetch metadata for coin type {}: {:?}, defaulting to 9 decimals",
-                    coin_type,
-                    err
-                );
-                9 // Default to 9 decimals on error
-            }
-        };
+        let decimals = resolve_coin_decimals(&sui_client, &coin_type).await;
         decimals_map.insert(coin_type, decimals);
     }
 
-    // Convert transfers to responses with correct decimals
-    let data: Vec<TransactionResponse> = transfers
+    // Convert rows to responses with correct decimals
+    let data: Vec<TransactionResponse> = transactions
         .into_iter()
         .map(|t| {
             let decimals = *decimals_map.get(&t.coin_type).unwrap_or(&9);
-            TransactionResponse::from_transfer_with_decimals(t, decimals)
+            TransactionResponse::from_row_with_decimals(t, decimals)
         })
         .collect();
 
@@ -699,8 +991,8 @@ pub async fn get_transaction_by_digest(
     State(state): State<Arc<AppState>>,
     Path(tx_digest): Path<String>,
 ) -> Result<Json<TransactionResponse>, StatusCode> {
-    let transfer = match Transfer::find_by_transaction_digest(&state.db, &tx_digest).await {
-        Ok(Some(transfer)) => transfer,
+    let transaction = match find_transaction_row_by_digest(&state.db, &tx_digest).await {
+        Ok(Some(transaction)) => transaction,
         Ok(None) => return Err(StatusCode::NOT_FOUND),
         Err(err) => {
             tracing::error!("Failed to query transaction by digest: {:?}", err);
@@ -708,25 +1000,12 @@ pub async fn get_transaction_by_digest(
         }
     };
 
-    let query_coin_type = if transfer.coin_type.starts_with("0x") {
-        transfer.coin_type.clone()
-    } else {
-        format!("0x{}", transfer.coin_type)
-    };
     let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_rpc_url);
-    let decimals = match sui_client.get_coin_metadata(&query_coin_type).await {
-        Ok(Some(metadata)) => metadata.decimals,
-        Ok(None) | Err(_) => {
-            if transfer.coin_type.ends_with("::usdc::USDC") {
-                6
-            } else {
-                9
-            }
-        }
-    };
+    let decimals = resolve_coin_decimals(&sui_client, &transaction.coin_type).await;
 
-    Ok(Json(TransactionResponse::from_transfer_with_decimals(
-        transfer, decimals,
+    Ok(Json(TransactionResponse::from_row_with_decimals(
+        transaction,
+        decimals,
     )))
 }
 
