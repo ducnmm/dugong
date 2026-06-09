@@ -35,6 +35,33 @@ fn configured_docs_url() -> String {
         .to_string()
 }
 
+fn configured_web_url() -> String {
+    for key in [
+        "WEB_URL",
+        "APP_URL",
+        "FRONTEND_URL",
+        "NEXT_PUBLIC_DUGONG_APP_URL",
+        "VITE_APP_URL",
+    ] {
+        if let Ok(url) = env::var(key) {
+            let url = url.trim().trim_end_matches('/');
+            if !url.is_empty() {
+                return url.to_string();
+            }
+        }
+    }
+
+    if let Ok(domain) = env::var("RAILWAY_SERVICE_WEB_URL") {
+        let domain = domain.trim().trim_end_matches('/');
+        if domain.starts_with("http://") || domain.starts_with("https://") {
+            return domain.to_string();
+        }
+        return format!("https://{domain}");
+    }
+
+    "http://127.0.0.1:43173".to_string()
+}
+
 /// A candidate winner discovered for a reward campaign (a reply author or hashtag tweeter).
 #[derive(Debug, Clone)]
 pub struct RewardCampaignCandidate {
@@ -290,6 +317,7 @@ pub struct TwitterClient {
     twitterapi_io_proxy: Option<String>,
     twitterapi_io_base: String,
     docs_url: String,
+    web_url: String,
 }
 
 /// Request body for creating a tweet through TwitterAPI.io.
@@ -357,11 +385,12 @@ impl TwitterClient {
             twitterapi_io_proxy: config.twitterapi_io_proxy.clone(),
             twitterapi_io_base,
             docs_url: configured_docs_url(),
+            web_url: configured_web_url(),
         }
     }
 
     fn tx_url(&self, tx_digest: &str) -> String {
-        format!("{}/tx/{}", self.docs_url, tx_digest)
+        format!("{}/tx/{}", self.web_url, tx_digest)
     }
 
     /// Reply to a tweet with transaction success message
