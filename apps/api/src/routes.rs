@@ -52,6 +52,21 @@ fn configured_tx_base_url() -> String {
         .to_string()
 }
 
+fn configured_tx_card_image_url() -> String {
+    std::env::var("TX_CARD_IMAGE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            let web_url = std::env::var("WEB_URL")
+                .or_else(|_| std::env::var("FRONTEND_URL"))
+                .or_else(|_| std::env::var("PUBLIC_WEB_URL"))
+                .unwrap_or_else(|_| "https://dugong.up.railway.app".to_string());
+            format!("{}/android-chrome-512x512.png", web_url.trim_end_matches('/'))
+        })
+        .trim_end_matches('/')
+        .to_string()
+}
+
 fn escape_html(input: &str) -> String {
     input
         .replace('&', "&amp;")
@@ -115,6 +130,7 @@ fn build_tx_card_html(transfer: &Transfer, decimals: u8) -> String {
     let time = format_tx_time_ms(transfer.timestamp);
     let base_url = configured_tx_base_url();
     let canonical = format!("{}/tx/{}", base_url, transfer.transaction_digest);
+    let card_image = configured_tx_card_image_url();
 
     let title = format!("Dugong • {tx_type} {amount} {symbol}");
     let description = format!(
@@ -137,33 +153,42 @@ fn build_tx_card_html(transfer: &Transfer, decimals: u8) -> String {
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="{title_attr}" />
     <meta name="twitter:description" content="{description_attr}" />
-    <meta name="twitter:image" content="{base_url}/favicon.ico" />
-    <meta property="og:image" content="{base_url}/favicon.ico" />
+    <meta name="twitter:image" content="{card_image}" />
+    <meta property="og:image" content="{card_image}" />
+    <meta property="og:image:secure_url" content="{card_image}" />
+    <meta property="og:image:type" content="image/png" />
+    <meta name="twitter:site" content="@DugongWallet" />
     <meta name="twitter:label1" content="Amount" />
     <meta name="twitter:data1" content="{amount} {symbol}" />
     <meta name="twitter:label2" content="Type" />
     <meta name="twitter:data2" content="{tx_type}" />
     <style>
+      :root {{
+        color-scheme: dark;
+      }}
       body {{
         margin: 0;
-        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        background: linear-gradient(180deg, #0b1020, #111827);
+        font-family: "Inter", "Segoe UI", Arial, sans-serif;
+        background: radial-gradient(circle at 10% 10%, #172554 0%, #0b1020 30%, #020617 100%);
         color: #f8fafc;
         min-height: 100vh;
         display: grid;
         place-items: center;
+        padding: 24px;
       }}
       .card {{
         width: min(720px, calc(100vw - 32px));
-        background: rgba(15, 23, 42, 0.9);
-        border: 1px solid #334155;
-        border-radius: 16px;
-        padding: 20px;
-        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+        background: #0f172a;
+        border: 1px solid #1e293b;
+        border-radius: 24px;
+        padding: 28px;
+        box-shadow: 0 22px 56px rgba(0, 0, 0, 0.5);
       }}
       h1 {{
         margin: 0 0 8px;
-        font-size: 26px;
+        font-size: 34px;
+        letter-spacing: 0.01em;
+        line-height: 1.1;
       }}
       .muted {{
         color: #94a3b8;
@@ -185,11 +210,27 @@ fn build_tx_card_html(transfer: &Transfer, decimals: u8) -> String {
       }}
       .label {{
         color: #cbd5e1;
+        font-weight: 600;
       }}
       .value {{
         font-weight: 700;
         text-align: right;
         word-break: break-all;
+      }}
+      .hero {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }}
+      .hero-pill {{
+        background: #0ea5e9;
+        color: #0b1220;
+        border-radius: 999px;
+        font-weight: 800;
+        padding: 7px 12px;
+        font-size: 13px;
+        text-transform: uppercase;
       }}
       .footer {{
         margin-top: 16px;
@@ -206,7 +247,10 @@ fn build_tx_card_html(transfer: &Transfer, decimals: u8) -> String {
   </head>
   <body>
     <main class="card">
-      <h1>{title_display}</h1>
+      <div class="hero">
+        <h1>{title_display}</h1>
+        <span class="hero-pill">Tx</span>
+      </div>
       <p class="muted">{short_digest_display}</p>
       <div class="grid">
         <div class="row"><span class="label">Type</span><span class="value">{tx_type}</span></div>
@@ -237,6 +281,7 @@ fn build_tx_card_html(transfer: &Transfer, decimals: u8) -> String {
         title_display = escape_html(&title),
         short_digest_display = escape_html(&digest),
         time = escape_html(&time),
+        card_image = escape_html(&card_image),
         created_at = escape_html(&transfer.created_at.to_rfc3339()),
     );
 
