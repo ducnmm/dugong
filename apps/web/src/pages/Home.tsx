@@ -225,11 +225,7 @@ export const Home: React.FC = () => {
           )}
 
           {tweetStatus && !searchError && (
-            <div className="mt-6 flex items-center gap-3 rounded-lg border-2 border-black bg-cyan-200 p-4 shadow-neo-md">
-              <span
-                className="h-5 w-5 shrink-0 animate-spin rounded-full border-4 border-black border-t-transparent"
-                aria-hidden="true"
-              />
+            <div className="mt-6 rounded-lg border-2 border-black bg-cyan-200 p-4 shadow-neo-md">
               <p className="font-bold text-black">{tweetStatus}</p>
             </div>
           )}
