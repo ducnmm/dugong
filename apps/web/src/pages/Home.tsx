@@ -249,7 +249,7 @@ export const Home: React.FC = () => {
                       href={getTweetIntentUrl(command.text)}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border-2 border-black bg-white text-black shadow-neo-sm transition-all hover:-translate-x-px hover:-translate-y-px hover:bg-cyan-300 hover:shadow-neo-md"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border-2 border-black bg-white text-black shadow-neo-sm transition-[transform,background-color,box-shadow] hover:-translate-x-px hover:-translate-y-px hover:bg-cyan-300 hover:shadow-neo-md"
                       aria-label={`Compose on X: ${command.text}`}
                     >
                       <ExternalLink className="h-5 w-5" aria-hidden="true" />
