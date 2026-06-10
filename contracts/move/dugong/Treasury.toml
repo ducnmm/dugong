@@ -3,7 +3,9 @@
 # It SHOULD be committed to source control.
 
 [treasury.testnet]
-account-id = "0x64db13ffa7621602d4479915ea51ba6463a9a5c7ecefde53334e024c4f545241"
+# Reconciled 2026-06-10 to the TREASURY DugongAccount under the current package
+# 0x8343f6...; the previous id (0x64db13...) belonged to the old package
+# 0x17de40... and caused resolve_market to fail with a type mismatch.
+account-id = "0x198e6fda1350f10509af820cc951445c3f56a021b9132925835d30ed5294e3ce"
 xid = "TREASURY"
 handle = "treasury"
-created-at = "2026-06-06T15:27:56.689Z"
