@@ -77,6 +77,9 @@ const hasDisplayAmount = (tx: TransactionResponse) => tx.amount !== '0';
 
 const getSideLabel = (tx: TransactionResponse) => tx.side?.toUpperCase();
 
+const isResolveTx = (tx: TransactionResponse) =>
+  tx.tx_type === 'market_resolve' || tx.tx_type === 'campaign_resolve';
+
 const formatStatus = (status?: string | null) => {
   if (!status) return '';
   return status.charAt(0).toUpperCase() + status.slice(1);
@@ -308,11 +311,13 @@ export const TransactionDetail: React.FC = () => {
 
             <div className="rounded-md border-2 border-black bg-white px-3 py-1 shadow-neo-sm">
               <DetailRow icon={<Route className="h-4 w-4" />} label={partyLabels.from} value={fromDisplay} />
-              <DetailRow icon={<Route className="h-4 w-4 rotate-180" />} label={partyLabels.to} value={toDisplay} />
+              {!isResolveTx(tx) && (
+                <DetailRow icon={<Route className="h-4 w-4 rotate-180" />} label={partyLabels.to} value={toDisplay} />
+              )}
               {tx.context_title && shouldShowAmount && (
                 <DetailRow icon={<Route className="h-4 w-4" />} label={getContextRowLabel(tx)} value={tx.context_title} />
               )}
-              {tx.side && (
+              {tx.side && !isResolveTx(tx) && (
                 <DetailRow icon={<ArrowLeftRight className="h-4 w-4" />} label="Side" value={getSideLabel(tx) ?? ''} />
               )}
               {tx.reward_amount && (

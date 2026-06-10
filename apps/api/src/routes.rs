@@ -707,6 +707,18 @@ async fn count_transaction_rows_by_xid(
             SELECT w.tx_digest AS tx_digest
             FROM reward_campaign_winners w
             WHERE w.winner_xid = $1 AND w.tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT resolve_tx_digest AS tx_digest
+            FROM markets
+            WHERE creator_xid = $1 AND resolve_tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT resolve_tx_digest AS tx_digest
+            FROM reward_campaigns
+            WHERE creator_xid = $1 AND resolve_tx_digest IS NOT NULL
         ) txs
         "#,
     )
@@ -863,6 +875,52 @@ async fn find_transaction_rows_by_xid_paginated(
             FROM reward_campaign_winners w
             JOIN reward_campaigns c ON c.campaign_tweet_id = w.campaign_tweet_id
             WHERE w.winner_xid = $1 AND w.tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT
+                resolve_tx_digest AS tx_digest,
+                'market_resolve'::TEXT AS tx_type,
+                creator_xid AS from_xid,
+                NULL::TEXT AS to_xid,
+                'DUG'::TEXT AS coin_type,
+                0::BIGINT AS amount_mist,
+                market_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM updated_at) * 1000)::BIGINT AS timestamp,
+                updated_at AS created_at,
+                question AS context_title,
+                NULL::TEXT AS context_subtitle,
+                (CASE WHEN outcome THEN 'yes' ELSE 'no' END) AS side,
+                status AS status,
+                NULL::BIGINT AS reward_amount_mist,
+                NULL::BIGINT AS max_winners
+            FROM markets
+            WHERE creator_xid = $1 AND resolve_tx_digest IS NOT NULL
+
+            UNION ALL
+
+            SELECT
+                resolve_tx_digest AS tx_digest,
+                'campaign_resolve'::TEXT AS tx_type,
+                creator_xid AS from_xid,
+                NULL::TEXT AS to_xid,
+                coin_type,
+                (reward_amount * selected_winners)::BIGINT AS amount_mist,
+                campaign_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM updated_at) * 1000)::BIGINT AS timestamp,
+                updated_at AS created_at,
+                target AS context_title,
+                CASE
+                    WHEN campaign_type = 1 THEN 'Top replies'
+                    WHEN campaign_type = 2 THEN 'First hashtag'
+                    ELSE 'Reward campaign'
+                END AS context_subtitle,
+                NULL::TEXT AS side,
+                status AS status,
+                reward_amount AS reward_amount_mist,
+                max_winners AS max_winners
+            FROM reward_campaigns
+            WHERE creator_xid = $1 AND resolve_tx_digest IS NOT NULL
         ) txs
         ORDER BY timestamp DESC, created_at DESC
         LIMIT $2 OFFSET $3
