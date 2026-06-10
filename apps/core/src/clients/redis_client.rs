@@ -50,6 +50,17 @@ impl RedisClient {
         Ok(result.map(|(_, value)| value))
     }
 
+    /// Increment a counter, setting `ttl_seconds` when the key is first created.
+    /// Returns the new value. Acts as a fixed-window rate limiter.
+    pub async fn incr_with_ttl(&self, key: &str, ttl_seconds: u64) -> Result<i64> {
+        let mut conn = self.manager.clone();
+        let count: i64 = conn.incr(key, 1).await?;
+        if count == 1 {
+            conn.expire::<_, ()>(key, ttl_seconds as i64).await?;
+        }
+        Ok(count)
+    }
+
     #[allow(dead_code)]
     pub async fn set_cache(&self, key: &str, value: &str, ttl_seconds: u64) -> Result<()> {
         let mut conn = self.manager.clone();

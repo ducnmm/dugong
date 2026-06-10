@@ -8,7 +8,9 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::webhook::handler::{handle_crc_challenge, handle_webhook, health_check, AppState};
+use crate::webhook::handler::{
+    handle_crc_challenge, handle_webhook, health_check, process_tweet_by_link, AppState,
+};
 
 /// Build the API router with all routes and middleware wired to `state`.
 ///
@@ -18,6 +20,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(health_check))
         .route("/webhook", get(handle_crc_challenge).post(handle_webhook))
+        .route(
+            "/api/tweets/process",
+            axum::routing::post(process_tweet_by_link),
+        )
         .route(
             "/api/account/by-wallet/:address",
             get(routes::get_account_by_wallet),

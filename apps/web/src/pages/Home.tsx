@@ -23,6 +23,9 @@ const HOME_COMMANDS = [
 const getTweetIntentUrl = (text: string) =>
   `https://x.com/intent/tweet?text=${encodeURIComponent(text)}`;
 
+const TWEET_URL_REGEX = /(?:x|twitter)\.com\/[^/]+\/status\/\d+/i;
+const isTweetUrl = (value: string) => TWEET_URL_REGEX.test(value.trim());
+
 const getXAvatarUrl = (handle: string) =>
   `https://unavatar.io/x/${encodeURIComponent(handle.trim().replace(/^@/, ''))}`;
 
@@ -44,10 +47,48 @@ export const Home: React.FC = () => {
   const [searchResults, setSearchResults] = useState<AccountSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string>('');
+  const [tweetStatus, setTweetStatus] = useState<string>('');
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const hasSearchResults = searchResults.length > 0;
   const shouldShowCommandRail = !hasSearchResults && !hasSearched;
+
+  const submitTweet = async (url: string) => {
+    setIsSearching(true);
+    setSearchError('');
+    setSearchResults([]);
+    setTweetStatus('');
+    setHasSearched(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/tweets/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+
+      if (response.status === 429) {
+        setSearchError('Too many requests. Please wait a moment and try again.');
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error('Process failed');
+      }
+
+      const data = await response.json();
+      setTweetStatus(
+        data.status === 'duplicate'
+          ? 'This tweet is already being processed — check the reply on X shortly.'
+          : 'Tweet submitted — processing now. Check the reply on X shortly.'
+      );
+    } catch (err) {
+      console.error('Process tweet error:', err);
+      setSearchError('Failed to submit tweet. Please try again.');
+    } finally {
+      setIsSearching(false);
+    }
+  };
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,9 +99,16 @@ export const Home: React.FC = () => {
       return;
     }
 
+    // A pasted tweet link is processed directly instead of searched.
+    if (isTweetUrl(query)) {
+      await submitTweet(query);
+      return;
+    }
+
     setIsSearching(true);
     setSearchError('');
     setSearchResults([]);
+    setTweetStatus('');
     setHasSearched(true);
 
     try {
@@ -142,7 +190,7 @@ export const Home: React.FC = () => {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onFocus={() => setIsSearchFocused(true)}
                 onBlur={() => setIsSearchFocused(false)}
-                placeholder="Search by @handle, user ID, or 0x... address"
+                placeholder="@handle or paste tweet link"
                 className="account-search-input h-16 rounded-lg pl-14 pr-12 text-base sm:text-lg"
                 autoComplete="off"
               />
@@ -173,6 +221,16 @@ export const Home: React.FC = () => {
           {searchError && (
             <div className="mt-6 rounded-lg border-2 border-black bg-red-200 p-4 shadow-neo-md">
               <p className="font-bold text-black">{searchError}</p>
+            </div>
+          )}
+
+          {tweetStatus && !searchError && (
+            <div className="mt-6 flex items-center gap-3 rounded-lg border-2 border-black bg-cyan-200 p-4 shadow-neo-md">
+              <span
+                className="h-5 w-5 shrink-0 animate-spin rounded-full border-4 border-black border-t-transparent"
+                aria-hidden="true"
+              />
+              <p className="font-bold text-black">{tweetStatus}</p>
             </div>
           )}
 
@@ -220,7 +278,7 @@ export const Home: React.FC = () => {
             </div>
           )}
 
-          {!isSearching && searchResults.length === 0 && hasSearched && !searchError && (
+          {!isSearching && searchResults.length === 0 && hasSearched && !searchError && !tweetStatus && (
             <div className="glass mt-6 rounded-lg bg-white py-10 text-center">
               <Search className="mx-auto mb-3 h-7 w-7 text-black" />
               <p className="px-4 font-bold text-black">

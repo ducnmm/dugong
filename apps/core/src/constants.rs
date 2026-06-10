@@ -26,8 +26,16 @@ pub mod redis {
         format!("ratelimit:user:{}", user_id)
     }
 
+    /// Rate limiting key for the manual tweet-processing endpoint, keyed by client IP
+    pub fn ratelimit_process(ip: &str) -> String {
+        format!("ratelimit:process:{}", ip)
+    }
+
     /// TTL values in seconds
     pub const TTL_DEDUP: u64 = 86400; // 24 hours
+    /// Fixed window (seconds) and max requests for the manual tweet-processing endpoint
+    pub const RATELIMIT_PROCESS_WINDOW: u64 = 60;
+    pub const RATELIMIT_PROCESS_MAX: i64 = 10;
     #[allow(dead_code)]
     pub const TTL_CACHE: u64 = 3600; // 1 hour
 }
