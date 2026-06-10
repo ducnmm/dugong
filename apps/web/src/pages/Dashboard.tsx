@@ -69,7 +69,7 @@ const getAmountPrefix = (tx: TransactionResponse, viewedXid?: string) => {
   if (tx.tx_type === 'withdraw') return '-';
   if (tx.tx_type === 'market_bet' || tx.tx_type === 'campaign_create') return '-';
   if (tx.tx_type === 'market_claim' || tx.tx_type === 'campaign_claim') return '+';
-  if (tx.tx_type === 'market_create') return '';
+  if (tx.tx_type === 'market_create' || tx.tx_type === 'market_resolve' || tx.tx_type === 'campaign_resolve') return '';
 
   if (viewedXid && tx.to_xid === viewedXid) return '+';
   if (viewedXid && tx.from_xid === viewedXid) return '-';
@@ -358,10 +358,14 @@ export const Dashboard: React.FC = () => {
         return 'Prediction';
       case 'market_claim':
         return 'Market Claim';
+      case 'market_resolve':
+        return 'Market Resolved';
       case 'campaign_create':
         return 'Campaign Created';
       case 'campaign_claim':
         return 'Campaign Claim';
+      case 'campaign_resolve':
+        return 'Campaign Resolved';
       default:
         return type;
     }
@@ -381,6 +385,12 @@ export const Dashboard: React.FC = () => {
         ].filter(Boolean).join(' ');
       case 'market_claim':
         return tx.context_title ? `Payout from ${tx.context_title}` : 'Market payout claimed';
+      case 'market_resolve': {
+        const outcome = side ? `Resolved ${side}` : 'Resolved';
+        return tx.context_title ? `${outcome} · ${tx.context_title}` : outcome;
+      }
+      case 'campaign_resolve':
+        return tx.context_title ? `Resolved · ${tx.context_title}` : 'Campaign resolved';
       case 'campaign_create':
         if (tx.reward_amount && tx.max_winners) {
           return [
