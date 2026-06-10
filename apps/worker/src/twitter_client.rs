@@ -85,8 +85,10 @@ impl TwitterClient {
             format!("@{}", mention)
         };
 
+        // Match every supported command keyword so the poller doesn't miss
+        // market (predict/resolve/claim) or reward-campaign commands.
         let mut query = format!(
-            "{} (send OR link OR create OR update OR transfer)",
+            "{} (send OR link OR create OR init OR predict OR bet OR resolve OR solve OR reward OR claim)",
             mention_query
         );
 
