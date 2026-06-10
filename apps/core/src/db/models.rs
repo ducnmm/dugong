@@ -666,16 +666,18 @@ impl Market {
         pool: &sqlx::PgPool,
         market_tweet_id: &str,
         outcome: bool,
+        resolve_tx_digest: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
             UPDATE markets
-            SET status = 'resolved', outcome = $2, updated_at = NOW()
+            SET status = 'resolved', outcome = $2, resolve_tx_digest = $3, updated_at = NOW()
             WHERE market_tweet_id = $1
             "#,
         )
         .bind(market_tweet_id)
         .bind(outcome)
+        .bind(resolve_tx_digest)
         .execute(pool)
         .await?;
         Ok(())
@@ -945,17 +947,20 @@ impl RewardCampaign {
         campaign_tweet_id: &str,
         selected_winners: i64,
         unallocated_refund: i64,
+        resolve_tx_digest: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
             UPDATE reward_campaigns
-            SET status = 'resolved', selected_winners = $2, unallocated_refund = $3, updated_at = NOW()
+            SET status = 'resolved', selected_winners = $2, unallocated_refund = $3,
+                resolve_tx_digest = $4, updated_at = NOW()
             WHERE campaign_tweet_id = $1
             "#,
         )
         .bind(campaign_tweet_id)
         .bind(selected_winners)
         .bind(unallocated_refund)
+        .bind(resolve_tx_digest)
         .execute(pool)
         .await?;
         Ok(())

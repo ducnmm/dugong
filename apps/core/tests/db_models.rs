@@ -202,7 +202,7 @@ async fn market_and_bets_round_trip(pool: PgPool) {
     assert_eq!(coin_types, vec!["0x2::sui::SUI".to_string()]);
 
     // Resolve YES and check winners.
-    Market::set_resolved(&pool, "market-tweet-1", true)
+    Market::set_resolved(&pool, "market-tweet-1", true, Some("resolve-digest-1"))
         .await
         .expect("resolve");
     let resolved = Market::find_by_market_tweet_id(&pool, "market-tweet-1")

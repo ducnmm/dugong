@@ -16,8 +16,10 @@ export interface TransactionResponse {
     | 'market_create'
     | 'market_bet'
     | 'market_claim'
+    | 'market_resolve'
     | 'campaign_create'
-    | 'campaign_claim';
+    | 'campaign_claim'
+    | 'campaign_resolve';
   from_xid: string | null;
   to_xid: string | null;
   coin_type: string;

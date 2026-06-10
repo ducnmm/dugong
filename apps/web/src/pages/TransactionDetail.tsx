@@ -36,10 +36,14 @@ const formatTxLabel = (type: string) => {
       return 'Prediction';
     case 'market_claim':
       return 'Market Claim';
+    case 'market_resolve':
+      return 'Market Resolved';
     case 'campaign_create':
       return 'Campaign Created';
     case 'campaign_claim':
       return 'Campaign Claim';
+    case 'campaign_resolve':
+      return 'Campaign Resolved';
     default:
       return type;
   }
@@ -61,7 +65,7 @@ const getAmountPrefix = (tx: TransactionResponse, viewerXid?: string) => {
   if (tx.tx_type === 'withdraw') return '-';
   if (tx.tx_type === 'market_bet' || tx.tx_type === 'campaign_create') return '-';
   if (tx.tx_type === 'market_claim' || tx.tx_type === 'campaign_claim') return '+';
-  if (tx.tx_type === 'market_create') return '';
+  if (tx.tx_type === 'market_create' || tx.tx_type === 'market_resolve' || tx.tx_type === 'campaign_resolve') return '';
 
   if (viewerXid && tx.to_xid === viewerXid) return '+';
   if (viewerXid && tx.from_xid === viewerXid) return '-';
@@ -98,6 +102,10 @@ const getPartyLabels = (tx: TransactionResponse) => {
     case 'market_create':
     case 'campaign_create':
       return { from: 'Creator', to: tx.tx_type === 'market_create' ? 'Market' : 'Campaign' };
+    case 'market_resolve':
+      return { from: 'Resolver', to: 'Market' };
+    case 'campaign_resolve':
+      return { from: 'Resolver', to: 'Campaign' };
     case 'market_bet':
       return { from: 'Predictor', to: 'Market' };
     case 'market_claim':
@@ -119,6 +127,10 @@ const getTransactionSubtitle = (tx: TransactionResponse, symbol: string) => {
       return side ? `${side} prediction` : formatTxLabel(tx.tx_type);
     case 'market_claim':
       return side ? `Payout from ${side} market` : 'Market payout claimed';
+    case 'market_resolve':
+      return side ? `Resolved ${side}` : 'Market resolved';
+    case 'campaign_resolve':
+      return tx.context_title ? `Resolved ${tx.context_title}` : 'Campaign resolved';
     case 'campaign_create':
       if (tx.reward_amount && tx.max_winners) {
         return `${tx.reward_amount} ${symbol} x ${tx.max_winners} winners`;

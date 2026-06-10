@@ -1021,6 +1021,52 @@ async fn find_transaction_row_by_digest(
             FROM reward_campaign_winners w
             JOIN reward_campaigns c ON c.campaign_tweet_id = w.campaign_tweet_id
             WHERE w.tx_digest = $1
+
+            UNION ALL
+
+            SELECT
+                resolve_tx_digest AS tx_digest,
+                'market_resolve'::TEXT AS tx_type,
+                creator_xid AS from_xid,
+                NULL::TEXT AS to_xid,
+                'DUG'::TEXT AS coin_type,
+                0::BIGINT AS amount_mist,
+                market_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM updated_at) * 1000)::BIGINT AS timestamp,
+                updated_at AS created_at,
+                question AS context_title,
+                NULL::TEXT AS context_subtitle,
+                (CASE WHEN outcome THEN 'yes' ELSE 'no' END) AS side,
+                status AS status,
+                NULL::BIGINT AS reward_amount_mist,
+                NULL::BIGINT AS max_winners
+            FROM markets
+            WHERE resolve_tx_digest = $1
+
+            UNION ALL
+
+            SELECT
+                resolve_tx_digest AS tx_digest,
+                'campaign_resolve'::TEXT AS tx_type,
+                creator_xid AS from_xid,
+                NULL::TEXT AS to_xid,
+                coin_type,
+                (reward_amount * selected_winners)::BIGINT AS amount_mist,
+                campaign_tweet_id AS tweet_id,
+                (EXTRACT(EPOCH FROM updated_at) * 1000)::BIGINT AS timestamp,
+                updated_at AS created_at,
+                target AS context_title,
+                CASE
+                    WHEN campaign_type = 1 THEN 'Top replies'
+                    WHEN campaign_type = 2 THEN 'First hashtag'
+                    ELSE 'Reward campaign'
+                END AS context_subtitle,
+                NULL::TEXT AS side,
+                status AS status,
+                reward_amount AS reward_amount_mist,
+                max_winners AS max_winners
+            FROM reward_campaigns
+            WHERE resolve_tx_digest = $1
         ) txs
         ORDER BY created_at DESC
         LIMIT 1

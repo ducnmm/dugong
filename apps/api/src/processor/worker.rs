@@ -911,8 +911,13 @@ impl ProcessorWorker {
         }
 
         // Mark market resolved in DB
-        if let Err(e) =
-            Market::set_resolved(&self.state.db, &data.market_tweet_id, data.outcome).await
+        if let Err(e) = Market::set_resolved(
+            &self.state.db,
+            &data.market_tweet_id,
+            data.outcome,
+            Some(&last_digest),
+        )
+        .await
         {
             warn!(error = %e, "Failed to mark market resolved in DB");
         }
@@ -1252,6 +1257,7 @@ impl ProcessorWorker {
             &campaign.campaign_tweet_id,
             selected,
             unallocated_refund,
+            Some(&digest),
         )
         .await
         {

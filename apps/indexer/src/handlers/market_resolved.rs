@@ -27,9 +27,14 @@ impl EventHandler for MarketResolvedHandler {
             "Handling MarketResolved event"
         );
 
-        Market::set_resolved(pool, &event_data.market_tweet_id, event_data.outcome)
-            .await
-            .context("Failed to set market resolved from indexer")?;
+        Market::set_resolved(
+            pool,
+            &event_data.market_tweet_id,
+            event_data.outcome,
+            Some(&event.id.tx_digest),
+        )
+        .await
+        .context("Failed to set market resolved from indexer")?;
 
         Ok(())
     }

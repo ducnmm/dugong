@@ -59,6 +59,7 @@ impl EventHandler for RewardCampaignResolvedHandler {
             &event_data.campaign_tweet_id,
             winner_count,
             unallocated_refund,
+            Some(&event.id.tx_digest),
         )
         .await
         .context("Failed to mark campaign resolved from indexer")?;
