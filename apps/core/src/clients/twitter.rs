@@ -454,15 +454,12 @@ impl TwitterClient {
 
         let divisor = 10_u64.pow(decimals);
         let amount_float = result.amount as f64 / divisor as f64;
-        let display_amount = format!(
-            "{:.precision$} {}",
-            amount_float,
-            coin_symbol,
-            precision = decimals as usize
-        )
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string();
+        // Round to 2 decimals for display, then trim trailing zeros (e.g. 0.01, 1, 5).
+        let amount_str = format!("{:.2}", amount_float)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string();
+        let display_amount = format!("{} {}", amount_str, coin_symbol);
 
         // Build success message
         let message = format!(

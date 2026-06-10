@@ -10,6 +10,18 @@ const HOME_BACKGROUND_SRC = '/dugong-home-background-new.png';
 const HOME_MASCOT_SRC = '/dugong-home-mascot.png';
 const HOME_DOCS_URL = import.meta.env.VITE_DOCS_URL || 'http://127.0.0.1:3004';
 const X_DEFAULT_AVATAR_SRC = 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
+const HOME_COMMAND_COLORS = ['bg-yellow-100', 'bg-cyan-100', 'bg-lime-100'] as const;
+const HOME_COMMANDS = [
+  '@DugongWallet create account',
+  '@DugongWallet send 0.01 DUG to @alice',
+  '@DugongWallet create market: Will BTC reach 120k?',
+  '@DugongWallet predict 1 DUG on yes',
+  '@DugongWallet reward top 3 replies to this tweet with 5 DUG each',
+  '@DugongWallet claim',
+].map((text, i) => ({ text, color: HOME_COMMAND_COLORS[i % HOME_COMMAND_COLORS.length] }));
+
+const getTweetIntentUrl = (text: string) =>
+  `https://x.com/intent/tweet?text=${encodeURIComponent(text)}`;
 
 const getXAvatarUrl = (handle: string) =>
   `https://unavatar.io/x/${encodeURIComponent(handle.trim().replace(/^@/, ''))}`;
@@ -35,6 +47,7 @@ export const Home: React.FC = () => {
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const hasSearchResults = searchResults.length > 0;
+  const shouldShowCommandRail = !hasSearchResults && !hasSearched;
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,7 +109,7 @@ export const Home: React.FC = () => {
         </div>
 
         <section
-          className={`mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col px-4 pt-6 sm:px-6 sm:pt-8 lg:px-8 ${
+          className={`mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col overflow-y-auto px-4 pt-6 sm:px-6 sm:pt-8 lg:px-8 ${
             hasSearchResults
               ? 'justify-start pb-6 sm:pb-8'
               : 'justify-center pb-40 sm:pb-44'
@@ -153,7 +166,7 @@ export const Home: React.FC = () => {
               tabIndex={isSearchFocused ? -1 : undefined}
             >
               <span>Docs</span>
-              <ExternalLink className="h-4 w-4 shrink-0 text-black" aria-hidden="true" />
+              <ExternalLink className="h-5 w-5 shrink-0 text-black" aria-hidden="true" />
             </a>
           )}
 
@@ -216,6 +229,37 @@ export const Home: React.FC = () => {
             </div>
           )}
         </section>
+
+        {shouldShowCommandRail && (
+          <div
+            className={`absolute inset-x-0 bottom-8 z-20 sm:bottom-12 ${isSearchFocused ? 'pointer-events-none invisible' : ''}`}
+            aria-hidden={isSearchFocused}
+          >
+            <div className="overflow-hidden py-3">
+              <div className="home-command-marquee flex w-max gap-3">
+                {[...HOME_COMMANDS, ...HOME_COMMANDS].map((command, index) => (
+                  <div
+                    key={`${command.text}-${index}`}
+                    className={`flex min-w-max items-center gap-4 rounded-lg border-2 border-black px-7 py-5 text-black shadow-neo-sm ${command.color}`}
+                  >
+                    <code className="font-mono text-sm font-black leading-none sm:text-base">
+                      {command.text}
+                    </code>
+                    <a
+                      href={getTweetIntentUrl(command.text)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border-2 border-black bg-white text-black shadow-neo-sm transition-all hover:-translate-x-px hover:-translate-y-px hover:bg-cyan-300 hover:shadow-neo-md"
+                      aria-label={`Compose on X: ${command.text}`}
+                    >
+                      <ExternalLink className="h-5 w-5" aria-hidden="true" />
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );

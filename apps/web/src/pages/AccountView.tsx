@@ -91,17 +91,11 @@ export const AccountView: React.FC = () => {
   };
 
   const formatBalance = (balance: string, coinType: string): string => {
-    const num = BigInt(balance);
-    // SUI has 9 decimals
-    if (coinType.toLowerCase().includes('sui')) {
-      const whole = num / BigInt(1_000_000_000);
-      const fraction = num % BigInt(1_000_000_000);
-      if (fraction === BigInt(0)) {
-        return whole.toString();
-      }
-      return `${whole}.${fraction.toString().padStart(9, '0').replace(/0+$/, '')}`;
-    }
-    return num.toString();
+    // USDC has 6 decimals, SUI/DUG/most others use 9.
+    const decimals = coinType.toLowerCase().includes('usdc') ? 6 : 9;
+    const value = Number(balance) / 10 ** decimals;
+    // Round to 2 decimals for display, then trim trailing zeros.
+    return value.toFixed(2).replace(/\.?0+$/, '') || '0';
   };
 
   if (isLoading) {

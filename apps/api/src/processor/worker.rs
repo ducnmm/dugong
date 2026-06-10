@@ -657,15 +657,12 @@ impl ProcessorWorker {
             c if c.contains("usdc") => 6,
             _ => 9,
         };
-        let amount_display = format!(
-            "{:.prec$} {}",
-            data.amount as f64 / 10_u64.pow(decimals) as f64,
-            coin_symbol(&data.coin_type),
-            prec = decimals as usize
-        )
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string();
+        // Round to 2 decimals for display, then trim trailing zeros.
+        let amount_num = format!("{:.2}", data.amount as f64 / 10_u64.pow(decimals) as f64)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string();
+        let amount_display = format!("{} {}", amount_num, coin_symbol(&data.coin_type));
 
         if let Err(e) = MarketBet::upsert(
             &self.state.db,
@@ -1705,15 +1702,12 @@ fn format_amount_display(amount: u64, coin_type: &str) -> String {
         _ => 9,
     };
     let symbol = coin_symbol(coin_type);
-    format!(
-        "{:.prec$} {}",
-        amount as f64 / 10_u64.pow(decimals) as f64,
-        symbol,
-        prec = decimals as usize
-    )
-    .trim_end_matches('0')
-    .trim_end_matches('.')
-    .to_string()
+    // Round to 2 decimals for display, then trim trailing zeros (e.g. 5 SUI, 0.01 DUG).
+    let amount_num = format!("{:.2}", amount as f64 / 10_u64.pow(decimals) as f64)
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string();
+    format!("{} {}", amount_num, symbol)
 }
 
 fn coin_symbol(coin_type: &str) -> &str {

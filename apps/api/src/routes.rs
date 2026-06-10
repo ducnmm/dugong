@@ -595,7 +595,8 @@ fn format_amount_with_decimals(amount: i64, decimals: u8) -> String {
     let divisor = 10f64.powi(decimals as i32);
     let formatted_amount = amount as f64 / divisor;
 
-    format!("{:.9}", formatted_amount)
+    // Round to 2 decimals for display, then trim trailing zeros.
+    format!("{:.2}", formatted_amount)
         .trim_end_matches('0')
         .trim_end_matches('.')
         .to_string()
@@ -1182,7 +1183,7 @@ pub async fn get_account_balance(
         let (symbol, decimals) = coin_display_metadata(&coin_type);
 
         let divisor = 10f64.powi(decimals as i32);
-        let formatted = format!("{:.9}", balance as f64 / divisor)
+        let formatted = format!("{:.2}", balance as f64 / divisor)
             .trim_end_matches('0')
             .trim_end_matches('.')
             .to_string();
@@ -1210,7 +1211,7 @@ pub async fn get_account_balance(
     Ok(Json(serde_json::json!({
         // Legacy fields for backward compatibility
         "balance_mist": sui_balance,
-        "balance_sui": format!("{:.9}", sui_balance as f64 / 1_000_000_000.0).trim_end_matches('0').trim_end_matches('.').to_string(),
+        "balance_sui": format!("{:.2}", sui_balance as f64 / 1_000_000_000.0).trim_end_matches('0').trim_end_matches('.').to_string(),
         // New multi-token fields
         "balances": balances,
         "x_user_id": account.x_user_id,
