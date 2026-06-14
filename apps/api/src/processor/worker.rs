@@ -356,6 +356,32 @@ impl ProcessorWorker {
             "Handling transfer command"
         );
 
+        // Check if sender account exists, create if not. The sender must have an
+        // on-chain Dugong account before `submit_transfer` can resolve its account ref,
+        // so a first-time sender (never initialized) would otherwise fail here.
+        let sender_exists =
+            dugong_core::db::models::DugongAccount::find_by_x_user_id(&self.state.db, &data.from_xid)
+                .await
+                .context("Failed to check if sender account exists")?
+                .is_some();
+
+        if !sender_exists {
+            info!(from_xid = %data.from_xid, "Sender account does not exist, creating account first");
+            if let Err(e) = self
+                .auto_create_recipient_account(&data.from_xid, Some(&data.from_handle))
+                .await
+                .context("Failed to auto-create sender account")
+            {
+                WebhookEvent::set_failed(&self.state.db, event_id, &e.to_string())
+                    .await
+                    .context("Failed to set event to failed")?;
+                if let Err(reply_err) = self.twitter.reply_error(tweet_id, &e.to_string()).await {
+                    warn!(error = %reply_err, "Failed to reply with sender auto-create error");
+                }
+                return Err(e);
+            }
+        }
+
         // Check if recipient account exists, create if not
         let recipient_exists =
             dugong_core::db::models::DugongAccount::find_by_x_user_id(&self.state.db, &data.to_xid)
