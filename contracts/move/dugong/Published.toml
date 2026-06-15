@@ -4,7 +4,7 @@
 
 [published.testnet]
 chain-id = "4c78adac"
-published-at = "0x8343f6da6c510f5508da764013c6f6be32202c25fa2805ac3a52ead9af4f534e"
-original-id = "0x8343f6da6c510f5508da764013c6f6be32202c25fa2805ac3a52ead9af4f534e"
+published-at = "0x920cd95df840df7b51a2fc5166254c4e0d13e1ab9d26abdfdb648fd8da8f14de"
+original-id = "0x920cd95df840df7b51a2fc5166254c4e0d13e1ab9d26abdfdb648fd8da8f14de"
 version = 1
-upgrade-capability = "0x0b6b07bab0678f3b69908590cf141da5b162961ed6dd685b81c98c0c75ec12f0"
+upgrade-capability = "0x833690fef9089c28afa35d149335c6882a98e39d79e42cbb5b8f6bc7ae9a03cf"
