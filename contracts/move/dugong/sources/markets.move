@@ -325,6 +325,7 @@ module dugong::markets {
         let type_key = dug::coin_type<T>();
         assert!(market.pools.contains(type_key), dug::e_market_not_found());
 
+        let market_tweet_id = market.market_tweet_id;
         let pool = market.pools.borrow_mut<ascii::String, CoinPool<T>>(type_key);
         let winner_xid = dug::account_xid(winner_account);
 
@@ -408,13 +409,23 @@ module dugong::markets {
             balance::zero<T>()
         };
 
-        if (payout_balance.value() > 0) {
+        let paid_amount = payout_balance.value();
+        if (paid_amount > 0) {
             dug::account_credit_balance(winner_account, payout_balance);
         } else {
             payout_balance.destroy_zero();
         };
 
         pool.paid_winners.add(winner_xid, true);
+
+        if (paid_amount > 0) {
+            events::emit_market_winner_paid(
+                market_tweet_id,
+                winner_xid,
+                dug::coin_type_string<T>(),
+                paid_amount,
+            );
+        };
     }
 
     fun mul_div_floor(a: u64, b: u64, denominator: u64): u64 {

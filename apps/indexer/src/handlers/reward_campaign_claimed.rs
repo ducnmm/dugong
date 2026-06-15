@@ -36,6 +36,26 @@ impl EventHandler for RewardCampaignClaimedHandler {
         .await
         .context("Failed to mark reward claimed from indexer")?;
 
+        // The reward is credited to the winner's account on-chain without a coin
+        // event — mirror it into account_balances so the dashboard balance matches.
+        let amount = event_data.amount.parse::<i64>().unwrap_or(0);
+        sqlx::query(
+            r#"
+            INSERT INTO account_balances (x_user_id, coin_type, balance)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (x_user_id, coin_type)
+            DO UPDATE SET
+                balance = account_balances.balance + EXCLUDED.balance,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(&event_data.winner_xid)
+        .bind(&event_data.coin_type)
+        .bind(amount)
+        .execute(pool)
+        .await
+        .context("Failed to credit winner balance from reward claim")?;
+
         Ok(())
     }
 }

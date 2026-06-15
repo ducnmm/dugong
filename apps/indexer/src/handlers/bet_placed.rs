@@ -47,6 +47,26 @@ impl EventHandler for BetPlacedHandler {
         .await
         .context("Failed to upsert market bet from indexer")?;
 
+        // The stake is escrowed out of the better's account into the market pool,
+        // but the on-chain debit emits no coin event — mirror it here so the
+        // dashboard balance stays in sync.
+        sqlx::query(
+            r#"
+            INSERT INTO account_balances (x_user_id, coin_type, balance)
+            VALUES ($1, $2, 0)
+            ON CONFLICT (x_user_id, coin_type)
+            DO UPDATE SET
+                balance = account_balances.balance - $3,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(&event_data.better_xid)
+        .bind(&event_data.coin_type)
+        .bind(amount)
+        .execute(pool)
+        .await
+        .context("Failed to debit better balance from bet")?;
+
         Ok(())
     }
 }

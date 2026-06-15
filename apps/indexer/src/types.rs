@@ -77,6 +77,14 @@ pub struct MarketResolvedEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketWinnerPaidEvent {
+    pub market_tweet_id: String,
+    pub winner_xid: String,
+    pub coin_type: String,
+    pub amount: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewardCampaignCreatedEvent {
     pub campaign_id: String,
     pub campaign_tweet_id: String,

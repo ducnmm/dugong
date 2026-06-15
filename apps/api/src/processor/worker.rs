@@ -857,84 +857,19 @@ impl ProcessorWorker {
             last_digest = digest;
         }
 
-        // Pay each winning bettor per coin type. If a coin pool has no bettors
-        // on the resolved side, pay_winner refunds all bettors in that pool.
+        // Payouts are pull-based: winners collect by tweeting `claim` (handled in
+        // `handle_claim_market_payout`), rather than being auto-distributed here.
+        // We still count distinct eligible winners for the announcement reply.
         let winners =
             MarketBet::find_payout_recipients(&self.state.db, &data.market_tweet_id, data.outcome)
                 .await
                 .context("Failed to fetch payout recipients")?;
-
-        let mut winner_count = 0;
-        for (winner_xid, coin_type) in &winners {
-            // Ensure winner has an account
-            if DugongAccount::find_by_x_user_id(&self.state.db, winner_xid)
-                .await
-                .context("Failed to check winner account")?
-                .is_none()
-            {
-                if let Err(e) = self
-                    .auto_create_recipient_account(winner_xid, None)
-                    .await
-                    .context("Failed to auto-create winner account")
-                {
-                    WebhookEvent::set_failed(&self.state.db, event_id, &e.to_string())
-                        .await
-                        .context("Failed to set event to failed")?;
-                    if let Err(reply_err) = self.twitter.reply_error(tweet_id, &e.to_string()).await
-                    {
-                        warn!(error = %reply_err, "Failed to reply with winner auto-create error");
-                    }
-                    return Err(e);
-                }
-            }
-
-            let winner_account = match DugongAccount::find_by_x_user_id(&self.state.db, winner_xid)
-                .await
-                .context("Failed to fetch winner account")?
-            {
-                Some(account) => account,
-                None => {
-                    let e = anyhow!("Winner account missing after auto-create");
-                    WebhookEvent::set_failed(&self.state.db, event_id, &e.to_string())
-                        .await
-                        .context("Failed to set event to failed")?;
-                    if let Err(reply_err) = self.twitter.reply_error(tweet_id, &e.to_string()).await
-                    {
-                        warn!(error = %reply_err, "Failed to reply with missing winner account error");
-                    }
-                    return Err(e);
-                }
-            };
-
-            match tx_builder
-                .submit_pay_winner(
-                    &market.sui_object_id,
-                    &winner_account.sui_object_id,
-                    coin_type,
-                )
-                .await
-            {
-                Ok(d) => {
-                    info!(tx_digest = %d, winner_xid = %winner_xid, "pay_winner submitted");
-                    if let Err(e) = MarketPayout::upsert(
-                        &self.state.db,
-                        &data.market_tweet_id,
-                        winner_xid,
-                        coin_type,
-                        Some(tweet_id),
-                        Some(&d),
-                    )
-                    .await
-                    {
-                        warn!(error = %e, winner_xid = %winner_xid, coin_type = %coin_type, "Failed to mirror market payout");
-                    }
-                    winner_count += 1;
-                }
-                Err(e) => {
-                    warn!(error = %e, winner_xid = %winner_xid, "Failed to pay winner");
-                }
-            }
-        }
+        let winner_count = {
+            let mut xids: Vec<&String> = winners.iter().map(|(xid, _)| xid).collect();
+            xids.sort();
+            xids.dedup();
+            xids.len()
+        };
 
         // Mark market resolved in DB
         if let Err(e) = Market::set_resolved(

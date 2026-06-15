@@ -678,8 +678,7 @@ impl TwitterClient {
         let outcome_str = if outcome { "YES" } else { "NO" };
         let message = format!(
             "Market resolved: {}\n\n\
-            Payouts distributed to {} winner(s).\n\n\
-            Winnings have been credited to your @DugongWallet accounts.\n\n\
+            {} winner(s) can now claim. Reply to the market tweet with @DugongWallet claim to collect your payout.\n\n\
             View on tx:\n\
             {}",
             outcome_str, winner_count, self.tx_url(tx_digest)

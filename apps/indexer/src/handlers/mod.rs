@@ -6,6 +6,7 @@ pub mod coin_withdrawn;
 pub mod handle_updated;
 pub mod market_created;
 pub mod market_resolved;
+pub mod market_winner_paid;
 pub mod reward_campaign_claimed;
 pub mod reward_campaign_created;
 pub mod reward_campaign_resolved;

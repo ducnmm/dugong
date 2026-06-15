@@ -65,6 +65,13 @@ module dugong::events {
         timestamp: u64,
     }
 
+    public struct MarketWinnerPaid has copy, drop {
+        market_tweet_id: String,
+        winner_xid: String,
+        coin_type: String,
+        amount: u64,
+    }
+
     // ====== Reward Campaign Events ======
 
     public struct RewardCampaignCreated has copy, drop {
@@ -190,6 +197,15 @@ module dugong::events {
         timestamp: u64,
     ) {
         sui::event::emit(MarketResolved { market_tweet_id, resolver_xid, outcome, timestamp });
+    }
+
+    public(package) fun emit_market_winner_paid(
+        market_tweet_id: String,
+        winner_xid: String,
+        coin_type: String,
+        amount: u64,
+    ) {
+        sui::event::emit(MarketWinnerPaid { market_tweet_id, winner_xid, coin_type, amount });
     }
 
     public(package) fun emit_reward_campaign_created(
