@@ -1,5 +1,5 @@
 import React from 'react';
-import { useLocation, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowDownLeft,
@@ -209,15 +209,25 @@ const DetailRow: React.FC<{
   label: string;
   value: string;
   mono?: boolean;
-}> = ({ icon, label, value, mono = false }) => (
+  href?: string;
+}> = ({ icon, label, value, mono = false, href }) => (
   <div className="flex items-center justify-between gap-4 border-b-2 border-black px-2 py-3 last:border-b-0">
     <div className="flex items-center gap-2 text-gray-700">
       {icon}
       <span className="text-xs font-black uppercase">{label}</span>
     </div>
-    <p className={`min-w-0 truncate text-right text-sm font-black text-black ${mono ? 'font-mono' : ''}`}>
-      {value}
-    </p>
+    {href ? (
+      <Link
+        to={href}
+        className={`min-w-0 truncate text-right text-sm font-black text-black underline decoration-2 underline-offset-2 transition-colors hover:text-cyan-600 ${mono ? 'font-mono' : ''}`}
+      >
+        {value}
+      </Link>
+    ) : (
+      <p className={`min-w-0 truncate text-right text-sm font-black text-black ${mono ? 'font-mono' : ''}`}>
+        {value}
+      </p>
+    )}
   </div>
 );
 
@@ -256,6 +266,11 @@ export const TransactionDetail: React.FC = () => {
   const toDisplay = toHandleQuery.data?.account.x_handle
     ? `@${toHandleQuery.data.account.x_handle}`
     : direction?.to ?? 'Unknown';
+  // Link a party row to its account page only when we resolved a real handle for it.
+  const fromLink =
+    direction?.fromXid && fromHandleQuery.data?.account ? `/account/${direction.fromXid}` : undefined;
+  const toLink =
+    direction?.toXid && toHandleQuery.data?.account ? `/account/${direction.toXid}` : undefined;
   const amountPrefix = tx ? getAmountPrefix(tx, user?.twitterUserId) : '';
   const shouldShowAmount = tx ? hasDisplayAmount(tx) : false;
   const transactionTitle = tx ? getTransactionTitle(tx) : '';
@@ -310,9 +325,9 @@ export const TransactionDetail: React.FC = () => {
             </div>
 
             <div className="rounded-md border-2 border-black bg-white px-3 py-1 shadow-neo-sm">
-              <DetailRow icon={<Route className="h-4 w-4" />} label={partyLabels.from} value={fromDisplay} />
+              <DetailRow icon={<Route className="h-4 w-4" />} label={partyLabels.from} value={fromDisplay} href={fromLink} />
               {!isResolveTx(tx) && (
-                <DetailRow icon={<Route className="h-4 w-4 rotate-180" />} label={partyLabels.to} value={toDisplay} />
+                <DetailRow icon={<Route className="h-4 w-4 rotate-180" />} label={partyLabels.to} value={toDisplay} href={toLink} />
               )}
               {tx.context_title && shouldShowAmount && (
                 <DetailRow icon={<Route className="h-4 w-4" />} label={getContextRowLabel(tx)} value={tx.context_title} />
