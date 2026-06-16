@@ -782,9 +782,16 @@ impl SuiTransactionBuilder {
             }
             "DUG" | "CORE" => format!("{}::dug::DUG", self.config.dugong_package_id),
             _ => {
-                // If already contains "::", assume it's a full type path
+                // If already contains "::", assume it's a full type path.
                 if coin_type.contains("::") {
-                    coin_type.to_string()
+                    // On-chain events / Move's `type_name` emit the address without
+                    // the `0x` prefix (e.g. "920c..::dug::DUG"), but TypeTag::from_str
+                    // requires it. Add it back so DB-sourced coin types parse.
+                    if coin_type.starts_with("0x") {
+                        coin_type.to_string()
+                    } else {
+                        format!("0x{}", coin_type)
+                    }
                 } else {
                     // Otherwise, assume it's a shorthand we don't recognize
                     // Return as-is and let the parser handle the error
