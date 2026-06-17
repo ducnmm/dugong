@@ -18,8 +18,8 @@ module dugong::transfers {
         coin_type: vector<u8>,
         tweet_id: vector<u8>,
         timestamp: u64,
-        _signature: &vector<u8>,
-        _enclave: &Enclave<E>,
+        signature: &vector<u8>,
+        enclave: &Enclave<E>,
     ) {
         let tweet_id_str = string::utf8(tweet_id);
 
@@ -27,6 +27,19 @@ module dugong::transfers {
         assert!(!processed_tweets.contains(tweet_id_str), dug::e_tweet_already_processed());
 
         dug::assert_coin_type<T>(coin_type);
+
+        // Verify the enclave signature over the transfer intent before moving funds.
+        let payload = dug::new_transfer_coin_payload(
+            dug::account_xid(from).into_bytes(),
+            dug::account_xid(to).into_bytes(),
+            amount,
+            coin_type,
+            tweet_id,
+        );
+        assert!(
+            enclave.verify_signature(dug::transfer_coin_intent(), timestamp, payload, signature),
+            dug::e_invalid_signature(),
+        );
 
         assert!(timestamp > dug::account_last_timestamp(from), dug::e_replay_attempt());
         dug::account_set_last_timestamp(from, timestamp);

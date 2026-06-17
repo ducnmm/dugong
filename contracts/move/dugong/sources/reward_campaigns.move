@@ -13,6 +13,7 @@ module dugong::reward_campaigns {
     use sui::table::{Self, Table};
     use dugong::dug::{Self, DugongAccount};
     use dugong::events;
+    use enclave::enclave::Enclave;
 
     // ====== Status & Type Constants ======
 
@@ -53,7 +54,7 @@ module dugong::reward_campaigns {
 
     /// Create a reward campaign and escrow `reward_amount * max_winners` from the
     /// creator's DugongAccount. Deduped on the creator's processed tweets.
-    public fun create_campaign<T>(
+    public fun create_campaign<T, E>(
         creator: &mut DugongAccount,
         campaign_tweet_id: vector<u8>,
         campaign_type: u8,
@@ -62,7 +63,40 @@ module dugong::reward_campaigns {
         max_winners: u64,
         coin_type: vector<u8>,
         timestamp_ms: u64,
-        _signature: &vector<u8>,
+        signature: &vector<u8>,
+        enclave: &Enclave<E>,
+        ctx: &mut TxContext,
+    ) {
+        // Verify the enclave signature over the create-campaign intent, then run logic.
+        let payload = dug::new_create_reward_campaign_payload(
+            dug::account_xid(creator).into_bytes(),
+            campaign_tweet_id,
+            campaign_type,
+            target,
+            reward_amount,
+            max_winners,
+            coin_type,
+        );
+        assert!(
+            enclave.verify_signature(dug::create_reward_campaign_intent(), timestamp_ms, payload, signature),
+            dug::e_invalid_signature(),
+        );
+        create_campaign_internal<T>(
+            creator, campaign_tweet_id, campaign_type, target,
+            reward_amount, max_winners, coin_type, timestamp_ms, ctx,
+        );
+    }
+
+    /// Internal create-campaign logic, shared by the verified entry and unit tests.
+    public(package) fun create_campaign_internal<T>(
+        creator: &mut DugongAccount,
+        campaign_tweet_id: vector<u8>,
+        campaign_type: u8,
+        target: vector<u8>,
+        reward_amount: u64,
+        max_winners: u64,
+        coin_type: vector<u8>,
+        timestamp_ms: u64,
         ctx: &mut TxContext,
     ) {
         assert!(is_valid_campaign_type(campaign_type), dug::e_invalid_campaign_type());
@@ -120,14 +154,37 @@ module dugong::reward_campaigns {
 
     /// Resolve an open campaign by naming winners. Only the creator may resolve.
     /// Duplicate winner XIDs are ignored; unallocated slots are refunded.
-    public fun resolve_campaign<T>(
+    public fun resolve_campaign<T, E>(
         campaign: &mut RewardCampaign,
         creator: &mut DugongAccount,
         winner_xids: vector<vector<u8>>,
         coin_type: vector<u8>,
         solve_tweet_id: vector<u8>,
         timestamp_ms: u64,
-        _signature: &vector<u8>,
+        signature: &vector<u8>,
+        enclave: &Enclave<E>,
+    ) {
+        // Verify the enclave signature over the resolve-campaign intent, then run logic.
+        let payload = dug::new_resolve_reward_campaign_payload(
+            dug::account_xid(creator).into_bytes(),
+            campaign.campaign_tweet_id.into_bytes(),
+            solve_tweet_id,
+        );
+        assert!(
+            enclave.verify_signature(dug::resolve_reward_campaign_intent(), timestamp_ms, payload, signature),
+            dug::e_invalid_signature(),
+        );
+        resolve_campaign_internal<T>(campaign, creator, winner_xids, coin_type, solve_tweet_id, timestamp_ms);
+    }
+
+    /// Internal resolve-campaign logic, shared by the verified entry and unit tests.
+    public(package) fun resolve_campaign_internal<T>(
+        campaign: &mut RewardCampaign,
+        creator: &mut DugongAccount,
+        winner_xids: vector<vector<u8>>,
+        coin_type: vector<u8>,
+        solve_tweet_id: vector<u8>,
+        timestamp_ms: u64,
     ) {
         assert!(campaign.status == STATUS_OPEN, dug::e_campaign_closed());
         assert!(dug::account_xid(creator) == campaign.creator_xid, dug::e_not_campaign_creator());

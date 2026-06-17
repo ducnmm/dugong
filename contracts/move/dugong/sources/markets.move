@@ -11,6 +11,7 @@ module dugong::markets {
     use sui::table::{Self, Table};
     use dugong::dug::{Self, DugongAccount};
     use dugong::events;
+    use enclave::enclave::Enclave;
 
     // ====== Market Status Constants ======
 
@@ -91,14 +92,34 @@ module dugong::markets {
     /// Create a new binary (yes/no) prediction market from a tweet.
     /// The market_tweet_id uniquely identifies the market and is registered
     /// in the MarketRegistry for off-chain lookup.
-    public fun create_market(
+    public fun create_market<E>(
         registry: &mut MarketRegistry,
         creator_xid: vector<u8>,
         market_tweet_id: vector<u8>,
         question: vector<u8>,
         fee_bps: u16,
         timestamp_ms: u64,
-        _signature: &vector<u8>,
+        signature: &vector<u8>,
+        enclave: &Enclave<E>,
+        ctx: &mut TxContext,
+    ) {
+        // Verify the enclave signature over the create-market intent, then run logic.
+        let payload = dug::new_create_market_payload(creator_xid, market_tweet_id, question, fee_bps);
+        assert!(
+            enclave.verify_signature(dug::create_market_intent(), timestamp_ms, payload, signature),
+            dug::e_invalid_signature(),
+        );
+        create_market_internal(registry, creator_xid, market_tweet_id, question, fee_bps, timestamp_ms, ctx);
+    }
+
+    /// Internal create-market logic, shared by the verified entry and unit tests.
+    public(package) fun create_market_internal(
+        registry: &mut MarketRegistry,
+        creator_xid: vector<u8>,
+        market_tweet_id: vector<u8>,
+        question: vector<u8>,
+        fee_bps: u16,
+        timestamp_ms: u64,
         ctx: &mut TxContext,
     ) {
         let market_tweet_id_str = string::utf8(market_tweet_id);
@@ -137,7 +158,7 @@ module dugong::markets {
     /// Stake `amount` of coin T on `side` (true = yes, false = no).
     /// Debits the better's DugongAccount and escrows in the market pool for T.
     /// Idempotent on bet_tweet_id.
-    public fun place_bet<T>(
+    public fun place_bet<T, E>(
         market: &mut PredictionMarket,
         better_account: &mut DugongAccount,
         amount: u64,
@@ -145,11 +166,42 @@ module dugong::markets {
         bet_tweet_id: vector<u8>,
         coin_type: vector<u8>,
         timestamp_ms: u64,
-        _signature: &vector<u8>,
+        signature: &vector<u8>,
+        enclave: &Enclave<E>,
         ctx: &mut TxContext,
     ) {
         assert!(market.status == STATUS_OPEN, dug::e_market_closed());
 
+        dug::assert_coin_type<T>(coin_type);
+
+        // Verify the enclave signature over the place-bet intent, then run logic.
+        let payload = dug::new_place_bet_payload(
+            dug::account_xid(better_account).into_bytes(),
+            market.market_tweet_id.into_bytes(),
+            bet_tweet_id,
+            amount,
+            coin_type,
+            side,
+        );
+        assert!(
+            enclave.verify_signature(dug::place_bet_intent(), timestamp_ms, payload, signature),
+            dug::e_invalid_signature(),
+        );
+        place_bet_internal<T>(market, better_account, amount, side, bet_tweet_id, coin_type, timestamp_ms, ctx);
+    }
+
+    /// Internal place-bet logic, shared by the verified entry and unit tests.
+    public(package) fun place_bet_internal<T>(
+        market: &mut PredictionMarket,
+        better_account: &mut DugongAccount,
+        amount: u64,
+        side: bool,
+        bet_tweet_id: vector<u8>,
+        coin_type: vector<u8>,
+        timestamp_ms: u64,
+        ctx: &mut TxContext,
+    ) {
+        assert!(market.status == STATUS_OPEN, dug::e_market_closed());
         dug::assert_coin_type<T>(coin_type);
 
         let bet_tweet_id_str = string::utf8(bet_tweet_id);
@@ -219,13 +271,35 @@ module dugong::markets {
     /// Edge cases (per spec):
     ///   W == 0: no winners; distributable = 0 (pay_winner issues full refunds to all stakers).
     ///   L == 0: winners get their stake back; no fee charged.
-    public fun resolve_market<T>(
+    public fun resolve_market<T, E>(
         market: &mut PredictionMarket,
         treasury: &mut DugongAccount,
         resolver_xid: vector<u8>,
         outcome: bool,
         timestamp_ms: u64,
-        _signature: &vector<u8>,
+        signature: &vector<u8>,
+        enclave: &Enclave<E>,
+    ) {
+        // Verify the enclave signature over the resolve-market intent, then run logic.
+        let payload = dug::new_resolve_market_payload(
+            resolver_xid,
+            market.market_tweet_id.into_bytes(),
+            outcome,
+        );
+        assert!(
+            enclave.verify_signature(dug::resolve_market_intent(), timestamp_ms, payload, signature),
+            dug::e_invalid_signature(),
+        );
+        resolve_market_internal<T>(market, treasury, resolver_xid, outcome, timestamp_ms);
+    }
+
+    /// Internal resolve-market logic, shared by the verified entry and unit tests.
+    public(package) fun resolve_market_internal<T>(
+        market: &mut PredictionMarket,
+        treasury: &mut DugongAccount,
+        resolver_xid: vector<u8>,
+        outcome: bool,
+        timestamp_ms: u64,
     ) {
         assert!(market.status == STATUS_OPEN, dug::e_market_already_resolved());
         assert!(

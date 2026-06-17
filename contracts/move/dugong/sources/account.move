@@ -16,10 +16,17 @@ module dugong::account {
         xid: vector<u8>,
         handle: vector<u8>,
         timestamp: u64,
-        _signature: &vector<u8>,
-        _enclave: &Enclave<T>,
+        signature: &vector<u8>,
+        enclave: &Enclave<T>,
         ctx: &mut TxContext,
     ) {
+        // Verify the enclave signature over the init-account intent.
+        let payload = dug::new_init_account_payload(xid, handle);
+        assert!(
+            enclave.verify_signature(dug::init_account_intent(), timestamp, payload, signature),
+            dug::e_invalid_signature(),
+        );
+
         create_account(registry, xid, handle, timestamp, true, ctx);
     }
 
@@ -68,9 +75,16 @@ module dugong::account {
         account: &mut DugongAccount,
         owner: address,
         timestamp: u64,
-        _signature: &vector<u8>,
-        _enclave: &Enclave<T>,
+        signature: &vector<u8>,
+        enclave: &Enclave<T>,
     ) {
+        // Verify the enclave signature over the link-wallet intent.
+        let payload = dug::new_link_wallet_payload(dug::account_xid(account).into_bytes(), owner);
+        assert!(
+            enclave.verify_signature(dug::link_wallet_intent(), timestamp, payload, signature),
+            dug::e_invalid_signature(),
+        );
+
         assert!(timestamp > dug::account_last_timestamp(account), dug::e_replay_attempt());
         dug::account_set_last_timestamp(account, timestamp);
 
@@ -87,9 +101,16 @@ module dugong::account {
         account: &mut DugongAccount,
         new_handle: vector<u8>,
         timestamp: u64,
-        _signature: &vector<u8>,
-        _enclave: &Enclave<T>,
+        signature: &vector<u8>,
+        enclave: &Enclave<T>,
     ) {
+        // Verify the enclave signature over the update-handle intent.
+        let payload = dug::new_update_handle_payload(dug::account_xid(account).into_bytes(), new_handle);
+        assert!(
+            enclave.verify_signature(dug::update_handle_intent(), timestamp, payload, signature),
+            dug::e_invalid_signature(),
+        );
+
         assert!(timestamp > dug::account_last_timestamp(account), dug::e_replay_attempt());
         dug::account_set_last_timestamp(account, timestamp);
 

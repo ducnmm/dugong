@@ -76,7 +76,7 @@ module dugong::reward_campaigns_tests {
             let registry = ts::take_shared<DugongRegistry>(scenario);
             let creator_id = dug::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(scenario, creator_id);
-            reward_campaigns::create_campaign<SUI>(
+            reward_campaigns::create_campaign_internal<SUI>(
                 &mut creator_account,
                 b"campaign_tweet",
                 reward_campaigns::campaign_top_replies(),
@@ -85,7 +85,6 @@ module dugong::reward_campaigns_tests {
                 max_winners,
                 sui_type(),
                 timestamp_ms,
-                &b"sig",
                 ts::ctx(scenario),
             );
             ts::return_shared(creator_account);
@@ -122,9 +121,9 @@ module dugong::reward_campaigns_tests {
             let registry = ts::take_shared<DugongRegistry>(&scenario);
             let creator_id = dug::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(&scenario, creator_id);
-            reward_campaigns::create_campaign<SUI>(
+            reward_campaigns::create_campaign_internal<SUI>(
                 &mut creator_account, b"campaign_tweet", 9, b"replies",
-                FIVE_SUI, 3, sui_type(), 1000, &b"sig", ts::ctx(&mut scenario),
+                FIVE_SUI, 3, sui_type(), 1000, ts::ctx(&mut scenario),
             );
             ts::return_shared(creator_account);
             ts::return_shared(registry);
@@ -144,9 +143,9 @@ module dugong::reward_campaigns_tests {
             let registry = ts::take_shared<DugongRegistry>(&scenario);
             let creator_id = dug::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(&scenario, creator_id);
-            reward_campaigns::create_campaign<SUI>(
+            reward_campaigns::create_campaign_internal<SUI>(
                 &mut creator_account, b"campaign_tweet", reward_campaigns::campaign_top_replies(),
-                b"replies", 0, 3, sui_type(), 1000, &b"sig", ts::ctx(&mut scenario),
+                b"replies", 0, 3, sui_type(), 1000, ts::ctx(&mut scenario),
             );
             ts::return_shared(creator_account);
             ts::return_shared(registry);
@@ -170,9 +169,9 @@ module dugong::reward_campaigns_tests {
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(&scenario, creator_id);
             let mut campaign = ts::take_shared<RewardCampaign>(&scenario);
             let winners = vector[b"xid_a", b"xid_b"];
-            reward_campaigns::resolve_campaign<SUI>(
+            reward_campaigns::resolve_campaign_internal<SUI>(
                 &mut campaign, &mut creator_account, winners,
-                sui_type(), b"solve_tweet", 2000, &b"sig",
+                sui_type(), b"solve_tweet", 2000,
             );
             assert!(reward_campaigns::selected_winners(&campaign) == 2);
             assert!(reward_campaigns::is_resolved(&campaign));
@@ -201,9 +200,9 @@ module dugong::reward_campaigns_tests {
             let creator_id = dug::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(&scenario, creator_id);
             let mut campaign = ts::take_shared<RewardCampaign>(&scenario);
-            reward_campaigns::resolve_campaign<SUI>(
+            reward_campaigns::resolve_campaign_internal<SUI>(
                 &mut campaign, &mut creator_account, vector[b"xid_a"],
-                sui_type(), b"solve_tweet", 2000, &b"sig",
+                sui_type(), b"solve_tweet", 2000,
             );
             ts::return_shared(campaign);
             ts::return_shared(creator_account);
@@ -243,9 +242,9 @@ module dugong::reward_campaigns_tests {
             let creator_id = dug::registry_get_account_id(&registry, std::string::utf8(b"creator_xid"));
             let mut creator_account = ts::take_shared_by_id<DugongAccount>(&scenario, creator_id);
             let mut campaign = ts::take_shared<RewardCampaign>(&scenario);
-            reward_campaigns::resolve_campaign<SUI>(
+            reward_campaigns::resolve_campaign_internal<SUI>(
                 &mut campaign, &mut creator_account, vector[b"xid_a"],
-                sui_type(), b"solve_tweet", 2000, &b"sig",
+                sui_type(), b"solve_tweet", 2000,
             );
             ts::return_shared(campaign);
             ts::return_shared(creator_account);
@@ -285,9 +284,9 @@ module dugong::reward_campaigns_tests {
             let other_id = dug::registry_get_account_id(&registry, std::string::utf8(b"xid_a"));
             let mut other_account = ts::take_shared_by_id<DugongAccount>(&scenario, other_id);
             let mut campaign = ts::take_shared<RewardCampaign>(&scenario);
-            reward_campaigns::resolve_campaign<SUI>(
+            reward_campaigns::resolve_campaign_internal<SUI>(
                 &mut campaign, &mut other_account, vector[b"xid_a"],
-                sui_type(), b"solve_tweet", 2000, &b"sig",
+                sui_type(), b"solve_tweet", 2000,
             );
             ts::return_shared(campaign);
             ts::return_shared(other_account);
