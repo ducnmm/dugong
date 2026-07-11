@@ -21,10 +21,12 @@ const queryClient = new QueryClient({
 });
 
 // Configure Sui network
+// getFullnodeUrl points at fullnode.*.sui.io, which stopped serving
+// JSON-RPC in July 2026 (gRPC only now); use public nodes that still speak it.
 const networks = {
   devnet: { url: getFullnodeUrl('devnet') },
-  testnet: { url: getFullnodeUrl('testnet') },
-  mainnet: { url: getFullnodeUrl('mainnet') },
+  testnet: { url: 'https://sui-testnet-rpc.publicnode.com' },
+  mainnet: { url: 'https://sui-rpc.publicnode.com' },
 };
 
 const walletTheme: ThemeVars = {

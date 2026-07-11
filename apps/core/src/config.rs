@@ -126,8 +126,10 @@ impl Config {
             session_token_secret: optional_env("SESSION_TOKEN_SECRET"),
 
             // Sui
+            // fullnode.testnet.sui.io stopped serving JSON-RPC in July 2026
+            // (gRPC only now); default to a public node that still speaks it.
             sui_rpc_url: env::var("SUI_RPC_URL")
-                .unwrap_or_else(|_| "https://fullnode.testnet.sui.io:443".to_string()),
+                .unwrap_or_else(|_| "https://sui-testnet-rpc.publicnode.com".to_string()),
             dugong_package_id: env::var("DUGONG_PACKAGE_ID")
                 .context("DUGONG_PACKAGE_ID must be set")?,
             // Event-filter package id (indexer): original/defining id, preserved
