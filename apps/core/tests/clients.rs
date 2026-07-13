@@ -432,3 +432,51 @@ async fn oauth2_refresh_server_error_is_transient() {
         "5xx must map to Transient, got {err:?}"
     );
 }
+
+// ==================== OAuth 1.0a bot posting ====================
+
+/// End-to-end reply posting through the OAuth 1.0a path: with all four keys
+/// configured, `POST /2/tweets` must carry a signed `OAuth ...` header (never
+/// a Bearer token) and need no DB-stored token at all.
+#[tokio::test]
+async fn twitter_reply_posts_with_oauth1_signature_when_keys_configured() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/2/tweets"))
+        .and(wiremock::matchers::header_regex(
+            "authorization",
+            concat!(
+                r#"^OAuth oauth_consumer_key="test-consumer-key", "#,
+                r#"oauth_nonce="[0-9a-f]{32}", "#,
+                r#"oauth_signature_method="HMAC-SHA1", "#,
+                r#"oauth_timestamp="\d+", "#,
+                r#"oauth_token="test-access-token", "#,
+                r#"oauth_version="1\.0", "#,
+                r#"oauth_signature="[A-Za-z0-9%]+"$"#,
+            ),
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "data": { "id": "1900000000000000123" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut config = test_config();
+    config.twitter_api_base = server.uri();
+    config.twitter_api_key = Some("test-consumer-key".to_string());
+    config.twitter_api_secret = Some("test-consumer-secret".to_string());
+    config.twitter_access_token = Some("test-access-token".to_string());
+    config.twitter_access_token_secret = Some("test-token-secret".to_string());
+
+    // The OAuth 1.0a path never touches the DB; a lazy pool never connects.
+    let pool = sqlx::PgPool::connect_lazy("postgres://unused:unused@localhost:1/unused")
+        .expect("lazy pool");
+    let client = TwitterClient::new_with_bot(&config, pool);
+
+    let reply_id = client
+        .reply_error("123", "boom")
+        .await
+        .expect("reply should post via the OAuth 1.0a-signed official API");
+    assert_eq!(reply_id, "1900000000000000123");
+}

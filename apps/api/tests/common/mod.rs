@@ -64,6 +64,13 @@ pub fn test_config() -> Config {
         twitter_oauth2_client_secret: "test-client-secret".to_string(),
         twitter_oauth2_redirect_uri: "http://localhost/callback".to_string(),
 
+        twitter_bot_user_id: Some("1000000000000000001".to_string()),
+
+        twitter_api_key: None,
+        twitter_api_secret: None,
+        twitter_access_token: None,
+        twitter_access_token_secret: None,
+
         token_encryption_key: Some([7u8; 32]),
         session_token_secret: Some("test-session-secret-please-change".to_string()),
 

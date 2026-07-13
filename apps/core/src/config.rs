@@ -1,4 +1,3 @@
-use crate::twitter_session::ensure_authenticated_login_cookie;
 use anyhow::{Context, Result};
 use std::env;
 
@@ -15,7 +14,10 @@ pub struct Config {
     // Redis
     pub redis_url: String,
 
-    // TwitterAPI.io
+    // TwitterAPI.io — still used for READS (mention polling, user lookup,
+    // campaign search) via `X-API-Key`. The login-cookie + proxy fields were
+    // only ever needed to POST replies; reply posting now goes through the
+    // official X API (see `twitter_bot_user_id`), so they are no longer required.
     pub twitterapi_io_api_key: String,
     pub twitterapi_io_login_cookies: Option<String>,
     pub twitterapi_io_proxy: Option<String>,
@@ -25,6 +27,22 @@ pub struct Config {
     pub twitter_oauth2_client_id: String,
     pub twitter_oauth2_client_secret: String,
     pub twitter_oauth2_redirect_uri: String,
+
+    // The bot account's own X user id (numeric). Reply posting authenticates as
+    // this account using its stored OAuth 2.0 user-context token in
+    // `twitter_oauth_tokens` (obtained once via `dugong-bot-authorize`, then
+    // auto-refreshed). `None` disables official-API posting.
+    pub twitter_bot_user_id: Option<String>,
+
+    // OAuth 1.0a user-context credentials from the app's "Keys and tokens"
+    // page (consumer API key/secret + the bot account's access token/secret).
+    // When all four are set, reply posting signs each request with these
+    // directly — no DB-stored token, no refresh, no `dugong-bot-authorize`
+    // needed — and they take precedence over the OAuth 2.0 path above.
+    pub twitter_api_key: Option<String>,
+    pub twitter_api_secret: Option<String>,
+    pub twitter_access_token: Option<String>,
+    pub twitter_access_token_secret: Option<String>,
 
     // OAuth credential security (API only; see `ensure_token_security`).
     // 32-byte AES-256 key for encrypting refresh tokens at rest, decoded from
@@ -116,6 +134,14 @@ impl Config {
             twitter_oauth2_redirect_uri: env::var("TWITTER_OAUTH2_REDIRECT_URI")
                 .unwrap_or_else(|_| "http://localhost:43173/callback".to_string()),
 
+            twitter_bot_user_id: optional_env("TWITTER_BOT_USER_ID"),
+
+            // OAuth 1.0a posting credentials (all-or-nothing; see field docs)
+            twitter_api_key: optional_env("TWITTER_API_KEY"),
+            twitter_api_secret: optional_env("TWITTER_API_SECRET"),
+            twitter_access_token: optional_env("TWITTER_ACCESS_TOKEN"),
+            twitter_access_token_secret: optional_env("TWITTER_ACCESS_TOKEN_SECRET"),
+
             // OAuth credential security. Parsed (and length-validated) when present;
             // a present-but-malformed key is a hard misconfiguration. Requiredness is
             // enforced for the API binary via `ensure_token_security`, so other
@@ -194,24 +220,65 @@ impl Config {
         })
     }
 
+    /// True when the complete OAuth 1.0a posting credential set (consumer
+    /// key/secret + access token/secret) is configured.
+    pub fn has_twitter_oauth1_credentials(&self) -> bool {
+        self.twitter_api_key.is_some()
+            && self.twitter_api_secret.is_some()
+            && self.twitter_access_token.is_some()
+            && self.twitter_access_token_secret.is_some()
+    }
+
     /// Ensure the credentials required to post reply tweets are present.
     ///
-    /// The processor worker replies to every tweet it handles, so missing
-    /// reply credentials is an operator error that must fail loudly at
-    /// startup rather than silently dropping replies at runtime. Call this
-    /// from binaries that run the processor; the indexer binary does not
-    /// post replies and should not call it.
+    /// The processor worker replies to every tweet it handles via the official
+    /// X API, authenticating as the bot account either with OAuth 1.0a keys
+    /// (`TWITTER_API_KEY`/`TWITTER_API_SECRET` + `TWITTER_ACCESS_TOKEN`/
+    /// `TWITTER_ACCESS_TOKEN_SECRET`) or with its stored OAuth 2.0 token.
+    /// Missing config here is an operator error that must fail loudly at startup
+    /// rather than silently dropping replies at runtime. Call this from binaries
+    /// that run the processor; the indexer binary does not post replies and
+    /// should not call it.
+    ///
+    /// For the OAuth 2.0 path this validates only that the config is present.
+    /// The bot's refresh token itself must have been seeded into
+    /// `twitter_oauth_tokens` (run `dugong-bot-authorize` once); a missing/dead
+    /// token surfaces as a clear error on the first reply attempt.
     pub fn ensure_reply_capable(&self) -> Result<()> {
-        let login_cookies = self.twitterapi_io_login_cookies.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "TWITTERAPI_IO_LOGIN_COOKIES must be set to post reply tweets \
-                 (set ENABLE_INDEXER and run the indexer binary if this process should not reply)"
-            )
-        })?;
-        ensure_authenticated_login_cookie(login_cookies)?;
-
-        if self.twitterapi_io_proxy.is_none() {
-            anyhow::bail!("TWITTERAPI_IO_PROXY must be set to post reply tweets");
+        let oauth1_set = [
+            self.twitter_api_key.is_some(),
+            self.twitter_api_secret.is_some(),
+            self.twitter_access_token.is_some(),
+            self.twitter_access_token_secret.is_some(),
+        ]
+        .iter()
+        .filter(|set| **set)
+        .count();
+        if oauth1_set == 4 {
+            return Ok(());
+        }
+        if oauth1_set > 0 {
+            anyhow::bail!(
+                "OAuth 1.0a posting credentials are partially configured ({oauth1_set}/4). \
+                 Set all of TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN and \
+                 TWITTER_ACCESS_TOKEN_SECRET, or none of them to use the OAuth 2.0 path."
+            );
+        }
+        if self.twitter_bot_user_id.is_none() {
+            anyhow::bail!(
+                "Posting reply tweets via the official X API requires either the OAuth 1.0a \
+                 keys (TWITTER_API_KEY/TWITTER_API_SECRET + TWITTER_ACCESS_TOKEN/\
+                 TWITTER_ACCESS_TOKEN_SECRET from the app's Keys and tokens page) or \
+                 TWITTER_BOT_USER_ID plus a stored OAuth 2.0 token (run `dugong-bot-authorize` \
+                 once). (Set ENABLE_INDEXER and run the indexer binary if this process should \
+                 not reply.)"
+            );
+        }
+        if self.token_encryption_key.is_none() {
+            anyhow::bail!(
+                "TOKEN_ENCRYPTION_KEY must be set to decrypt the bot's stored OAuth token \
+                 for posting reply tweets"
+            );
         }
         Ok(())
     }
@@ -276,7 +343,11 @@ fn optional_env(name: &str) -> Option<String> {
 
 /// Decode a 32-byte AES-256 key from a base64 or hex string. Accepts standard
 /// base64 (e.g. `openssl rand -base64 32`) or 64-char hex; rejects any other length.
-fn parse_encryption_key(raw: &str) -> Result<[u8; 32]> {
+///
+/// Public so out-of-process helpers (e.g. `dugong-bot-authorize`) can decode
+/// `TOKEN_ENCRYPTION_KEY` the same way the server does, without duplicating the
+/// rules.
+pub fn parse_encryption_key(raw: &str) -> Result<[u8; 32]> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
     let bytes = BASE64

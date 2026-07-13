@@ -149,12 +149,20 @@ cargo run -p dugong-indexer
 # mirrors Sui events into the indexer_state + dugong_accounts tables
 ```
 
-The API and indexer share the same `apps/api/.env` (same Postgres + Sui
-RPC), so the cursor stays consistent. The indexer binary loads that file
-automatically relative to the workspace, so the command above works from any
-directory — you don't need to `cd apps/api` first. Real environment variables
-still take precedence, which is how it picks up Railway-injected config in
-production.
+The indexer loads its **own** `apps/indexer/.env` (resolved relative to the
+crate, so the command above works from any directory). Keep its
+`DUGONG_PACKAGE_ID` / `DUGONG_EVENT_PACKAGE_ID` / `SUI_RPC_URL` in sync with
+`apps/api/.env` when the package is republished — a stale file here means the
+current package's events silently never get indexed. Real environment
+variables still take precedence, which is how it picks up Railway-injected
+config in production.
+
+**RPC choice matters for the indexer**: it scans events from genesis, and
+some public fullnodes (e.g. publicnode) prune historical transaction events,
+failing the scan with `Could not find the referenced transaction events`.
+Use an endpoint that retains event history, e.g.
+`https://sui-testnet-endpoint.blockvision.org`. The API server is fine on a
+pruned node — it only reads current state.
 
 ## 6. Run the worker (poller)
 

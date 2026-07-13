@@ -33,7 +33,9 @@ impl ProcessorWorker {
     pub fn new(state: Arc<AppState>) -> Self {
         let enclave = EnclaveClient::new(state.config.enclave_url.clone());
         let redis = state.redis.clone();
-        let twitter = TwitterClient::new(&state.config);
+        // Reply posting authenticates as the bot via the official X API, using
+        // its stored OAuth token in the DB (see `dugong-bot-authorize`).
+        let twitter = TwitterClient::new_with_bot(&state.config, state.db.clone());
         Self {
             state,
             enclave,
@@ -359,11 +361,13 @@ impl ProcessorWorker {
         // Check if sender account exists, create if not. The sender must have an
         // on-chain Dugong account before `submit_transfer` can resolve its account ref,
         // so a first-time sender (never initialized) would otherwise fail here.
-        let sender_exists =
-            dugong_core::db::models::DugongAccount::find_by_x_user_id(&self.state.db, &data.from_xid)
-                .await
-                .context("Failed to check if sender account exists")?
-                .is_some();
+        let sender_exists = dugong_core::db::models::DugongAccount::find_by_x_user_id(
+            &self.state.db,
+            &data.from_xid,
+        )
+        .await
+        .context("Failed to check if sender account exists")?
+        .is_some();
 
         if !sender_exists {
             info!(from_xid = %data.from_xid, "Sender account does not exist, creating account first");

@@ -158,7 +158,8 @@ async fn get_transaction_by_digest_returns_seeded_transfer(pool: PgPool) {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["tx_digest"], json!("0xtx123"));
-    assert_eq!(body["amount"], json!("1.234567"));
+    // Displayed amounts are rounded to 2dp (4922bdc); amount_mist keeps full precision.
+    assert_eq!(body["amount"], json!("1.23"));
     assert_eq!(body["from_xid"], json!("alice-xid"));
     assert_eq!(body["to_xid"], json!("bob-xid"));
 }

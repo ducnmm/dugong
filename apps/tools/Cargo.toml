@@ -16,6 +16,10 @@ path = "src/bin/login.rs"
 name = "dugong-test-tweet"
 path = "src/bin/test_tweet.rs"
 
+[[bin]]
+name = "dugong-bot-authorize"
+path = "src/bin/bot_authorize.rs"
+
 [dependencies]
 dugong-core.workspace = true
 
