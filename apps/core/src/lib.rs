@@ -5,4 +5,3 @@ pub mod crypto;
 pub mod db;
 pub mod oauth;
 pub mod session;
-pub mod twitter_session;

@@ -14,13 +14,9 @@ pub struct Config {
     // Redis
     pub redis_url: String,
 
-    // TwitterAPI.io — still used for READS (mention polling, user lookup,
-    // campaign search) via `X-API-Key`. The login-cookie + proxy fields were
-    // only ever needed to POST replies; reply posting now goes through the
-    // official X API (see `twitter_bot_user_id`), so they are no longer required.
+    // TwitterAPI.io — used for READS (mention polling, user lookup, campaign
+    // search) via `X-API-Key`. Reply posting goes through the official X API.
     pub twitterapi_io_api_key: String,
-    pub twitterapi_io_login_cookies: Option<String>,
-    pub twitterapi_io_proxy: Option<String>,
     pub twitter_webhook_secret: Option<String>,
 
     // Twitter OAuth 2.0 (for user authentication)
@@ -122,8 +118,6 @@ impl Config {
             // TwitterAPI.io
             twitterapi_io_api_key: env::var("TWITTERAPI_IO_API_KEY")
                 .context("TWITTERAPI_IO_API_KEY must be set")?,
-            twitterapi_io_login_cookies: optional_env("TWITTERAPI_IO_LOGIN_COOKIES"),
-            twitterapi_io_proxy: optional_env("TWITTERAPI_IO_PROXY"),
             twitter_webhook_secret: optional_env("TWITTER_WEBHOOK_SECRET"),
 
             // Twitter OAuth 2.0

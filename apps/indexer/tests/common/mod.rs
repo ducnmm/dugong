@@ -32,8 +32,6 @@ pub fn test_config(sui_rpc_url: String, package_id: String) -> Config {
         redis_url: "redis://localhost:6379".to_string(),
 
         twitterapi_io_api_key: "test-twitterapi-io-key".to_string(),
-        twitterapi_io_login_cookies: None,
-        twitterapi_io_proxy: None,
         twitter_webhook_secret: None,
 
         twitter_oauth2_client_id: "test-client-id".to_string(),

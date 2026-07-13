@@ -2270,14 +2270,10 @@ name = "dugong-tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.21.7",
  "dotenvy",
  "dugong-core",
  "reqwest 0.11.27",
- "serde",
- "serde_json",
  "tokio",
- "wiremock",
 ]
 
 [[package]]

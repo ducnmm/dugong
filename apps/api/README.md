@@ -37,7 +37,6 @@ Shared modules used by this crate (lifted into `dugong-core`):
 - `dugong_core::db` — Postgres pool, models, embedded migrations
 - `dugong_core::clients` — Redis, Sui, Twitter, Enclave, Enoki, Sui-tx builder
 - `dugong_core::constants` — Redis key helpers, event ids, enclave consts
-- `dugong_core::twitter_session` — login cookie validation
 
 ## Quick start
 
@@ -91,16 +90,15 @@ indexer cursor and the API's webhook state stay consistent.
 The one-off scripts moved to the `dugong-tools` crate:
 
 ```bash
-cargo run -p dugong-tools --bin dugong-bot-authorize  # authorize the bot for official-API posting (run once)
-cargo run -p dugong-tools --bin dugong-login          # DEPRECATED: mint legacy TwitterAPI.io login cookie
-cargo run -p dugong-tools --bin dugong-test-tweet     # DEPRECATED: smoke-test legacy TwitterAPI.io posting
+cargo run -p dugong-tools --bin dugong-bot-authorize  # authorize the bot for official-API posting (run once; OAuth 2.0 path only)
 ```
 
 `dugong-bot-authorize` runs the OAuth 2.0 + PKCE flow with `tweet.write`
 scope and stores the bot's encrypted refresh token in `twitter_oauth_tokens`;
-the processor then posts (and auto-refreshes) from there. `dugong-login` /
-`dugong-test-tweet` targeted the old scraped-cookie posting path and are no
-longer used by the running services.
+the processor then posts (and auto-refreshes) from there. It is NOT needed
+when the OAuth 1.0a keys (`TWITTER_API_KEY`/`TWITTER_API_SECRET` +
+`TWITTER_ACCESS_TOKEN`/`TWITTER_ACCESS_TOKEN_SECRET`) are configured — those
+sign posts directly.
 
 ## API endpoints
 
@@ -199,9 +197,6 @@ See `.env.example` for everything. Key variables:
   OAuth token (seed once with `dugong-bot-authorize`)
 - `TOKEN_ENCRYPTION_KEY` — 32-byte key (base64/hex) that encrypts the bot's
   (and users') stored OAuth refresh tokens at rest
-- `TWITTERAPI_IO_LOGIN_COOKIES`, `TWITTERAPI_IO_PROXY`, `TWITTER_BOT_TOTP_SECRET`
-  — DEPRECATED: only used by the legacy scraped-cookie posting path, no
-  longer required by the running services
 - `INDEXER_POLL_INTERVAL_MS`, `INDEXER_BATCH_SIZE` — read by
   `dugong-indexer` only
 

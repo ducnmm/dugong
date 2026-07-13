@@ -115,8 +115,6 @@ railway variables --service api \
   --set 'LOG_LEVEL=info' \
   --set 'RUST_LOG=dugong_api=info,tower_http=info' \
   --set 'TWITTERAPI_IO_API_KEY=...' \
-  --set 'TWITTERAPI_IO_LOGIN_COOKIES=' \
-  --set 'TWITTERAPI_IO_PROXY=' \
   --set 'TWITTER_WEBHOOK_SECRET=' \
   --set 'TWITTER_OAUTH2_CLIENT_ID=...' \
   --set 'TWITTER_OAUTH2_CLIENT_SECRET=...' \

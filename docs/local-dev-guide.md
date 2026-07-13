@@ -59,11 +59,13 @@ cp apps/web/.env.example     apps/web/.env
 
 Key values you must supply in `apps/api/.env`:
 
-- `TWITTERAPI_IO_API_KEY` — tweet/user lookup and reply posting
-- `TWITTERAPI_IO_LOGIN_COOKIES`, `TWITTERAPI_IO_PROXY` — required by the API
-  processor for posting reply tweets (the indexer does not need these)
+- `TWITTERAPI_IO_API_KEY` — tweet/user lookup (reads)
+- `TWITTER_API_KEY`/`TWITTER_API_SECRET` + `TWITTER_ACCESS_TOKEN`/
+  `TWITTER_ACCESS_TOKEN_SECRET` — OAuth 1.0a keys for posting replies via the
+  official X API (app "Keys and tokens" page; the indexer does not need these)
 - `TWITTER_OAUTH2_CLIENT_ID`, `TWITTER_OAUTH2_CLIENT_SECRET` — X OAuth2 from
-  https://developer.twitter.com
+  https://developer.twitter.com (user login; also the alternative bot-posting
+  path via `dugong-bot-authorize`)
 - `DUGONG_PACKAGE_ID`, `DUGONG_REGISTRY_ID`, `MARKET_REGISTRY_ID`,
   `ENCLAVE_CONFIG_ID`, `ENCLAVE_ID` — from the deployed Move contracts
   (`ENCLAVE_ID` is the `Enclave` shared object from `register_enclave`, **not**
@@ -134,9 +136,9 @@ cargo run -p dugong-api
 
 Health check: `curl http://localhost:43001/`
 
-The API + processor binary requires reply credentials
-(`TWITTERAPI_IO_LOGIN_COOKIES` + `TWITTERAPI_IO_PROXY`); it refuses to start
-otherwise so replies never get silently dropped.
+The API + processor binary requires reply credentials (either the OAuth 1.0a
+key set, or `TWITTER_BOT_USER_ID` + a stored OAuth 2.0 token); it refuses to
+start otherwise so replies never get silently dropped.
 
 ## 5. Run the indexer
 
@@ -191,11 +193,8 @@ addresses in `apps/web/.env` to match `apps/api/.env`.
 The one-off CLIs live in the `dugong-tools` crate:
 
 ```bash
-# Mint a TwitterAPI.io login cookie for the bot account
-cargo run -p dugong-tools --bin dugong-login
-
-# Smoke-test posting a tweet + self-reply via the bot account
-cargo run -p dugong-tools --bin dugong-test-tweet
+# Authorize the bot for OAuth 2.0 posting (not needed with OAuth 1.0a keys)
+cargo run -p dugong-tools --bin dugong-bot-authorize
 ```
 
 Both read from `apps/api/.env` (run them from the repo root so the workspace

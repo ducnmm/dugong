@@ -56,8 +56,6 @@ pub fn test_config() -> Config {
         redis_url: test_redis_url(),
 
         twitterapi_io_api_key: "test-twitterapi-key".to_string(),
-        twitterapi_io_login_cookies: Some("test-login-cookies".to_string()),
-        twitterapi_io_proxy: Some("http://proxy.local:8080".to_string()),
         twitter_webhook_secret: Some("test-webhook-secret".to_string()),
 
         twitter_oauth2_client_id: "test-client-id".to_string(),
