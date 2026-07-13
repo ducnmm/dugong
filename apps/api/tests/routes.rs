@@ -126,24 +126,25 @@ async fn get_transaction_by_digest_returns_seeded_transfer(pool: PgPool) {
     .expect("seed transfer");
 
     let server = MockServer::start().await;
+    // Sui GraphQL coinMetadata response (beta schema shape).
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {
-                "decimals": 6,
-                "name": "USDC",
-                "symbol": "USDC",
-                "description": null,
-                "icon_url": null,
-                "id": null
+            "data": {
+                "coinMetadata": {
+                    "decimals": 6,
+                    "name": "USDC",
+                    "symbol": "USDC",
+                    "description": null,
+                    "iconUrl": null,
+                    "address": null
+                }
             }
         })))
         .mount(&server)
         .await;
 
     let mut config = test_config();
-    config.sui_rpc_url = server.uri();
+    config.sui_graphql_url = server.uri();
     let app = build_router(app_state(config, pool, redis));
     let response = app
         .oneshot(

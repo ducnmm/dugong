@@ -48,7 +48,14 @@ pub struct Config {
     pub session_token_secret: Option<String>,
 
     // Sui
+    /// JSON-RPC endpoint, used only by the transaction-building path
+    /// (`sui_transaction.rs` via the official sui-sdk). Event indexing and
+    /// coin-metadata reads use `sui_graphql_url` instead.
     pub sui_rpc_url: String,
+    /// Sui GraphQL RPC endpoint (event indexing + coin metadata). Public
+    /// endpoints are rate-limited and retain a bounded history window; point
+    /// this at a provider endpoint for production.
+    pub sui_graphql_url: String,
     pub dugong_package_id: String,
     /// Defining package id(s) the indexer filters events on (`MoveEventModule`),
     /// as a comma-separated list. An event type's identity is keyed by the
@@ -150,6 +157,8 @@ impl Config {
             // (gRPC only now); default to a public node that still speaks it.
             sui_rpc_url: env::var("SUI_RPC_URL")
                 .unwrap_or_else(|_| "https://sui-testnet-rpc.publicnode.com".to_string()),
+            sui_graphql_url: env::var("SUI_GRAPHQL_URL")
+                .unwrap_or_else(|_| "https://graphql.testnet.sui.io/graphql".to_string()),
             dugong_package_id: env::var("DUGONG_PACKAGE_ID")
                 .context("DUGONG_PACKAGE_ID must be set")?,
             // Event-filter package id (indexer): original/defining id, preserved

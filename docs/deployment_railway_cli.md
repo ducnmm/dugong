@@ -119,7 +119,8 @@ railway variables --service api \
   --set 'TWITTER_OAUTH2_CLIENT_ID=...' \
   --set 'TWITTER_OAUTH2_CLIENT_SECRET=...' \
   --set 'TWITTER_OAUTH2_REDIRECT_URI=https://<web-domain>/callback' \
-  --set 'SUI_RPC_URL=https://fullnode.testnet.sui.io:443' \
+  --set 'SUI_RPC_URL=https://sui-testnet-rpc.publicnode.com' \
+  --set 'SUI_GRAPHQL_URL=https://graphql.testnet.sui.io/graphql' \
   --set 'DUGONG_PACKAGE_ID=0x...' \
   --set 'DUGONG_REGISTRY_ID=0x...' \
   --set 'ENCLAVE_CONFIG_ID=0x...' \
@@ -137,6 +138,27 @@ railway variables --service api \
 > Do **not** set `PORT` — Railway injects it and `config.rs` reads it.
 > After the first deploy, generate a domain (step 8) and update
 > `TWITTER_OAUTH2_REDIRECT_URI` to the real `web` URL.
+
+> **`SUI_GRAPHQL_URL` vs `SUI_RPC_URL`.** Event indexing and coin-metadata
+> reads go through Sui's GraphQL RPC (`SUI_GRAPHQL_URL`); `SUI_RPC_URL`
+> (JSON-RPC) is only used for transaction building. Set both on the
+> `indexer` service too. The public GraphQL endpoint is rate-limited and
+> retains a bounded history window — use a full-history provider endpoint
+> if the indexer must backfill old events.
+>
+> **GraphQL cursor migration / rollback.** On first start after the GraphQL
+> migration, the indexer automatically converts legacy `txDigest:eventSeq`
+> cursors in `indexer_state` into JSON envelopes like
+> `{"v":2,"gql":"...","tx":"<digest>","seq":"<n>","cp":<checkpoint>}`
+> (one `Re-anchored cursor` log line per watched package). To roll back to a
+> pre-migration build, first restore the legacy cursor format from the
+> envelope's fields:
+>
+> ```sql
+> UPDATE indexer_state
+> SET cursor = (cursor::jsonb->>'tx') || ':' || (cursor::jsonb->>'seq')
+> WHERE cursor LIKE '{%';
+> ```
 
 > **`TOKEN_ENCRYPTION_KEY` / `SESSION_TOKEN_SECRET` (required).** The `api`
 > stores Twitter **refresh tokens encrypted at rest** and signs **backend

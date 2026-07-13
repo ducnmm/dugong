@@ -73,6 +73,7 @@ pub fn test_config() -> Config {
         session_token_secret: Some("test-session-secret-please-change".to_string()),
 
         sui_rpc_url: "http://localhost".to_string(),
+        sui_graphql_url: "http://localhost".to_string(),
         dugong_package_id: "0x1".to_string(),
         dugong_event_package_id: "0x1".to_string(),
         dugong_witness_package_id: "0x1".to_string(),

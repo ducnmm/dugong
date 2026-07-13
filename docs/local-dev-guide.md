@@ -153,18 +153,30 @@ cargo run -p dugong-indexer
 
 The indexer loads its **own** `apps/indexer/.env` (resolved relative to the
 crate, so the command above works from any directory). Keep its
-`DUGONG_PACKAGE_ID` / `DUGONG_EVENT_PACKAGE_ID` / `SUI_RPC_URL` in sync with
-`apps/api/.env` when the package is republished — a stale file here means the
-current package's events silently never get indexed. Real environment
+`DUGONG_PACKAGE_ID` / `DUGONG_EVENT_PACKAGE_ID` / `SUI_GRAPHQL_URL` in sync
+with `apps/api/.env` when the package is republished — a stale file here means
+the current package's events silently never get indexed. Real environment
 variables still take precedence, which is how it picks up Railway-injected
 config in production.
 
-**RPC choice matters for the indexer**: it scans events from genesis, and
-some public fullnodes (e.g. publicnode) prune historical transaction events,
-failing the scan with `Could not find the referenced transaction events`.
-Use an endpoint that retains event history, e.g.
-`https://sui-testnet-endpoint.blockvision.org`. The API server is fine on a
-pruned node — it only reads current state.
+**Endpoint choice matters for the indexer**: it reads events via Sui's
+GraphQL RPC (`SUI_GRAPHQL_URL`; JSON-RPC was retired for reads). The default
+`https://graphql.testnet.sui.io/graphql` is fine for a warm indexer that only
+tails new events, but it is rate-limited and retains a bounded history
+window. Two consequences:
+
+- **Backfill from genesis** (fresh database) or resuming from a very old
+  cursor needs a full-history GraphQL provider endpoint — the public endpoint
+  will not have the early events, and the indexer fails loudly with a
+  `cannot re-anchor` error rather than silently skipping history.
+- If the indexer was down long enough for its stored cursor to fall out of
+  the endpoint's retention window, it automatically re-anchors from the last
+  processed event's transaction — which again must still be within the
+  endpoint's history.
+
+The API server is fine on the public endpoint — it only looks up coin
+metadata. (`SUI_RPC_URL` still exists but is only used for transaction
+building via the sui-sdk.)
 
 ## 6. Run the worker (poller)
 

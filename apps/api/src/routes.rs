@@ -1145,7 +1145,7 @@ pub async fn get_transactions_by_account(
         transactions.iter().map(|t| t.coin_type.clone()).collect();
 
     // Fetch decimals for each coin type from Sui RPC
-    let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_rpc_url);
+    let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_graphql_url);
     let mut decimals_map: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     for coin_type in unique_coin_types {
         let decimals = resolve_coin_decimals(&sui_client, &coin_type).await;
@@ -1186,7 +1186,7 @@ pub async fn get_transaction_by_digest(
         }
     };
 
-    let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_rpc_url);
+    let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_graphql_url);
     let decimals = resolve_coin_decimals(&sui_client, &transaction.coin_type).await;
 
     Ok(Json(TransactionResponse::from_row_with_decimals(

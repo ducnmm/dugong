@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
     run_migrations(&db).await?;
     tracing::info!("Migrations completed");
 
-    let indexer = Indexer::new(config, db).await?;
+    let mut indexer = Indexer::new(config, db).await?;
     tracing::info!("Indexer initialized");
 
     indexer.start().await?;
