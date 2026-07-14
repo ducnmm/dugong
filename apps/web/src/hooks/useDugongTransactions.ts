@@ -1,7 +1,7 @@
 import { useSuiClient } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { DUGONG_PACKAGE_ID, COIN_TYPES } from '../utils/constants';
+import { DUGONG_PACKAGE_ID, DUGONG_REGISTRY_ID, COIN_TYPES } from '../utils/constants';
 import { useCustomWallet } from '../contexts/useCustomWallet';
 
 interface DepositParams {
@@ -16,6 +16,10 @@ interface WithdrawParams {
   amount: string; // Amount in human readable format
   coinType?: string; // Coin type (default: SUI)
   decimals?: number; // Decimals for the coin (default: 9)
+}
+
+interface FaucetParams {
+  suiObjectId: string; // Dugong account object ID
 }
 
 // Convert human readable amount to smallest unit based on decimals
@@ -125,6 +129,64 @@ export function useDeposit() {
       }
 
       // Use sponsored transaction - gas is paid by Enoki!
+      const result = await sponsorAndExecuteTransactionBlock({
+        tx,
+        options: {
+          showEffects: true,
+          showEvents: true,
+          showObjectChanges: true,
+        },
+      });
+
+      return result;
+    },
+    onSuccess: (_, variables) => {
+      // Invalidate balance, transactions and wallet coins queries to refresh UI
+      queryClient.invalidateQueries({ queryKey: ['dugong-balance', variables.suiObjectId] });
+      queryClient.invalidateQueries({ queryKey: ['dugong-transactions', variables.suiObjectId] });
+      queryClient.invalidateQueries({ queryKey: ['wallet-coins'] });
+    },
+  });
+}
+
+/**
+ * Hook for claiming DUG from the faucet.
+ *
+ * Mints a fixed amount of DUG from the registry treasury into the caller's
+ * Dugong account. Owner-authenticated on-chain (the connected wallet must be
+ * the account's linked owner) and rate-limited to one claim per cooldown
+ * window. Sponsored via Enoki, so the user pays no gas.
+ */
+export function useFaucet() {
+  const { sponsorAndExecuteTransactionBlock, address } = useCustomWallet();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ suiObjectId }: FaucetParams) => {
+      if (!DUGONG_PACKAGE_ID) {
+        throw new Error('DUGONG_PACKAGE_ID not configured');
+      }
+
+      if (!DUGONG_REGISTRY_ID) {
+        throw new Error('DUGONG_REGISTRY_ID not configured');
+      }
+
+      if (!address) {
+        throw new Error('Wallet not connected');
+      }
+
+      const tx = new Transaction();
+
+      tx.moveCall({
+        target: `${DUGONG_PACKAGE_ID}::dugong::faucet`,
+        arguments: [
+          tx.object(DUGONG_REGISTRY_ID), // DugongRegistry (holds the DUG treasury cap)
+          tx.object(suiObjectId), // Dugong account receiving the DUG
+          tx.object.clock(), // 0x6 Clock, used for the cooldown check
+        ],
+      });
+
+      // Use sponsored transaction - gas is paid by Enoki
       const result = await sponsorAndExecuteTransactionBlock({
         tx,
         options: {

@@ -1,0 +1,26 @@
+# Marlin Oyster deployment compose for the dugong Nautilus enclave.
+#
+# `oyster-cvm deploy --docker-compose <this file>` runs the enclave image inside the
+# Oyster CVM. See docs/enclave-oyster-deploy.md for the full build → deploy → register flow.
+#
+# IMPORTANT:
+#   * Pin `image:` to the reproducible build's immutable SHA256 DIGEST (not a mutable tag)
+#     so PCR0/1/2 correspond to an exact image. Obtain it with:
+#       docker inspect --format='{{index .RepoDigests 0}}' <registry>/dugong-enclave:<tag>
+#   * The reproducible image itself is produced by Marlin's Oyster `nix.sh` build
+#     (not `Dockerfile.nautilus`, which is non-reproducible and testing-only).
+#   * Secrets (DUGONG_PACKAGE_ID, TWITTERAPI_IO_API_KEY, *_BASE_URL) are injected at runtime
+#     over VSOCK 7777 by `run.sh` — do NOT bake them into the image or list them here.
+services:
+  dugong-enclave:
+    # TODO: replace with your pushed image pinned by digest, e.g.
+    # image: <YOUR_REGISTRY>/dugong-enclave@sha256:<digest>
+    image: <YOUR_REGISTRY>/dugong-enclave:rust-reproducible-arm64
+    init: true
+    restart: unless-stopped
+    environment:
+      # Port the axum server binds (read by main.rs). run.sh defaults this to 3000.
+      ENCLAVE_PORT: "3000"
+    # The enclave HTTP API is reached at http://$PUBLIC_IP:$ENCLAVE_PORT after deploy.
+    # Egress is restricted to the hosts in src/apps/dugong/allowed_endpoints.yaml and is
+    # forwarded via traffic_forwarder.py (wired in run.sh).

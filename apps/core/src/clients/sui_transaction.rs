@@ -1,21 +1,47 @@
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use hex;
-use sui_sdk::rpc_types::{SuiMoveValue, SuiObjectDataOptions, SuiParsedData};
+use sui_sdk::rpc_types::{
+    SuiMoveValue, SuiObjectDataOptions, SuiParsedData, SuiTransactionBlockResponseOptions,
+};
 use sui_sdk::types::base_types::{ObjectID, ObjectRef, SuiAddress};
 use sui_sdk::types::dynamic_field::DynamicFieldName;
 use sui_sdk::types::programmable_transaction_builder::ProgrammableTransactionBuilder;
-use sui_sdk::types::transaction::{Command, ObjectArg, ProgrammableMoveCall, TransactionData};
+use sui_sdk::types::transaction_driver_types::ExecuteTransactionRequestType;
+use sui_sdk::types::transaction::{
+    Command, ObjectArg, ProgrammableMoveCall, Transaction, TransactionData, TransactionKind,
+};
 use sui_sdk::types::TypeTag;
 use sui_sdk::{SuiClient, SuiClientBuilder};
-use sui_types::crypto::{DefaultHash, Signer, SuiKeyPair};
+use sui_types::crypto::{DefaultHash, Signature, Signer, SuiKeyPair};
 // HashFunction trait is needed for DefaultHash methods (update/finalize)
 use fastcrypto::hash::HashFunction;
+// ToFromBytes provides GenericSignature::from_bytes for the client-supplied signature.
+use fastcrypto::traits::ToFromBytes;
 use serde_json::Value;
 use shared_crypto::intent::{Intent, IntentMessage};
 use std::str::FromStr;
+use sui_types::signature::GenericSignature;
 use sui_types::transaction::{SharedObjectMutability, TransactionDataAPI};
 use tracing::info;
+
+/// Fixed gas budget (0.1 SUI) for backend-sponsored fallback transactions. The
+/// covered flows (deposit/withdraw/faucet) all cost a small fraction of this;
+/// any unused gas is refunded to the backend signer.
+const FALLBACK_GAS_BUDGET: u64 = 100_000_000;
+
+/// A transaction sponsored directly by the backend signer, used as a fallback
+/// when Enoki sponsorship is unavailable.
+pub struct BackendSponsoredTx {
+    /// Opaque handle the client echoes back to the execute endpoint. Also the
+    /// key under which the pending transaction is cached server-side.
+    pub digest: String,
+    /// Base64 of the full sponsored `TransactionData` for the client to sign.
+    pub bytes_base64: String,
+    /// BCS of the same `TransactionData`, cached until the client submits its
+    /// signature to the execute endpoint.
+    pub tx_data_bytes: Vec<u8>,
+}
 
 use super::enoki::EnokiClient;
 use crate::config::Config;
@@ -76,6 +102,147 @@ impl SuiTransactionBuilder {
             keypair,
             config,
         })
+    }
+
+    // ====== Backend Gas-Sponsorship Fallback ======
+    //
+    // These helpers let the backend sponsor gas directly (paying from the
+    // backend signer's own SUI coins) when Enoki sponsorship fails, so
+    // client-driven transactions (deposit / withdraw / faucet) still go through.
+    // They mirror Enoki's two-step sponsor→execute handshake without changing
+    // the client: `build_backend_sponsored_transaction` returns the full
+    // `TransactionData` for the user to sign, and
+    // `execute_backend_sponsored_transaction` co-signs it as the gas owner and
+    // submits it.
+
+    /// Build a transaction sponsored by the backend signer from the client's
+    /// transaction-kind bytes (base64 BCS of a `TransactionKind`).
+    pub async fn build_backend_sponsored_transaction(
+        &self,
+        tx_kind_base64: &str,
+        sender: &str,
+    ) -> Result<BackendSponsoredTx> {
+        let sender_addr = SuiAddress::from_str(sender)
+            .map_err(|e| anyhow!("Invalid sender address {}: {}", sender, e))?;
+
+        let kind_bytes = BASE64
+            .decode(tx_kind_base64)
+            .context("Failed to decode transaction kind bytes")?;
+        let tx_kind: TransactionKind =
+            bcs::from_bytes(&kind_bytes).context("Failed to deserialize transaction kind")?;
+
+        let gas_price = self
+            .sui_client
+            .read_api()
+            .get_reference_gas_price()
+            .await
+            .context("Failed to fetch reference gas price")?;
+
+        let gas_payment = self.select_gas_coins(FALLBACK_GAS_BUDGET).await?;
+
+        // Sender pays for the move calls; the backend signer owns the gas.
+        let tx_data = TransactionData::new_with_gas_coins_allow_sponsor(
+            tx_kind,
+            sender_addr,
+            gas_payment,
+            FALLBACK_GAS_BUDGET,
+            gas_price,
+            self.signer,
+        );
+
+        let tx_data_bytes =
+            bcs::to_bytes(&tx_data).context("Failed to serialize sponsored transaction data")?;
+
+        // Opaque handle for the client to echo back — a Blake2b digest of the
+        // transaction data, deterministic and collision-resistant enough to key
+        // the pending-transaction cache.
+        let mut hasher = DefaultHash::default();
+        hasher.update(&tx_data_bytes);
+        let digest = hex::encode(hasher.finalize().digest);
+
+        Ok(BackendSponsoredTx {
+            digest,
+            bytes_base64: BASE64.encode(&tx_data_bytes),
+            tx_data_bytes,
+        })
+    }
+
+    /// Co-sign a backend-sponsored transaction with the client's signature and
+    /// submit it. `tx_data_bytes` is the BCS returned by
+    /// `build_backend_sponsored_transaction`; `user_signature_base64` is the
+    /// client's signature over that transaction data.
+    pub async fn execute_backend_sponsored_transaction(
+        &self,
+        tx_data_bytes: &[u8],
+        user_signature_base64: &str,
+    ) -> Result<String> {
+        let tx_data: TransactionData = bcs::from_bytes(tx_data_bytes)
+            .context("Failed to deserialize cached sponsored transaction data")?;
+
+        // Client (sender) signature, as produced by the wallet.
+        let user_sig_bytes = BASE64
+            .decode(user_signature_base64)
+            .context("Failed to decode client signature")?;
+        let user_sig = GenericSignature::from_bytes(&user_sig_bytes)
+            .map_err(|e| anyhow!("Invalid client signature: {}", e))?;
+
+        // Backend (gas owner) signature over the same transaction data.
+        let intent_msg = IntentMessage::new(Intent::sui_transaction(), tx_data.clone());
+        let sponsor_sig = Signature::new_secure(&intent_msg, &self.keypair);
+
+        let transaction = Transaction::from_generic_sig_data(
+            tx_data,
+            vec![user_sig, GenericSignature::Signature(sponsor_sig)],
+        );
+
+        let response = self
+            .sui_client
+            .quorum_driver_api()
+            .execute_transaction_block(
+                transaction,
+                SuiTransactionBlockResponseOptions::new().with_effects(),
+                Some(ExecuteTransactionRequestType::WaitForLocalExecution),
+            )
+            .await
+            .context("Failed to execute backend-sponsored transaction")?;
+
+        Ok(response.digest.to_string())
+    }
+
+    /// Select SUI coins from the backend signer that cover `min_budget`.
+    ///
+    /// Note: concurrent fallback sponsorships may select the same coin and then
+    /// contend at execution time (only the first submission wins). This is
+    /// acceptable for a rarely-hit fallback path; keep several SUI coins on the
+    /// backend signer to reduce contention during an Enoki outage.
+    async fn select_gas_coins(&self, min_budget: u64) -> Result<Vec<ObjectRef>> {
+        let coins = self
+            .sui_client
+            .coin_read_api()
+            .get_coins(self.signer, Some("0x2::sui::SUI".to_string()), None, None)
+            .await
+            .context("Failed to fetch backend signer gas coins")?;
+
+        let mut selected = Vec::new();
+        let mut total: u64 = 0;
+        for coin in coins.data {
+            total += coin.balance;
+            selected.push(coin.object_ref());
+            if total >= min_budget {
+                break;
+            }
+        }
+
+        if total < min_budget {
+            return Err(anyhow!(
+                "Backend signer {} has insufficient SUI for gas fallback (have {}, need {})",
+                self.signer,
+                total,
+                min_budget
+            ));
+        }
+
+        Ok(selected)
     }
 
     /// Submit a transfer transaction to the blockchain

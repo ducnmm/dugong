@@ -6,8 +6,9 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::webhook::handler::AppState;
 use dugong_core::clients::enclave::EnclaveClient;
@@ -1667,9 +1668,15 @@ pub async fn sponsor_transaction(
         state.config.enoki_base_url.clone(),
     );
 
-    // Create sponsored transaction
+    // Create sponsored transaction. On Enoki failure, fall back to sponsoring
+    // gas directly from the backend signer so client transactions still go
+    // through (see backend_sponsor_fallback).
     match enoki_client
-        .create_sponsored_transaction(request.tx_bytes, request.sender, request.allowed_addresses)
+        .create_sponsored_transaction(
+            request.tx_bytes.clone(),
+            request.sender.clone(),
+            request.allowed_addresses,
+        )
         .await
     {
         Ok(response) => {
@@ -1679,16 +1686,93 @@ pub async fn sponsor_transaction(
                 digest: response.digest,
             }))
         }
-        Err(err) => {
-            tracing::error!("Failed to sponsor transaction: {:?}", err);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(SponsorErrorResponse {
-                    error: format!("Could not create sponsored transaction: {}", err),
-                }),
-            ))
+        Err(enoki_err) => {
+            tracing::warn!(
+                "Enoki sponsorship failed, attempting backend gas fallback: {:#}",
+                enoki_err
+            );
+            backend_sponsor_fallback(&state, &request.tx_bytes, &request.sender, &enoki_err).await
         }
     }
+}
+
+/// Sponsor gas directly from the backend signer when Enoki is unavailable.
+///
+/// Builds a transaction whose gas is owned by the backend signer, caches the
+/// serialized `TransactionData` keyed by an opaque digest, and returns the
+/// bytes for the client to sign — mirroring Enoki's sponsor response so the
+/// frontend flow is unchanged. `execute_sponsored_transaction` later co-signs
+/// and submits it.
+async fn backend_sponsor_fallback(
+    state: &Arc<AppState>,
+    tx_bytes: &str,
+    sender: &str,
+    enoki_err: &anyhow::Error,
+) -> Result<Json<SponsorTxResponse>, (StatusCode, Json<SponsorErrorResponse>)> {
+    let builder = SuiTransactionBuilder::new(state.config.clone())
+        .await
+        .map_err(|e| {
+            tracing::error!("Backend sponsor fallback unavailable: {:#}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SponsorErrorResponse {
+                    error: format!(
+                        "Enoki sponsorship failed ({}) and backend fallback is unavailable ({})",
+                        enoki_err, e
+                    ),
+                }),
+            )
+        })?;
+
+    let sponsored = builder
+        .build_backend_sponsored_transaction(tx_bytes, sender)
+        .await
+        .map_err(|e| {
+            tracing::error!("Backend sponsor fallback failed: {:#}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SponsorErrorResponse {
+                    error: format!(
+                        "Enoki sponsorship failed ({}) and backend fallback failed ({})",
+                        enoki_err, e
+                    ),
+                }),
+            )
+        })?;
+
+    cache_pending_sponsored_tx(
+        &state.sponsor_fallback_cache,
+        sponsored.digest.clone(),
+        sponsored.tx_data_bytes,
+    );
+
+    tracing::info!(
+        digest = %sponsored.digest,
+        "Backend-sponsored fallback transaction created"
+    );
+    Ok(Json(SponsorTxResponse {
+        bytes: sponsored.bytes_base64,
+        digest: sponsored.digest,
+    }))
+}
+
+/// How long a pending backend-sponsored transaction stays cached before it is
+/// evicted (the client abandoned it, e.g. by not signing).
+const SPONSOR_FALLBACK_TTL: Duration = Duration::from_secs(600);
+
+/// Cache a pending backend-sponsored transaction, first evicting expired
+/// entries so abandoned sponsorships don't accumulate.
+fn cache_pending_sponsored_tx(
+    cache: &Mutex<HashMap<String, (Vec<u8>, Instant)>>,
+    digest: String,
+    tx_data_bytes: Vec<u8>,
+) {
+    let now = Instant::now();
+    let mut map = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.retain(|_, (_, inserted)| now.duration_since(*inserted) < SPONSOR_FALLBACK_TTL);
+    map.insert(digest, (tx_data_bytes, now));
 }
 
 /// Request body for executing a sponsored transaction
@@ -1718,6 +1802,20 @@ pub async fn execute_sponsored_transaction(
         "Execute sponsored transaction request received"
     );
 
+    // If this digest belongs to a backend-sponsored fallback transaction,
+    // co-sign it with the backend signer and submit it directly (bypassing
+    // Enoki, which was unavailable when it was created).
+    let cached = {
+        let mut cache = state
+            .sponsor_fallback_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.remove(&request.digest)
+    };
+    if let Some((tx_data_bytes, _inserted)) = cached {
+        return execute_backend_sponsor_fallback(&state, &tx_data_bytes, &request.signature).await;
+    }
+
     // Create Enoki client - use configured network
     let enoki_client = EnokiClient::with_base_url(
         state.config.enoki_api_key.clone(),
@@ -1742,6 +1840,47 @@ pub async fn execute_sponsored_transaction(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(SponsorErrorResponse {
                     error: format!("Could not execute sponsored transaction: {}", err),
+                }),
+            ))
+        }
+    }
+}
+
+/// Co-sign and submit a backend-sponsored fallback transaction (previously
+/// cached by `backend_sponsor_fallback`) using the client's signature.
+async fn execute_backend_sponsor_fallback(
+    state: &Arc<AppState>,
+    tx_data_bytes: &[u8],
+    user_signature: &str,
+) -> Result<Json<ExecuteSponsoredTxResponse>, (StatusCode, Json<SponsorErrorResponse>)> {
+    tracing::info!("Executing backend-sponsored fallback transaction");
+
+    let builder = SuiTransactionBuilder::new(state.config.clone())
+        .await
+        .map_err(|e| {
+            tracing::error!("Backend sponsor fallback unavailable: {:#}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SponsorErrorResponse {
+                    error: format!("Backend fallback unavailable: {}", e),
+                }),
+            )
+        })?;
+
+    match builder
+        .execute_backend_sponsored_transaction(tx_data_bytes, user_signature)
+        .await
+    {
+        Ok(digest) => {
+            tracing::info!(digest = %digest, "Backend-sponsored fallback transaction executed");
+            Ok(Json(ExecuteSponsoredTxResponse { digest }))
+        }
+        Err(err) => {
+            tracing::error!("Failed to execute backend-sponsored transaction: {:#}", err);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SponsorErrorResponse {
+                    error: format!("Could not execute backend-sponsored transaction: {}", err),
                 }),
             ))
         }

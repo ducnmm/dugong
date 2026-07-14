@@ -1,10 +1,13 @@
 # Build context MUST be the repo root (workspace Cargo.lock lives there).
 #
-# NOTE: nautilus-server is designed to run inside an AWS Nitro Enclave.
-# It builds and serves HTTP fine on Railway, but the /get_attestation
-# endpoint calls the NSM driver (/dev/nsm) which does not exist outside
-# a Nitro Enclave and will return an error. Deploy here only for the
-# non-attestation endpoints / integration testing.
+# NOTE: this Dockerfile is TESTING-ONLY and is NOT reproducible. Use it for
+# non-attestation integration testing (e.g. Railway): nautilus-server builds
+# and serves HTTP fine, but /get_attestation calls the NSM driver (/dev/nsm),
+# which does not exist outside a Nitro Enclave and will return an error.
+#
+# For the ATTESTABLE production enclave, do NOT use this image. Build the
+# reproducible Oyster image (Marlin `nix.sh`) so PCRs are deterministic, then
+# deploy/verify/register per docs/enclave-oyster-deploy.md.
 FROM rust:1-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

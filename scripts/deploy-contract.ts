@@ -183,6 +183,9 @@ const PACKAGE_CONFIGS: Record<PackageName, PackageConfig> = {
       dugongRegistryId: [
         { envFile: API_ENV, envKey: "DUGONG_REGISTRY_ID" },
         { envFile: INDEXER_ENV, envKey: "DUGONG_REGISTRY_ID" },
+        // Frontend faucet mints DUG from the registry treasury, so the web app
+        // needs the registry object id too.
+        { envFile: WEB_ENV, envKey: "VITE_DUGONG_REGISTRY_ID" },
       ],
       // MarketRegistry — indexer doesn't read this (optional in Config), so it
       // stays out of the indexer file.

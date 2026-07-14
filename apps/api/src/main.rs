@@ -44,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         db,
         redis,
+        sponsor_fallback_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     });
 
     let processor_state = state.clone();

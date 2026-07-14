@@ -63,11 +63,18 @@ function formatBalance(balance: bigint, decimals: number): string {
 }
 
 /**
- * Hook to fetch all coins in the connected wallet with metadata
+ * Hook to fetch all coins in a wallet with metadata.
+ *
+ * By default it reads the currently connected wallet. Pass an explicit
+ * `addressOverride` to read an arbitrary address instead (e.g. the account's
+ * linked wallet, which may differ from — or not require — a connected wallet).
+ * Passing `null`/`undefined` as the override disables the query.
  */
-export function useWalletCoins() {
-  const { address } = useCustomWallet();
+export function useWalletCoins(addressOverride?: string | null) {
+  const { address: connectedAddress } = useCustomWallet();
   const suiClient = useSuiClient();
+  const address =
+    addressOverride !== undefined ? addressOverride : connectedAddress;
 
   return useQuery({
     queryKey: ['wallet-coins', address],

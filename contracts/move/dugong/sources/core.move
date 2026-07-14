@@ -20,6 +20,7 @@ module dugong::dug {
     const EReplayAttempt: u64 = 3;
     const ECoinTypeMismatch: u64 = 4;
     const EInsufficientBalance: u64 = 5;
+    const EFaucetCooldown: u64 = 6;
     const EOwnerNotSet: u64 = 7;
     const EAlreadyLinked: u64 = 8;
     const ETweetAlreadyProcessed: u64 = 9;
@@ -62,6 +63,13 @@ module dugong::dug {
     const DUG_DECIMALS: u8 = 9;
     const STARTER_DUG_BALANCE: u64 = 1_000_000_000; // 1 DUG
 
+    // ====== Faucet Constants ======
+
+    /// DUG minted per faucet claim.
+    const FAUCET_DUG_AMOUNT: u64 = 10_000_000_000; // 10 DUG
+    /// Minimum time (ms) between faucet claims for a given account.
+    const FAUCET_COOLDOWN_MS: u64 = 86_400_000; // 24 hours
+
     // ====== Core Structs ======
 
     /// One-Time Witness for the DUG coin module (required for init function)
@@ -86,6 +94,7 @@ module dugong::dug {
         owner_address: Option<address>, // Linked wallet
         processed_tweets: Table<String, bool>, // Track processed tweet IDs
         last_timestamp: u64,            // Replay protection
+        last_faucet_ms: u64,            // Last faucet claim time (ms), for cooldown
     }
 
     // ====== Payload Structs (must match Rust enclave) ======
@@ -178,11 +187,16 @@ module dugong::dug {
         // Create enclave capability and config using DUGONG identity
         let cap = enclave::new_cap(DUGONG {}, ctx);
 
+        // The EnclaveConfig is seeded with debug-zero PCRs. These are placeholders: they
+        // MUST be replaced with the real, attested PCR0/1/2 after deploying the enclave to
+        // Marlin Oyster, by calling `enclave::update_pcrs` with this config's Cap. Until
+        // then, `verify_signature` is not anchored to an attested image. See the post-deploy
+        // registration steps in docs/enclave-oyster-deploy.md (Step 5).
         cap.create_enclave_config(
             b"dugong enclave".to_string(),
-            x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", // pcr0 (debug)
-            x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", // pcr1 (debug)
-            x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", // pcr2 (debug)
+            x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", // pcr0 (debug — update_pcrs post-deploy)
+            x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", // pcr1 (debug — update_pcrs post-deploy)
+            x"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", // pcr2 (debug — update_pcrs post-deploy)
             ctx,
         );
 
@@ -217,6 +231,7 @@ module dugong::dug {
     public fun e_replay_attempt(): u64 { EReplayAttempt }
     public fun e_coin_type_mismatch(): u64 { ECoinTypeMismatch }
     public fun e_insufficient_balance(): u64 { EInsufficientBalance }
+    public fun e_faucet_cooldown(): u64 { EFaucetCooldown }
     public fun e_owner_not_set(): u64 { EOwnerNotSet }
     public fun e_already_linked(): u64 { EAlreadyLinked }
     public fun e_tweet_already_processed(): u64 { ETweetAlreadyProcessed }
@@ -254,6 +269,8 @@ module dugong::dug {
 
     public fun dug_decimals(): u8 { DUG_DECIMALS }
     public fun starter_dug_balance(): u64 { STARTER_DUG_BALANCE }
+    public fun faucet_dug_amount(): u64 { FAUCET_DUG_AMOUNT }
+    public fun faucet_cooldown_ms(): u64 { FAUCET_COOLDOWN_MS }
 
     // ====== Public Functions for Registry Operations ======
 
@@ -287,6 +304,10 @@ module dugong::dug {
         account.last_timestamp
     }
 
+    public fun account_last_faucet_ms(account: &DugongAccount): u64 {
+        account.last_faucet_ms
+    }
+
     fun account_balances(account: &DugongAccount): &Bag {
         &account.balances
     }
@@ -309,6 +330,10 @@ module dugong::dug {
 
     public(package) fun account_set_last_timestamp(account: &mut DugongAccount, timestamp: u64) {
         account.last_timestamp = timestamp;
+    }
+
+    public(package) fun account_set_last_faucet_ms(account: &mut DugongAccount, ms: u64) {
+        account.last_faucet_ms = ms;
     }
 
     public(package) fun account_add_processed_tweet(account: &mut DugongAccount, tweet_id: String) {
@@ -364,17 +389,31 @@ module dugong::dug {
         }
     }
 
+    /// Mint `amount` of DUG from the registry treasury into `account`.
+    /// Returns (coin type, amount) for event emission.
+    fun mint_dug_into_account(
+        registry: &mut DugongRegistry,
+        account: &mut DugongAccount,
+        amount: u64,
+    ): (String, u64) {
+        let minted = coin::mint_balance<DUG>(&mut registry.dug_treasury_cap, amount);
+        account_credit_balance(account, minted);
+
+        (coin_type_string<DUG>(), amount)
+    }
+
     public(package) fun grant_starter_dug(
         registry: &mut DugongRegistry,
         account: &mut DugongAccount,
     ): (String, u64) {
-        let starter_balance = coin::mint_balance<DUG>(
-            &mut registry.dug_treasury_cap,
-            STARTER_DUG_BALANCE,
-        );
-        account_credit_balance(account, starter_balance);
+        mint_dug_into_account(registry, account, STARTER_DUG_BALANCE)
+    }
 
-        (coin_type_string<DUG>(), STARTER_DUG_BALANCE)
+    public(package) fun grant_faucet_dug(
+        registry: &mut DugongRegistry,
+        account: &mut DugongAccount,
+    ): (String, u64) {
+        mint_dug_into_account(registry, account, FAUCET_DUG_AMOUNT)
     }
 
     // ====== Public Function to Create New Account ======
@@ -392,6 +431,7 @@ module dugong::dug {
             owner_address: option::none(),
             processed_tweets: table::new(ctx),
             last_timestamp: 0,
+            last_faucet_ms: 0,
         }
     }
 

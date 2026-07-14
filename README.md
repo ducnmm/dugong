@@ -18,6 +18,29 @@ Dugong monorepo. Rust services live in a single Cargo workspace rooted at
 - `apps/web` — frontend (Vite + React).
 - `contracts/move` — Move contracts.
 
+## Quick start
+
+Start the entire local stack (Postgres + Redis, Nautilus, API, indexer,
+worker, web) with one command:
+
+```bash
+pnpm dev            # or: ./scripts/dev.sh
+```
+
+It brings up the Docker infra, seeds any missing `.env` files from their
+`.env.example`, builds the Rust services, and runs everything with
+colour-coded logs. Ctrl-C stops all services (Postgres/Redis stay up).
+
+```bash
+pnpm dev:infra                 # just Postgres + Redis
+pnpm dev:down                  # stop Postgres + Redis
+./scripts/dev.sh --no-worker   # skip services needing X credentials
+./scripts/dev.sh --help        # all flags
+```
+
+Fill in the secrets in `apps/api/.env` before the API/worker will do real
+work — see [docs/local-dev-guide.md](docs/local-dev-guide.md).
+
 ## Quick commands
 
 ```bash

@@ -11,14 +11,23 @@ use dugong_core::constants::{events, redis};
 use dugong_core::db::models::WebhookEvent;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tracing::{info, warn};
+
+/// Pending backend-sponsored transactions awaiting the client signature, keyed
+/// by the opaque digest returned from `/sponsor_transaction`. Populated only
+/// when Enoki sponsorship fails and the backend sponsors gas directly; entries
+/// are consumed by `/execute_sponsored_transaction`.
+pub type SponsorFallbackCache = Arc<Mutex<HashMap<String, (Vec<u8>, Instant)>>>;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
     pub db: PgPool,
     pub redis: RedisClient,
+    pub sponsor_fallback_cache: SponsorFallbackCache,
 }
 
 #[derive(Deserialize)]

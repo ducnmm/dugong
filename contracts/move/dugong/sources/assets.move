@@ -4,8 +4,41 @@
 /// Asset management module for coin operations
 module dugong::assets {
     use sui::coin::Coin;
-    use dugong::dug::{Self, DugongAccount};
+    use sui::clock::Clock;
+    use dugong::dug::{Self, DugongRegistry, DugongAccount};
     use dugong::events;
+
+    // ====== Faucet Functions ======
+
+    /// Claim faucet DUG into the account.
+    ///
+    /// Owner-authenticated (same as deposit/withdraw) so it can run as a
+    /// wallet-signed, gas-sponsored transaction from the dApp. Rate-limited to
+    /// one claim per `faucet_cooldown_ms` window per account to prevent abuse.
+    public fun faucet(
+        registry: &mut DugongRegistry,
+        account: &mut DugongAccount,
+        clock: &Clock,
+        ctx: &TxContext,
+    ) {
+        // Only the linked wallet owner may claim for this account.
+        assert!(dug::account_owner_address(account).is_some(), dug::e_owner_not_set());
+        assert!(ctx.sender() == *dug::account_owner_address(account).borrow(), dug::e_not_owner());
+
+        // Enforce the cooldown between claims. A zero `last_faucet_ms` means the
+        // account has never claimed, so the first claim is always allowed.
+        let now_ms = clock.timestamp_ms();
+        let last_ms = dug::account_last_faucet_ms(account);
+        assert!(
+            last_ms == 0 || now_ms >= last_ms + dug::faucet_cooldown_ms(),
+            dug::e_faucet_cooldown(),
+        );
+        dug::account_set_last_faucet_ms(account, now_ms);
+
+        let (coin_type, amount) = dug::grant_faucet_dug(registry, account);
+
+        events::emit_coin_deposited(dug::account_xid(account), coin_type, amount);
+    }
 
     // ====== Coin Functions ======
 

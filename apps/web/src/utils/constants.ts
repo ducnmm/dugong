@@ -5,8 +5,16 @@ export const ENCLAVE_URL = import.meta.env.VITE_ENCLAVE_URL || 'http://localhost
 // Sui Network Configuration
 export const SUI_NETWORK = import.meta.env.VITE_SUI_NETWORK || 'testnet';
 
+// X (Twitter) handle of the Dugong bot that processes tweet commands.
+// Commands must mention this handle to be picked up by the poller/webhook.
+export const BOT_HANDLE = '@DugongWallet';
+
 // Smart Contract Addresses
 export const DUGONG_PACKAGE_ID = import.meta.env.VITE_DUGONG_PACKAGE_ID || '';
+
+// Shared DugongRegistry object (holds the DUG treasury cap). Required by the
+// faucet, which mints DUG from the treasury into the caller's account.
+export const DUGONG_REGISTRY_ID = import.meta.env.VITE_DUGONG_REGISTRY_ID || '';
 
 export const CONTRACT_ADDRESSES = {
   DUGONG_ACCOUNT: import.meta.env.VITE_DUGONG_ACCOUNT_ADDRESS || '',

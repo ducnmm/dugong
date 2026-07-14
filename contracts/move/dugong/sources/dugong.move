@@ -5,6 +5,7 @@
 module dugong::dugong {
     use std::string::String;
     use sui::coin::Coin;
+    use sui::clock::Clock;
     use dugong::dug::{Self, DugongRegistry, DugongAccount};
     use dugong::account;
     use dugong::assets;
@@ -85,6 +86,15 @@ module dugong::dugong {
 
     public fun get_balance<T>(account: &DugongAccount): u64 {
         assets::get_balance<T>(account)
+    }
+
+    public fun faucet(
+        registry: &mut DugongRegistry,
+        account: &mut DugongAccount,
+        clock: &Clock,
+        ctx: &TxContext,
+    ) {
+        assets::faucet(registry, account, clock, ctx);
     }
 
     // ====== Transfer Function Wrappers ======

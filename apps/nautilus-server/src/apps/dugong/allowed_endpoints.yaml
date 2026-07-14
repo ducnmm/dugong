@@ -1,4 +1,11 @@
 # External endpoints that the enclave is allowed to access.
+#
+# Audit (marlin-oyster-enclave-deploy): the dugong enclave's only outbound calls are the
+# Twitter/X APIs below (see src/apps/dugong/mod.rs). It does NOT call Sui directly — Sui
+# access lives in apps/api and apps/core, not in the enclave. Under Oyster, egress is
+# restricted to these hosts. Keep this list in sync with run.sh, which hardcodes the
+# matching host->loopback records and traffic_forwarder.py entries; adding a host here
+# requires adding it in run.sh too.
 endpoints:
   - api.twitterapi.io
   - api.twitter.com

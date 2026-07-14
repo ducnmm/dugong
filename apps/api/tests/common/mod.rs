@@ -113,5 +113,10 @@ pub async fn try_redis() -> Option<RedisClient> {
 /// given config (with whatever mock base URLs the caller set).
 #[allow(dead_code)]
 pub fn app_state(config: Config, db: PgPool, redis: RedisClient) -> Arc<AppState> {
-    Arc::new(AppState { config, db, redis })
+    Arc::new(AppState {
+        config,
+        db,
+        redis,
+        sponsor_fallback_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+    })
 }

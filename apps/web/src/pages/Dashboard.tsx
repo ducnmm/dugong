@@ -9,15 +9,18 @@ import {
   Check,
   ChevronDown,
   Copy,
+  Droplets,
   ExternalLink,
   Info,
   LayoutDashboard,
   Activity,
+  Plus,
   X,
 } from 'lucide-react';
 import { TokenIcon } from '../components/TokenIcon';
+import { CreateEventPanel } from '../components/CreateEventPanel';
 import { useAuth } from '../contexts/useAuth';
-import { useDeposit, useWithdraw } from '../hooks/useDugongTransactions';
+import { useDeposit, useFaucet, useWithdraw } from '../hooks/useDugongTransactions';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useLinkWallet } from '../hooks/useLinkWallet';
 import { useWalletCoins, type WalletCoin } from '../hooks/useWalletCoins';
@@ -34,7 +37,7 @@ import {
 import { getCoinSymbol } from '../utils/constants';
 import { AccountMenu } from '../components/Header';
 
-type DashboardTab = 'overview' | 'activity';
+type DashboardTab = 'overview' | 'activity' | 'create';
 type ModalMode = 'select' | 'tokens';
 
 const shortenWalletAddress = (address: string, visibleCharsPerSide = 8) => {
@@ -79,7 +82,26 @@ const getAmountPrefix = (tx: TransactionResponse, viewedXid?: string) => {
 
 const hasDisplayAmount = (tx: TransactionResponse) => tx.amount !== '0';
 
+// Trim a formatted balance to at most 2 decimals for display, dropping trailing
+// zeros (truncates, never rounds up, so a balance is never overstated). Only for
+// display — callers needing full precision (e.g. deposit max) use it directly.
+const formatTwoDecimals = (amount?: string): string => {
+  const [whole, decimals = ''] = (amount ?? '0').split('.');
+  const trimmed = decimals.slice(0, 2).replace(/0+$/, '');
+  return trimmed ? `${whole}.${trimmed}` : whole;
+};
+
 const getSideLabel = (tx: TransactionResponse) => tx.side?.toUpperCase();
+
+// Turn a faucet claim failure into a friendly message. The contract aborts with
+// EFaucetCooldown (code 6, in dugong::assets) when the cooldown is still active.
+const faucetErrorText = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (/FaucetCooldown/i.test(message) || /assets.*,\s*6\)/.test(message)) {
+    return 'Faucet cooldown active — try again later.';
+  }
+  return message || 'Faucet claim failed';
+};
 
 export const Dashboard: React.FC = () => {
   const queryClient = useQueryClient();
@@ -89,7 +111,8 @@ export const Dashboard: React.FC = () => {
   const currentAccount = useCurrentAccount();
 
   const isPublicDashboard = !!publicTwitterId;
-  const activeTab: DashboardTab = tab === 'overview' ? 'overview' : 'activity';
+  const activeTab: DashboardTab =
+    tab === 'overview' ? 'overview' : tab === 'create' ? 'create' : 'activity';
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const transactionsPageSize = 10;
 
@@ -109,8 +132,11 @@ export const Dashboard: React.FC = () => {
   const [linkWalletSuccess, setLinkWalletSuccess] = useState<string | null>(null);
   const copyResetTimeoutRef = useRef<number | null>(null);
 
+  const [faucetMessage, setFaucetMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
   const depositMutation = useDeposit();
   const withdrawMutation = useWithdraw();
+  const faucetMutation = useFaucet();
   const { linkWallet, isLinking, error: linkError } = useLinkWallet();
   const { data: walletCoins = [], isLoading: isLoadingWalletCoins } = useWalletCoins();
 
@@ -199,6 +225,13 @@ export const Dashboard: React.FC = () => {
     currentAccount?.address &&
     currentAccount.address.toLowerCase() !== linkedWalletAddress?.toLowerCase();
 
+  // On-chain balances of the account's linked wallet — these drive the overview
+  // display (the custody balance from `balanceData` still drives withdrawals).
+  const {
+    data: linkedWalletCoins = [],
+    isLoading: isLoadingLinkedWalletCoins,
+  } = useWalletCoins(linkedWalletAddress);
+
   useDocumentTitle(
     isPublicDashboard
       ? viewedTwitterHandle
@@ -207,7 +240,7 @@ export const Dashboard: React.FC = () => {
       : 'Dashboard'
   );
 
-  const { data: balanceData, isLoading: isLoadingBalance } = useQuery({
+  const { data: balanceData } = useQuery({
     queryKey: ['dugong-balance', suiObjectId],
     queryFn: () => getAccountBalance(suiObjectId!),
     enabled: !!suiObjectId,
@@ -304,6 +337,18 @@ export const Dashboard: React.FC = () => {
       resetWithdrawModal();
     } catch (error) {
       console.error('Withdraw failed:', error);
+    }
+  };
+
+  const handleFaucet = async () => {
+    if (!suiObjectId) return;
+    setFaucetMessage(null);
+    try {
+      await faucetMutation.mutateAsync({ suiObjectId });
+      setFaucetMessage({ type: 'success', text: 'DUG claimed from the faucet!' });
+    } catch (error) {
+      console.error('Faucet claim failed:', error);
+      setFaucetMessage({ type: 'error', text: faucetErrorText(error) });
     }
   };
 
@@ -407,22 +452,23 @@ export const Dashboard: React.FC = () => {
   };
 
   const canMoveFunds = !isPublicDashboard && !!suiObjectId && !!currentAccount && !!isWalletMatched;
-  const balances = balanceData?.balances ?? [];
   const isCheckingOwnAccount =
     !isPublicDashboard && shouldFetchOwnAccount && isLoadingOwnAccount && !user?.suiObjectId;
   const isPreparingOwnAccount =
     !isPublicDashboard && hasConfirmedMissingOwnAccount && isEnsuringOwnAccount;
   const primaryBalance =
-    balances.find((token) => token.symbol.toUpperCase() === 'SUI') ?? balances[0] ?? null;
+    linkedWalletCoins.find((coin) => coin.symbol.toUpperCase() === 'SUI') ??
+    linkedWalletCoins[0] ??
+    null;
   const displayedBalance = {
-    amount: primaryBalance?.balance_formatted ?? '0',
+    amount: formatTwoDecimals(primaryBalance?.balanceFormatted),
     symbol: primaryBalance?.symbol ?? 'SUI',
   };
   const supportedTokenBalances = (['SUI', 'DUG', 'WAL', 'USDC'] as const).map((symbol) => {
-    const token = balances.find((balance) => balance.symbol.toUpperCase() === symbol);
+    const coin = linkedWalletCoins.find((c) => c.symbol.toUpperCase() === symbol);
     return {
       symbol,
-      amount: token?.balance_formatted ?? '0',
+      amount: formatTwoDecimals(coin?.balanceFormatted),
     };
   });
   const linkedWalletLabel = linkedWalletAddress || 'Not linked';
@@ -614,7 +660,7 @@ export const Dashboard: React.FC = () => {
               }`}
             >
               <div className="flex min-h-[88px] min-w-0 flex-col justify-center pl-1 sm:pl-4 md:pl-7">
-                {isLoadingBalance || isCheckingOwnAccount ? (
+                {isLoadingLinkedWalletCoins || isCheckingOwnAccount ? (
                   <p className="animate-pulse text-3xl font-black text-black">Loading...</p>
                 ) : (
                   <div className="flex min-w-0 items-center gap-4 sm:gap-8 md:gap-10">
@@ -670,6 +716,30 @@ export const Dashboard: React.FC = () => {
                     <ArrowUpRight className="h-5 w-5" />
                     withdraw
                   </button>
+                  <button
+                    onClick={handleFaucet}
+                    disabled={!canMoveFunds || faucetMutation.isPending}
+                    title={
+                      !isWalletLinked
+                        ? 'Link your wallet first to claim DUG'
+                        : isWalletMismatched
+                          ? 'Switch to your linked wallet to claim DUG'
+                          : 'Claim test DUG (rate-limited)'
+                    }
+                    className={`${fundButtonClass} bg-green-300 hover:bg-green-400`}
+                  >
+                    <Droplets className="h-5 w-5" />
+                    {faucetMutation.isPending ? 'claiming...' : 'get dug'}
+                  </button>
+                  {faucetMessage && (
+                    <p
+                      className={`text-center text-xs font-bold ${
+                        faucetMessage.type === 'success' ? 'text-black' : 'text-red-700'
+                      }`}
+                    >
+                      {faucetMessage.text}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -682,31 +752,37 @@ export const Dashboard: React.FC = () => {
                 '--tabs-left': 'clamp(-94px, calc((800px - 100vw) / 2 + 16px), 0px)',
               } as React.CSSProperties}
             >
-              {(['overview', 'activity'] as const).map((tab) => (
-                <button
-                  key={tab}
-                  className={`flex h-14 w-16 items-center justify-center rounded-lg border-4 border-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-lg sm:h-[68px] sm:w-[76px] ${
-                    activeTab === tab
-                      ? 'bg-yellow-200 text-black'
-                      : 'bg-white text-black hover:bg-cyan-200'
-                  }`}
-                  onClick={() =>
-                    navigate(
-                      isPublicDashboard
-                        ? `/account/${publicTwitterId}/dashboard/${tab}`
-                        : `/dashboard/${tab}`
-                    )
-                  }
-                  aria-label={tab === 'overview' ? 'Overview' : 'Activity'}
-                  title={tab === 'overview' ? 'Overview' : 'Activity'}
-                >
-                  {tab === 'overview' ? (
-                    <LayoutDashboard className="h-8 w-8" strokeWidth={3} />
-                  ) : (
-                    <Activity className="h-8 w-8" strokeWidth={3} />
-                  )}
-                </button>
-              ))}
+              {(['overview', 'activity', 'create'] as const).map((tab) => {
+                const tabLabel =
+                  tab === 'overview' ? 'Overview' : tab === 'activity' ? 'Activity' : 'Create';
+                return (
+                  <button
+                    key={tab}
+                    className={`flex h-14 w-16 items-center justify-center rounded-lg border-4 border-black shadow-neo-md transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-lg sm:h-[68px] sm:w-[76px] ${
+                      activeTab === tab
+                        ? 'bg-yellow-200 text-black'
+                        : 'bg-white text-black hover:bg-cyan-200'
+                    }`}
+                    onClick={() =>
+                      navigate(
+                        isPublicDashboard
+                          ? `/account/${publicTwitterId}/dashboard/${tab}`
+                          : `/dashboard/${tab}`
+                      )
+                    }
+                    aria-label={tabLabel}
+                    title={tabLabel}
+                  >
+                    {tab === 'overview' ? (
+                      <LayoutDashboard className="h-8 w-8" strokeWidth={3} />
+                    ) : tab === 'activity' ? (
+                      <Activity className="h-8 w-8" strokeWidth={3} />
+                    ) : (
+                      <Plus className="h-8 w-8" strokeWidth={3} />
+                    )}
+                  </button>
+                );
+              })}
             </nav>
 
             <div className="neo-card-strong h-[400px] w-full overflow-hidden rounded-lg bg-white p-3 sm:p-4">
@@ -762,6 +838,21 @@ export const Dashboard: React.FC = () => {
                     ))}
                   </div>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate(
+                      isPublicDashboard
+                        ? `/account/${publicTwitterId}/dashboard/create`
+                        : `/dashboard/create`
+                    )
+                  }
+                  className="flex min-h-[52px] w-full shrink-0 items-center justify-center gap-2 rounded-md border-2 border-black bg-green-300 px-4 text-sm font-black text-black shadow-neo-sm transition-all hover:-translate-x-px hover:-translate-y-px hover:shadow-neo-md sm:text-base"
+                >
+                  <Plus className="h-5 w-5" strokeWidth={3} />
+                  Create event
+                </button>
               </div>
             )}
 
@@ -825,6 +916,8 @@ export const Dashboard: React.FC = () => {
                 )}
               </div>
             )}
+
+            {activeTab === 'create' && <CreateEventPanel />}
             </div>
           </section>
         </div>

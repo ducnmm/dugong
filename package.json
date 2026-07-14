@@ -5,6 +5,9 @@
   "type": "module",
   "packageManager": "pnpm@9.15.9",
   "scripts": {
+    "dev": "bash scripts/dev.sh",
+    "dev:infra": "bash scripts/dev.sh --infra-only",
+    "dev:down": "bash scripts/dev.sh --down",
     "dev:docs": "pnpm --filter @dugong/docs dev",
     "build:docs": "pnpm --filter @dugong/docs build",
     "check:docs": "pnpm --filter @dugong/docs check",
