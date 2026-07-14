@@ -21,10 +21,10 @@ pub fn sui_event(event_type: &str, tx_digest: &str, parsed_json: Value) -> SuiEv
     .expect("construct SuiEvent fixture")
 }
 
-/// Minimal `Config` for the event fetcher, with `sui_rpc_url` and
+/// Minimal `Config` for the event fetcher, with `sui_graphql_url` and
 /// `dugong_event_package_id` overridable by the caller (the fields it reads).
 #[allow(dead_code)]
-pub fn test_config(sui_rpc_url: String, package_id: String) -> Config {
+pub fn test_config(sui_graphql_url: String, package_id: String) -> Config {
     Config {
         port: 0,
         log_level: "info".to_string(),
@@ -32,18 +32,24 @@ pub fn test_config(sui_rpc_url: String, package_id: String) -> Config {
         redis_url: "redis://localhost:6379".to_string(),
 
         twitterapi_io_api_key: "test-twitterapi-io-key".to_string(),
-        twitterapi_io_login_cookies: None,
-        twitterapi_io_proxy: None,
         twitter_webhook_secret: None,
 
         twitter_oauth2_client_id: "test-client-id".to_string(),
         twitter_oauth2_client_secret: "test-client-secret".to_string(),
         twitter_oauth2_redirect_uri: "http://localhost/callback".to_string(),
 
+        twitter_bot_user_id: None,
+
+        twitter_api_key: None,
+        twitter_api_secret: None,
+        twitter_access_token: None,
+        twitter_access_token_secret: None,
+
         token_encryption_key: Some([7u8; 32]),
         session_token_secret: Some("test-session-secret-please-change".to_string()),
 
-        sui_rpc_url,
+        sui_rpc_url: "http://localhost".to_string(),
+        sui_graphql_url,
         dugong_witness_package_id: package_id.clone(),
         // The indexer filters events on dugong_event_package_id; mirror the
         // caller-supplied id here so existing tests keep targeting it.

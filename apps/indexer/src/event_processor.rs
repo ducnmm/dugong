@@ -38,6 +38,17 @@ impl EventProcessor {
         let event_type =
             parse_event_type(&event.event_type).context("Failed to parse event type")?;
 
+        // Idempotency guard: balance handlers apply increment-style updates,
+        // so an event re-fetched after a crash-before-cursor-save (or during
+        // cursor re-anchoring edge cases) must not be applied twice.
+        if self.already_processed(event).await? {
+            debug!(
+                "Skipping already-processed event {} seq {}",
+                event.id.tx_digest, event.id.event_seq
+            );
+            return Ok(());
+        }
+
         debug!("Processing event: {} ({})", event_type, event.id.tx_digest);
 
         // Route to appropriate handler based on event type
@@ -86,6 +97,35 @@ impl EventProcessor {
             }
         }
 
+        self.mark_processed(event).await?;
+
+        Ok(())
+    }
+
+    async fn already_processed(&self, event: &SuiEvent) -> Result<bool> {
+        let seen: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM indexer_processed_events WHERE tx_digest = $1 AND event_seq = $2)",
+        )
+        .bind(&event.id.tx_digest)
+        .bind(&event.id.event_seq)
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to check processed-events ledger")?;
+        Ok(seen)
+    }
+
+    /// Record the event in the ledger AFTER its handler succeeded. A crash in
+    /// the gap re-processes at most the current event, not the whole page.
+    async fn mark_processed(&self, event: &SuiEvent) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO indexer_processed_events (tx_digest, event_seq) VALUES ($1, $2) \
+             ON CONFLICT (tx_digest, event_seq) DO NOTHING",
+        )
+        .bind(&event.id.tx_digest)
+        .bind(&event.id.event_seq)
+        .execute(&self.pool)
+        .await
+        .context("Failed to record event in processed-events ledger")?;
         Ok(())
     }
 

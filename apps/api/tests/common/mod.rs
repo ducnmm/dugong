@@ -56,18 +56,24 @@ pub fn test_config() -> Config {
         redis_url: test_redis_url(),
 
         twitterapi_io_api_key: "test-twitterapi-key".to_string(),
-        twitterapi_io_login_cookies: Some("test-login-cookies".to_string()),
-        twitterapi_io_proxy: Some("http://proxy.local:8080".to_string()),
         twitter_webhook_secret: Some("test-webhook-secret".to_string()),
 
         twitter_oauth2_client_id: "test-client-id".to_string(),
         twitter_oauth2_client_secret: "test-client-secret".to_string(),
         twitter_oauth2_redirect_uri: "http://localhost/callback".to_string(),
 
+        twitter_bot_user_id: Some("1000000000000000001".to_string()),
+
+        twitter_api_key: None,
+        twitter_api_secret: None,
+        twitter_access_token: None,
+        twitter_access_token_secret: None,
+
         token_encryption_key: Some([7u8; 32]),
         session_token_secret: Some("test-session-secret-please-change".to_string()),
 
         sui_rpc_url: "http://localhost".to_string(),
+        sui_graphql_url: "http://localhost".to_string(),
         dugong_package_id: "0x1".to_string(),
         dugong_event_package_id: "0x1".to_string(),
         dugong_witness_package_id: "0x1".to_string(),

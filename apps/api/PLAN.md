@@ -257,11 +257,8 @@ backend/
 DATABASE_URL=postgres://user:pass@localhost:45432/dugong
 REDIS_URL=redis://localhost:46379
 
-# TwitterAPI.io
+# TwitterAPI.io (reads only)
 TWITTERAPI_IO_API_KEY=...
-# Required only when posting reply tweets via TwitterAPI.io
-TWITTERAPI_IO_LOGIN_COOKIES=...
-TWITTERAPI_IO_PROXY=...
 
 # Sui
 SUI_RPC_URL=https://fullnode.testnet.sui.io:443

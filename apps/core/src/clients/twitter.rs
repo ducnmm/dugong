@@ -1,14 +1,24 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{
+    engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD as BASE64_URL},
+    Engine,
+};
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use std::env;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::config::Config;
+use crate::oauth::{mint_fresh_access_token, MintError, MintedAccessToken};
 
 /// Max candidates fetched from TwitterAPI.io advanced search per campaign resolution.
 const MAX_CAMPAIGN_SEARCH_RESULTS: usize = 50;
@@ -75,6 +85,36 @@ pub struct RewardCampaignCandidate {
 pub const TWITTER_API_BASE_URL: &str = "https://api.twitter.com";
 /// Default production base URL for the TwitterAPI.io third-party service.
 pub const TWITTERAPI_IO_BASE_URL: &str = "https://api.twitterapi.io";
+
+/// User-facing OAuth 2.0 authorization page (NOT `api.twitter.com`). This is
+/// where a person grants the app access; the returned `code` is then exchanged
+/// for tokens at `{TWITTER_API_BASE_URL}/2/oauth2/token`.
+pub const TWITTER_AUTHORIZE_URL: &str = "https://x.com/i/oauth2/authorize";
+
+/// A PKCE (RFC 7636) verifier/challenge pair for the authorization-code flow.
+pub struct Pkce {
+    pub verifier: String,
+    pub challenge: String,
+}
+
+/// Generate a fresh PKCE pair: a base64url `verifier` (32 random bytes) and its
+/// S256 `challenge` (base64url(SHA-256(verifier))).
+pub fn generate_pkce() -> Pkce {
+    use aes_gcm::aead::{rand_core::RngCore, OsRng};
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let verifier = BASE64_URL.encode(bytes);
+    let challenge = BASE64_URL.encode(Sha256::digest(verifier.as_bytes()));
+    Pkce { verifier, challenge }
+}
+
+/// Generate a random `state` value (base64url, 16 bytes) for CSRF protection.
+pub fn generate_state() -> String {
+    use aes_gcm::aead::{rand_core::RngCore, OsRng};
+    let mut bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    BASE64_URL.encode(bytes)
+}
 
 // ====== OAuth 2.0 Types ======
 
@@ -145,6 +185,42 @@ impl TwitterOAuth2Client {
             client_secret: config.twitter_oauth2_client_secret.clone(),
             api_base,
         }
+    }
+
+    /// Construct directly from credentials, for out-of-process helpers that do
+    /// not build a full server [`Config`] (e.g. `dugong-bot-authorize`).
+    pub fn from_parts(client_id: String, client_secret: String, api_base: String) -> Self {
+        Self {
+            http_client: Client::new(),
+            client_id,
+            client_secret,
+            api_base,
+        }
+    }
+
+    /// Build the user-facing authorization URL to open in a browser. `scopes`
+    /// are space-joined; PKCE uses S256. Query values are percent-encoded.
+    pub fn authorize_url(
+        &self,
+        redirect_uri: &str,
+        scopes: &[&str],
+        state: &str,
+        code_challenge: &str,
+    ) -> String {
+        reqwest::Url::parse_with_params(
+            TWITTER_AUTHORIZE_URL,
+            &[
+                ("response_type", "code"),
+                ("client_id", self.client_id.as_str()),
+                ("redirect_uri", redirect_uri),
+                ("scope", &scopes.join(" ")),
+                ("state", state),
+                ("code_challenge", code_challenge),
+                ("code_challenge_method", "S256"),
+            ],
+        )
+        .expect("authorize URL parameters are always serializable")
+        .to_string()
     }
 
     /// Exchange authorization code for access token (OAuth 2.0 with PKCE)
@@ -309,37 +385,294 @@ impl TwitterOAuth2Client {
     }
 }
 
-/// TwitterAPI.io client for posting replies and public user lookup.
+/// Client for the bot's Twitter interactions.
+///
+/// - **Reply posting** goes through the official X API (`POST /2/tweets`),
+///   authenticating as the bot account via [`BotPoster`].
+/// - **Reads** (public user lookup, campaign candidate search) still go through
+///   TwitterAPI.io with `X-API-Key`.
 pub struct TwitterClient {
     http_client: Client,
     twitterapi_io_api_key: String,
-    twitterapi_io_login_cookies: Option<String>,
-    twitterapi_io_proxy: Option<String>,
     twitterapi_io_base: String,
+    /// Base URL for the official X API (`POST /2/tweets`), from `TWITTER_API_BASE_URL`.
+    twitter_api_base: String,
+    /// Bot posting credentials. `None` disables official-API reply posting
+    /// (reads still work); posting then fails with a clear config error.
+    bot: Option<BotAuth>,
     docs_url: String,
     web_url: String,
 }
 
-/// Request body for creating a tweet through TwitterAPI.io.
-#[derive(Debug, Serialize)]
-struct CreateTweetRequest {
-    login_cookies: String,
-    tweet_text: String,
-    proxy: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reply_to_tweet_id: Option<String>,
+/// How long before an access token's expiry we proactively refresh it, so an
+/// in-flight request never races the expiry boundary.
+const TOKEN_EXPIRY_SKEW_SECS: i64 = 60;
+
+/// How the bot authenticates `POST /2/tweets` calls. OAuth 1.0a keys win over
+/// the OAuth 2.0 path when both are configured (see `Config` field docs).
+enum BotAuth {
+    /// Static OAuth 1.0a user-context keys — each request is HMAC-SHA1 signed;
+    /// nothing is stored, refreshed or rotated.
+    OAuth1(OAuth1Credentials),
+    /// DB-stored OAuth 2.0 user-context token, minted/refreshed on demand.
+    OAuth2(BotPoster),
 }
 
-/// Response from creating a tweet
+/// OAuth 1.0a user-context credentials from the X developer portal's
+/// "Keys and tokens" page: the app's consumer API key/secret plus the bot
+/// account's access token/secret.
+#[derive(Clone)]
+pub struct OAuth1Credentials {
+    pub api_key: String,
+    pub api_secret: String,
+    pub access_token: String,
+    pub access_token_secret: String,
+}
+
+impl OAuth1Credentials {
+    /// All four values from config, or `None` if any is missing (partial
+    /// configuration is rejected at startup by `Config::ensure_reply_capable`).
+    fn from_config(config: &Config) -> Option<Self> {
+        Some(Self {
+            api_key: config.twitter_api_key.clone()?,
+            api_secret: config.twitter_api_secret.clone()?,
+            access_token: config.twitter_access_token.clone()?,
+            access_token_secret: config.twitter_access_token_secret.clone()?,
+        })
+    }
+
+    /// `Authorization: OAuth ...` header value for `method` on `url` with a
+    /// fresh nonce and the current timestamp.
+    fn authorization_header(&self, method: &str, url: &str) -> String {
+        use aes_gcm::aead::{rand_core::RngCore, OsRng};
+        let mut nonce_bytes = [0u8; 16];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = hex::encode(nonce_bytes);
+        let timestamp = Utc::now().timestamp().to_string();
+        self.authorization_header_at(method, url, &nonce, &timestamp)
+    }
+
+    /// Deterministic core of [`Self::authorization_header`], split out so the
+    /// signature can be tested against a fixed nonce/timestamp.
+    ///
+    /// `url` must be exactly the URL the request is sent to, with no query
+    /// string. The JSON body of `POST /2/tweets` is not form-encoded, so per
+    /// the OAuth 1.0a spec only the `oauth_*` protocol parameters enter the
+    /// signature base string.
+    fn authorization_header_at(
+        &self,
+        method: &str,
+        url: &str,
+        nonce: &str,
+        timestamp: &str,
+    ) -> String {
+        // Already in the byte-sorted order the base string requires.
+        let params = [
+            ("oauth_consumer_key", self.api_key.as_str()),
+            ("oauth_nonce", nonce),
+            ("oauth_signature_method", "HMAC-SHA1"),
+            ("oauth_timestamp", timestamp),
+            ("oauth_token", self.access_token.as_str()),
+            ("oauth_version", "1.0"),
+        ];
+        let param_string = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", oauth1_percent_encode(k), oauth1_percent_encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let base_string = format!(
+            "{}&{}&{}",
+            method.to_uppercase(),
+            oauth1_percent_encode(url),
+            oauth1_percent_encode(&param_string)
+        );
+        let signing_key = format!(
+            "{}&{}",
+            oauth1_percent_encode(&self.api_secret),
+            oauth1_percent_encode(&self.access_token_secret)
+        );
+
+        let mut mac = Hmac::<Sha1>::new_from_slice(signing_key.as_bytes())
+            .expect("HMAC accepts keys of any length");
+        mac.update(base_string.as_bytes());
+        let signature = BASE64.encode(mac.finalize().into_bytes());
+
+        let header_params = params
+            .iter()
+            .map(|(k, v)| (*k, (*v).to_string()))
+            .chain(std::iter::once(("oauth_signature", signature)))
+            .map(|(k, v)| format!("{}=\"{}\"", k, oauth1_percent_encode(&v)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("OAuth {header_params}")
+    }
+}
+
+/// Percent-encode per OAuth 1.0a's strict RFC 3986 rules: everything except
+/// ALPHA / DIGIT / `-` / `.` / `_` / `~` is `%XX`-escaped (uppercase hex).
+fn oauth1_percent_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// Everything needed to post as the bot: DB access to its stored OAuth token,
+/// the server config (encryption key + OAuth client credentials + api base), the
+/// bot's X user id, and an in-memory access-token cache.
+///
+/// The cache matters: X access tokens last ~2h, and every refresh **rotates**
+/// the refresh token. Refreshing per-reply would both waste calls and risk
+/// rotation races, so we mint once and reuse until near expiry.
+struct BotPoster {
+    pool: PgPool,
+    config: Config,
+    bot_xid: String,
+    cached: Arc<Mutex<Option<MintedAccessToken>>>,
+}
+
+impl BotPoster {
+    /// Return a valid bot access token, minting a fresh one only when the cache
+    /// is empty or within [`TOKEN_EXPIRY_SKEW_SECS`] of expiring.
+    async fn access_token(&self) -> Result<String, MintError> {
+        let mut guard = self.cached.lock().await;
+        if let Some(cached) = guard.as_ref() {
+            if !cached_token_is_stale(cached) {
+                return Ok(cached.access_token.clone());
+            }
+        }
+        let minted = mint_fresh_access_token(&self.pool, &self.config, &self.bot_xid).await?;
+        let access = minted.access_token.clone();
+        *guard = Some(minted);
+        Ok(access)
+    }
+
+    /// Force a refresh regardless of cache state (used after a mid-flight 401),
+    /// replacing the cached token.
+    async fn force_refresh(&self) -> Result<String, MintError> {
+        let mut guard = self.cached.lock().await;
+        let minted = mint_fresh_access_token(&self.pool, &self.config, &self.bot_xid).await?;
+        let access = minted.access_token.clone();
+        *guard = Some(minted);
+        Ok(access)
+    }
+}
+
+/// A cached token is stale when it is unexpiring-unknown (mint again to be safe)
+/// or within the skew window of its expiry.
+fn cached_token_is_stale(token: &MintedAccessToken) -> bool {
+    match token.expires_at {
+        Some(expires_at) => {
+            Utc::now() + chrono::Duration::seconds(TOKEN_EXPIRY_SKEW_SECS) >= expires_at
+        }
+        None => true,
+    }
+}
+
+/// Request body for `POST /2/tweets` when posting a reply.
+#[derive(Debug, Serialize)]
+struct CreateReplyRequest<'a> {
+    text: &'a str,
+    reply: ReplyRef<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplyRef<'a> {
+    in_reply_to_tweet_id: &'a str,
+}
+
+/// Success envelope for `POST /2/tweets` (`{ "data": { "id": "...", ... } }`).
 #[derive(Debug, Deserialize)]
-struct CreateTweetResponse {
-    status: String,
-    // TwitterAPI.io is inconsistent: some endpoints return the human-readable
-    // error under `msg`, others (e.g. user_login_v2) under `message`. Accept
-    // either so failures are never logged as an opaque "unknown error".
-    #[serde(alias = "message")]
-    msg: Option<String>,
-    tweet_id: Option<String>,
+struct CreateTweetV2Response {
+    data: CreatedTweet,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreatedTweet {
+    id: String,
+}
+
+/// A create-reply POST failed. `Unauthorized` (HTTP 401) is separated so the
+/// caller can refresh the bot token once and retry.
+#[derive(Debug)]
+enum PostReplyError {
+    Unauthorized(String),
+    Other(anyhow::Error),
+}
+
+/// The create-tweet endpoint under `api_base` (`POST /2/tweets`). OAuth 1.0a
+/// signatures cover the exact request URL, so both the signer and the request
+/// must derive it from this one place.
+fn create_tweet_url(api_base: &str) -> String {
+    format!("{}/2/tweets", api_base.trim_end_matches('/'))
+}
+
+/// Post a reply to `tweet_id` via the official X API (`POST /2/tweets` at
+/// `url`), authenticating with the given `Authorization` header value
+/// (`Bearer ...` or a signed `OAuth ...`). Returns the created tweet id.
+///
+/// Standalone (not a method) so the HTTP/serialization behavior can be tested
+/// against a mock server without a database-backed [`BotPoster`].
+async fn create_reply_tweet(
+    http_client: &Client,
+    url: &str,
+    authorization: &str,
+    tweet_id: &str,
+    text: &str,
+) -> Result<String, PostReplyError> {
+    let body = CreateReplyRequest {
+        text,
+        reply: ReplyRef {
+            in_reply_to_tweet_id: tweet_id,
+        },
+    };
+
+    let response = http_client
+        .post(url)
+        .header("Authorization", authorization)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| {
+            PostReplyError::Other(anyhow::Error::new(e).context("failed to send create-tweet request"))
+        })?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| {
+            PostReplyError::Other(
+                anyhow::Error::new(e).context("failed to read create-tweet response body"),
+            )
+        })?;
+
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(PostReplyError::Unauthorized(format!(
+            "X API create tweet unauthorized (401): {response_text}"
+        )));
+    }
+    if !status.is_success() {
+        // 403 with a duplicate-content message is expected when the same reply
+        // text is posted twice; callers vary text per account to avoid it.
+        return Err(PostReplyError::Other(anyhow::anyhow!(
+            "X API create tweet error ({status}): {response_text}"
+        )));
+    }
+
+    let parsed: CreateTweetV2Response = serde_json::from_str(&response_text).map_err(|e| {
+        PostReplyError::Other(
+            anyhow::Error::new(e)
+                .context(format!("failed to parse create-tweet response: {response_text}")),
+        )
+    })?;
+    Ok(parsed.data.id)
 }
 
 /// Response from getting user by username
@@ -372,18 +705,46 @@ pub struct TransactionResult {
 }
 
 impl TwitterClient {
+    /// Reads-only client (no bot posting configured). Posting a reply errors
+    /// clearly; used where only lookups/search are needed and in tests.
     pub fn new(config: &Config) -> Self {
-        Self::with_base_url(config, TWITTERAPI_IO_BASE_URL.to_string())
+        Self::build(config, config.twitterapi_io_base.clone(), None)
     }
 
-    /// Construct a client pointed at a custom TwitterAPI.io base URL (used in tests).
+    /// Reply-capable client that posts as the bot. Prefers OAuth 1.0a keys
+    /// when fully configured (`TWITTER_API_KEY` etc.); otherwise falls back to
+    /// the stored OAuth 2.0 token, which requires `TWITTER_BOT_USER_ID`. With
+    /// neither, the client still reads, but posting fails with a clear config
+    /// error at call time.
+    pub fn new_with_bot(config: &Config, pool: PgPool) -> Self {
+        let bot = if let Some(creds) = OAuth1Credentials::from_config(config) {
+            Some(BotAuth::OAuth1(creds))
+        } else {
+            config.twitter_bot_user_id.clone().map(|bot_xid| {
+                BotAuth::OAuth2(BotPoster {
+                    pool,
+                    config: config.clone(),
+                    bot_xid,
+                    cached: Arc::new(Mutex::new(None)),
+                })
+            })
+        };
+        Self::build(config, config.twitterapi_io_base.clone(), bot)
+    }
+
+    /// Construct a reads-only client pointed at a custom TwitterAPI.io base URL
+    /// (used in tests to aim lookups/search at a mock server).
     pub fn with_base_url(config: &Config, twitterapi_io_base: String) -> Self {
+        Self::build(config, twitterapi_io_base, None)
+    }
+
+    fn build(config: &Config, twitterapi_io_base: String, bot: Option<BotAuth>) -> Self {
         Self {
             http_client: Client::new(),
             twitterapi_io_api_key: config.twitterapi_io_api_key.clone(),
-            twitterapi_io_login_cookies: config.twitterapi_io_login_cookies.clone(),
-            twitterapi_io_proxy: config.twitterapi_io_proxy.clone(),
             twitterapi_io_base,
+            twitter_api_base: config.twitter_api_base.clone(),
+            bot,
             docs_url: configured_docs_url(),
             web_url: configured_web_url(),
         }
@@ -513,9 +874,10 @@ impl TwitterClient {
         handle: &str,
         account_id: Option<&str>,
     ) -> Result<String> {
-        // Twitter rejects verbatim-duplicate tweet text with HTTP 422, so the
-        // reply must vary per account. Include the @handle and the unique
-        // account object id (also the useful info to surface to the user).
+        // Twitter rejects verbatim-duplicate tweet text (HTTP 403 on the
+        // official API), so the reply must vary per account. Include the
+        // @handle and the unique account object id (also the useful info to
+        // surface to the user).
         let message = match account_id {
             Some(account_id) => format!("@{} Account Already Exist\n\n{}", handle, account_id),
             None => format!("@{} Account Already Exist", handle),
@@ -1149,96 +1511,120 @@ impl TwitterClient {
         self.reply_to_tweet(tweet_id, &message).await
     }
 
-    /// Post a reply to a specific tweet
+    /// Post a reply to a specific tweet via the official X API, as the bot
+    /// account. Mints/reuses the bot's cached access token; on a mid-flight 401
+    /// (token revoked/expired between mint and use) it force-refreshes once and
+    /// retries before giving up.
     async fn reply_to_tweet(&self, tweet_id: &str, text: &str) -> Result<String> {
-        let url = format!("{}/twitter/create_tweet_v2", self.twitterapi_io_base);
-        let login_cookies = self.twitterapi_io_login_cookies.as_ref().ok_or_else(|| {
+        let bot = self.bot.as_ref().ok_or_else(|| {
             warn!(
                 tweet_id = %tweet_id,
                 reply_text = %text,
-                "Reply not posted because TWITTERAPI_IO_LOGIN_COOKIES is missing"
+                "Reply not posted because official-API posting is not configured"
             );
-            anyhow::anyhow!("TWITTERAPI_IO_LOGIN_COOKIES must be set to post replies")
+            anyhow::anyhow!(
+                "official X API posting is not configured: set the OAuth 1.0a keys \
+                 (TWITTER_API_KEY/TWITTER_API_SECRET + TWITTER_ACCESS_TOKEN/\
+                 TWITTER_ACCESS_TOKEN_SECRET), or set TWITTER_BOT_USER_ID and authorize \
+                 the bot account with `dugong-bot-authorize`"
+            )
         })?;
-        let proxy = self.twitterapi_io_proxy.as_ref().ok_or_else(|| {
-            warn!(
-                tweet_id = %tweet_id,
-                reply_text = %text,
-                "Reply not posted because TWITTERAPI_IO_PROXY is missing"
-            );
-            anyhow::anyhow!("TWITTERAPI_IO_PROXY must be set to post replies")
-        })?;
+        let url = create_tweet_url(&self.twitter_api_base);
 
-        let request_body = CreateTweetRequest {
-            login_cookies: login_cookies.clone(),
-            tweet_text: text.to_string(),
-            proxy: proxy.clone(),
-            reply_to_tweet_id: Some(tweet_id.to_string()),
-        };
+        match bot {
+            // Static keys: sign and send. A 401 is terminal — there is nothing
+            // to refresh; the keys themselves are wrong or revoked.
+            BotAuth::OAuth1(creds) => {
+                let authorization = creds.authorization_header("POST", &url);
+                match create_reply_tweet(&self.http_client, &url, &authorization, tweet_id, text)
+                    .await
+                {
+                    Ok(reply_tweet_id) => {
+                        info!(reply_tweet_id = %reply_tweet_id, "Successfully posted reply tweet");
+                        Ok(reply_tweet_id)
+                    }
+                    Err(PostReplyError::Unauthorized(msg)) => {
+                        warn!(
+                            tweet_id = %tweet_id,
+                            detail = %msg,
+                            "Reply not posted: X API rejected the OAuth 1.0a credentials"
+                        );
+                        Err(anyhow::anyhow!(
+                            "X API rejected the OAuth 1.0a credentials (401). Check \
+                             TWITTER_API_KEY/TWITTER_API_SECRET and TWITTER_ACCESS_TOKEN/\
+                             TWITTER_ACCESS_TOKEN_SECRET, and regenerate them if they were \
+                             revoked: {msg}"
+                        ))
+                    }
+                    Err(PostReplyError::Other(err)) => {
+                        warn!(
+                            tweet_id = %tweet_id,
+                            reply_text = %text,
+                            error = %err,
+                            "Reply not posted because the X API create-tweet call failed"
+                        );
+                        Err(err)
+                    }
+                }
+            }
+            BotAuth::OAuth2(poster) => {
+                let access_token = poster.access_token().await.map_err(anyhow::Error::new)?;
 
-        let body_json =
-            serde_json::to_string(&request_body).context("Failed to serialize tweet request")?;
-
-        let response = self
-            .http_client
-            .post(&url)
-            .header("X-API-Key", &self.twitterapi_io_api_key)
-            .header("Content-Type", "application/json")
-            .body(body_json)
-            .send()
-            .await
-            .context("Failed to send tweet request")?;
-
-        let status = response.status();
-        let response_text = response
-            .text()
-            .await
-            .context("Failed to read response body")?;
-
-        if !status.is_success() {
-            warn!(
-                tweet_id = %tweet_id,
-                reply_text = %text,
-                status = %status,
-                response = %response_text,
-                "Reply not posted because TwitterAPI.io returned an HTTP error"
-            );
-            return Err(anyhow::anyhow!(
-                "TwitterAPI.io create tweet error ({}): {}",
-                status,
-                response_text
-            ));
+                match create_reply_tweet(
+                    &self.http_client,
+                    &url,
+                    &format!("Bearer {access_token}"),
+                    tweet_id,
+                    text,
+                )
+                .await
+                {
+                    Ok(reply_tweet_id) => {
+                        info!(reply_tweet_id = %reply_tweet_id, "Successfully posted reply tweet");
+                        Ok(reply_tweet_id)
+                    }
+                    Err(PostReplyError::Unauthorized(msg)) => {
+                        warn!(
+                            tweet_id = %tweet_id,
+                            detail = %msg,
+                            "Bot access token rejected (401); refreshing and retrying once"
+                        );
+                        let access_token =
+                            poster.force_refresh().await.map_err(anyhow::Error::new)?;
+                        let reply_tweet_id = create_reply_tweet(
+                            &self.http_client,
+                            &url,
+                            &format!("Bearer {access_token}"),
+                            tweet_id,
+                            text,
+                        )
+                        .await
+                        .map_err(|e| match e {
+                            PostReplyError::Unauthorized(msg) => {
+                                anyhow::anyhow!(
+                                    "X API rejected bot token even after refresh: {msg}"
+                                )
+                            }
+                            PostReplyError::Other(err) => err,
+                        })?;
+                        info!(
+                            reply_tweet_id = %reply_tweet_id,
+                            "Successfully posted reply tweet after token refresh"
+                        );
+                        Ok(reply_tweet_id)
+                    }
+                    Err(PostReplyError::Other(err)) => {
+                        warn!(
+                            tweet_id = %tweet_id,
+                            reply_text = %text,
+                            error = %err,
+                            "Reply not posted because the X API create-tweet call failed"
+                        );
+                        Err(err)
+                    }
+                }
+            }
         }
-
-        let tweet_response: CreateTweetResponse =
-            serde_json::from_str(&response_text).context("Failed to parse tweet response")?;
-        if !tweet_response.status.eq_ignore_ascii_case("success") {
-            warn!(
-                tweet_id = %tweet_id,
-                reply_text = %text,
-                api_status = %tweet_response.status,
-                api_message = ?tweet_response.msg,
-                raw_response = %response_text,
-                "Reply not posted because TwitterAPI.io returned an API error"
-            );
-            return Err(anyhow::anyhow!(
-                "TwitterAPI.io create tweet failed: {}",
-                tweet_response
-                    .msg
-                    .unwrap_or_else(|| format!("unknown error (raw: {response_text})"))
-            ));
-        }
-
-        let reply_tweet_id = tweet_response.tweet_id.ok_or_else(|| {
-            anyhow::anyhow!("TwitterAPI.io create tweet response missing tweet_id")
-        })?;
-
-        info!(
-            reply_tweet_id = %reply_tweet_id,
-            "Successfully posted reply tweet"
-        );
-
-        Ok(reply_tweet_id)
     }
 }
 
@@ -1289,4 +1675,168 @@ fn dedupe_candidates(
     }
 
     Ok(deduped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn create_reply_tweet_posts_and_parses_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/2/tweets"))
+            .and(header("Authorization", "Bearer test-token"))
+            .and(body_json(serde_json::json!({
+                "text": "hi there",
+                "reply": { "in_reply_to_tweet_id": "123" }
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "data": { "id": "1899999999999999999", "text": "hi there" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let url = create_tweet_url(&server.uri());
+        let id = create_reply_tweet(&client, &url, "Bearer test-token", "123", "hi there")
+            .await
+            .expect("reply should succeed");
+        assert_eq!(id, "1899999999999999999");
+    }
+
+    #[tokio::test]
+    async fn create_reply_tweet_maps_401_to_unauthorized() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/2/tweets"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "title": "Unauthorized",
+                "status": 401
+            })))
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let url = create_tweet_url(&server.uri());
+        let err = create_reply_tweet(&client, &url, "Bearer bad-token", "123", "hi")
+            .await
+            .expect_err("401 must be an error");
+        assert!(matches!(err, PostReplyError::Unauthorized(_)));
+    }
+
+    #[tokio::test]
+    async fn create_reply_tweet_surfaces_other_errors() {
+        // X returns 403 for duplicate content — surfaced as a generic Other error.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/2/tweets"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("duplicate content"))
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let url = create_tweet_url(&server.uri());
+        let err = create_reply_tweet(&client, &url, "Bearer tok", "123", "dup")
+            .await
+            .expect_err("403 must be an error");
+        assert!(matches!(err, PostReplyError::Other(_)));
+    }
+
+    /// Reference signature computed independently (Python hmac/sha1) for the
+    /// same credentials, nonce and timestamp.
+    #[test]
+    fn oauth1_authorization_header_matches_reference_signature() {
+        let creds = OAuth1Credentials {
+            api_key: "test-consumer-key".to_string(),
+            api_secret: "test-consumer-secret".to_string(),
+            access_token: "test-access-token".to_string(),
+            access_token_secret: "test-token-secret".to_string(),
+        };
+        let header = creds.authorization_header_at(
+            "post",
+            "https://api.twitter.com/2/tweets",
+            "abc123nonce",
+            "1752400000",
+        );
+        assert!(header.starts_with("OAuth "), "header was: {header}");
+        assert!(
+            header.contains(r#"oauth_signature="I5JOgZqPHoigfAzfzXom%2B1lDsR8%3D""#),
+            "header was: {header}"
+        );
+        assert!(header.contains(r#"oauth_consumer_key="test-consumer-key""#));
+        assert!(header.contains(r#"oauth_token="test-access-token""#));
+        assert!(header.contains(r#"oauth_signature_method="HMAC-SHA1""#));
+    }
+
+    #[test]
+    fn oauth1_percent_encode_escapes_reserved_bytes() {
+        assert_eq!(oauth1_percent_encode("Ab1-._~"), "Ab1-._~");
+        assert_eq!(oauth1_percent_encode("a b+c/d="), "a%20b%2Bc%2Fd%3D");
+    }
+
+    #[test]
+    fn generate_pkce_produces_distinct_url_safe_pairs() {
+        let a = generate_pkce();
+        let b = generate_pkce();
+        assert_ne!(a.verifier, b.verifier, "verifiers must be random");
+        assert_ne!(a.challenge, b.challenge, "challenges must differ");
+        for s in [&a.verifier, &a.challenge] {
+            assert!(
+                !s.contains('+') && !s.contains('/') && !s.contains('='),
+                "PKCE values must be base64url (no +, /, or padding): {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn authorize_url_includes_pkce_scopes_and_state() {
+        let oauth = TwitterOAuth2Client::from_parts(
+            "my-client-id".to_string(),
+            "secret".to_string(),
+            TWITTER_API_BASE_URL.to_string(),
+        );
+        let url = oauth.authorize_url(
+            "https://app.example/callback",
+            &["tweet.read", "tweet.write", "offline.access"],
+            "state-xyz",
+            "challenge-abc",
+        );
+        assert!(url.starts_with("https://x.com/i/oauth2/authorize?"));
+        assert!(url.contains("client_id=my-client-id"));
+        assert!(url.contains("code_challenge=challenge-abc"));
+        assert!(url.contains("code_challenge_method=S256"));
+        assert!(url.contains("state=state-xyz"));
+        assert!(url.contains("response_type=code"));
+        // Scopes are space-joined then query-encoded; each token must appear.
+        assert!(url.contains("tweet.read"));
+        assert!(url.contains("tweet.write"));
+        assert!(url.contains("offline.access"));
+    }
+
+    #[test]
+    fn cached_token_stale_logic() {
+        let fresh = MintedAccessToken {
+            access_token: "a".to_string(),
+            expires_at: Some(Utc::now() + chrono::Duration::seconds(3600)),
+        };
+        assert!(!cached_token_is_stale(&fresh), "far-future token is fresh");
+
+        let expiring = MintedAccessToken {
+            access_token: "a".to_string(),
+            expires_at: Some(Utc::now() + chrono::Duration::seconds(10)),
+        };
+        assert!(
+            cached_token_is_stale(&expiring),
+            "token within skew window is stale"
+        );
+
+        let unknown = MintedAccessToken {
+            access_token: "a".to_string(),
+            expires_at: None,
+        };
+        assert!(cached_token_is_stale(&unknown), "unknown expiry is stale");
+    }
 }

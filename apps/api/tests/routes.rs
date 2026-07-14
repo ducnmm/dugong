@@ -126,24 +126,25 @@ async fn get_transaction_by_digest_returns_seeded_transfer(pool: PgPool) {
     .expect("seed transfer");
 
     let server = MockServer::start().await;
+    // Sui GraphQL coinMetadata response (beta schema shape).
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {
-                "decimals": 6,
-                "name": "USDC",
-                "symbol": "USDC",
-                "description": null,
-                "icon_url": null,
-                "id": null
+            "data": {
+                "coinMetadata": {
+                    "decimals": 6,
+                    "name": "USDC",
+                    "symbol": "USDC",
+                    "description": null,
+                    "iconUrl": null,
+                    "address": null
+                }
             }
         })))
         .mount(&server)
         .await;
 
     let mut config = test_config();
-    config.sui_rpc_url = server.uri();
+    config.sui_graphql_url = server.uri();
     let app = build_router(app_state(config, pool, redis));
     let response = app
         .oneshot(
@@ -158,7 +159,8 @@ async fn get_transaction_by_digest_returns_seeded_transfer(pool: PgPool) {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["tx_digest"], json!("0xtx123"));
-    assert_eq!(body["amount"], json!("1.234567"));
+    // Displayed amounts are rounded to 2dp (4922bdc); amount_mist keeps full precision.
+    assert_eq!(body["amount"], json!("1.23"));
     assert_eq!(body["from_xid"], json!("alice-xid"));
     assert_eq!(body["to_xid"], json!("bob-xid"));
 }

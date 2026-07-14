@@ -13,13 +13,9 @@ use crate::webhook::handler::AppState;
 use dugong_core::clients::enclave::EnclaveClient;
 use dugong_core::clients::enoki::EnokiClient;
 use dugong_core::clients::sui_transaction::SuiTransactionBuilder;
-use dugong_core::clients::twitter::{
-    OAuth2TokenResponse, RefreshError, TwitterOAuth2Client, TwitterUserInfo,
-};
+use dugong_core::clients::twitter::{OAuth2TokenResponse, TwitterOAuth2Client, TwitterUserInfo};
 use dugong_core::config::Config;
-use dugong_core::db::models::{
-    AccountBalance, DugongAccount, Transfer, TransferType, TwitterOAuthToken,
-};
+use dugong_core::db::models::{AccountBalance, DugongAccount, Transfer, TransferType};
 
 /// Lifetime of a backend session token. Long-lived because it tracks the OAuth
 /// login cadence (the stored refresh token keeps Twitter access alive underneath).
@@ -71,32 +67,15 @@ fn message_xid(message: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
-/// Persist a user's Twitter OAuth credentials (encrypted at rest). No-op when the
-/// response carries no refresh token (e.g. `offline.access` not granted).
+/// Persist a user's Twitter OAuth credentials (encrypted at rest). Thin wrapper
+/// over [`dugong_core::oauth::store_tokens`] that supplies the encryption key.
 async fn store_oauth_tokens(
     state: &AppState,
     xid: &str,
     tokens: &OAuth2TokenResponse,
 ) -> anyhow::Result<()> {
-    let Some(refresh) = tokens.refresh_token.as_deref() else {
-        return Ok(());
-    };
     let key = state.config.token_encryption_key()?;
-    let refresh_enc = dugong_core::crypto::seal(key, refresh)?;
-    let access_enc = dugong_core::crypto::seal(key, &tokens.access_token)?;
-    let expires_at = tokens
-        .expires_in
-        .map(|s| Utc::now() + chrono::Duration::seconds(s as i64));
-    TwitterOAuthToken::upsert(
-        &state.db,
-        xid,
-        &refresh_enc,
-        Some(&access_enc),
-        expires_at,
-        tokens.scope.as_deref(),
-    )
-    .await?;
-    Ok(())
+    dugong_core::oauth::store_tokens(&state.db, key, xid, tokens).await
 }
 
 /// Why a fresh access token could not be minted.
@@ -108,41 +87,19 @@ enum FreshTokenError {
 }
 
 /// Mint a fresh Twitter access token for a trusted `xid` using the stored refresh
-/// token. Persists the rotated refresh token; drops a definitively-dead one.
+/// token. Delegates to the shared [`dugong_core::oauth`] path (which persists the
+/// rotated refresh token and drops a definitively-dead one), mapping its error
+/// into the route-facing [`FreshTokenError`].
 async fn mint_fresh_access_token(state: &AppState, xid: &str) -> Result<String, FreshTokenError> {
-    let key = state
-        .config
-        .token_encryption_key()
-        .map_err(|e| FreshTokenError::Internal(e.to_string()))?;
-
-    let stored = TwitterOAuthToken::find_by_x_user_id(&state.db, xid)
+    dugong_core::oauth::mint_fresh_access_token(&state.db, &state.config, xid)
         .await
-        .map_err(|e| FreshTokenError::Internal(format!("db error: {e}")))?
-        .ok_or_else(|| {
-            FreshTokenError::ReauthRequired("no stored X session for this user".to_string())
-        })?;
-
-    let refresh = dugong_core::crypto::open(key, &stored.refresh_token_enc).map_err(|_| {
-        FreshTokenError::ReauthRequired("stored X credential unreadable".to_string())
-    })?;
-
-    let oauth =
-        TwitterOAuth2Client::with_base_url(&state.config, state.config.twitter_api_base.clone());
-    match oauth.refresh_access_token(&refresh).await {
-        Ok(resp) => {
-            // Twitter rotates the refresh token — persist the new one.
-            if let Err(err) = store_oauth_tokens(state, xid, &resp).await {
-                tracing::warn!("failed to persist rotated Twitter token: {err:?}");
+        .map(|minted| minted.access_token)
+        .map_err(|e| match e {
+            dugong_core::oauth::MintError::ReauthRequired(msg) => {
+                FreshTokenError::ReauthRequired(msg)
             }
-            Ok(resp.access_token)
-        }
-        Err(RefreshError::ReauthRequired(msg)) => {
-            // Dead refresh token: remove it so it is not retried.
-            let _ = TwitterOAuthToken::delete(&state.db, xid).await;
-            Err(FreshTokenError::ReauthRequired(msg))
-        }
-        Err(RefreshError::Transient(err)) => Err(FreshTokenError::Internal(err.to_string())),
-    }
+            dugong_core::oauth::MintError::Transient(msg) => FreshTokenError::Internal(msg),
+        })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1188,7 +1145,7 @@ pub async fn get_transactions_by_account(
         transactions.iter().map(|t| t.coin_type.clone()).collect();
 
     // Fetch decimals for each coin type from Sui RPC
-    let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_rpc_url);
+    let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_graphql_url);
     let mut decimals_map: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     for coin_type in unique_coin_types {
         let decimals = resolve_coin_decimals(&sui_client, &coin_type).await;
@@ -1229,7 +1186,7 @@ pub async fn get_transaction_by_digest(
         }
     };
 
-    let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_rpc_url);
+    let sui_client = dugong_core::clients::sui_client::SuiClient::new(&state.config.sui_graphql_url);
     let decimals = resolve_coin_decimals(&sui_client, &transaction.coin_type).await;
 
     Ok(Json(TransactionResponse::from_row_with_decimals(

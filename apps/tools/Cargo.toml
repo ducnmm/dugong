@@ -4,29 +4,14 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 
-[lib]
-name = "dugong_tools"
-path = "src/lib.rs"
-
 [[bin]]
-name = "dugong-login"
-path = "src/bin/login.rs"
-
-[[bin]]
-name = "dugong-test-tweet"
-path = "src/bin/test_tweet.rs"
+name = "dugong-bot-authorize"
+path = "src/bin/bot_authorize.rs"
 
 [dependencies]
 dugong-core.workspace = true
 
 tokio.workspace = true
 anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 reqwest.workspace = true
 dotenvy.workspace = true
-
-[dev-dependencies]
-wiremock.workspace = true
-tokio = { workspace = true }
-base64.workspace = true

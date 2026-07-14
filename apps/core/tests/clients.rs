@@ -12,22 +12,51 @@ use serde_json::json;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-// ============================ SuiClient ============================
+// ============================ SuiClient (GraphQL) ============================
+// Response shapes mirror live captures from https://graphql.testnet.sui.io/graphql
+// (beta schema generation), 2026-07-13.
+
+/// A one-event GraphQL `events` page, as the beta schema serves it.
+fn graphql_events_page(cursor: &str, has_next_page: bool) -> serde_json::Value {
+    json!({
+        "data": {
+            "events": {
+                "edges": [{
+                    "cursor": cursor,
+                    "node": {
+                        "sequenceNumber": 0,
+                        "timestamp": "2023-11-14T22:13:20Z",
+                        "sender": { "address": "0xsender" },
+                        "transaction": {
+                            "digest": "DIGEST1",
+                            "effects": { "checkpoint": { "sequenceNumber": 42 } }
+                        },
+                        "contents": {
+                            "type": { "repr": "0x9::events::AccountCreated" },
+                            "json": { "xid": "42" }
+                        }
+                    }
+                }],
+                "pageInfo": { "hasNextPage": has_next_page, "endCursor": cursor }
+            }
+        }
+    })
+}
 
 #[tokio::test]
 async fn sui_get_coin_metadata_parses_result() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {
-                "decimals": 9,
-                "name": "Sui",
-                "symbol": "SUI",
-                "description": "Native token",
-                "iconUrl": null,
-                "id": "0xabc"
+            "data": {
+                "coinMetadata": {
+                    "decimals": 9,
+                    "name": "Sui",
+                    "symbol": "SUI",
+                    "description": "Native token",
+                    "iconUrl": null,
+                    "address": "0xabc"
+                }
             }
         })))
         .mount(&server)
@@ -42,16 +71,34 @@ async fn sui_get_coin_metadata_parses_result() {
 
     assert_eq!(meta.decimals, 9);
     assert_eq!(meta.symbol, "SUI");
+    assert_eq!(meta.id.as_deref(), Some("0xabc"));
 }
 
 #[tokio::test]
-async fn sui_rpc_error_is_surfaced() {
+async fn sui_coin_metadata_null_is_not_found() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({ "data": { "coinMetadata": null } })),
+        )
+        .mount(&server)
+        .await;
+
+    let client = SuiClient::new(server.uri());
+    let meta = client
+        .get_coin_metadata("0x2::nope::NOPE")
+        .await
+        .expect("request should succeed");
+    assert!(meta.is_none());
+}
+
+#[tokio::test]
+async fn sui_graphql_error_is_surfaced() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "jsonrpc": "2.0",
-            "id": "1",
-            "error": { "code": -32602, "message": "invalid params" }
+            "data": null,
+            "errors": [{ "message": "invalid coin type" }]
         })))
         .mount(&server)
         .await;
@@ -60,32 +107,33 @@ async fn sui_rpc_error_is_surfaced() {
     let err = client
         .get_coin_metadata("bad")
         .await
-        .expect_err("RPC error should map to Err");
-    assert!(err.to_string().contains("invalid params"));
+        .expect_err("GraphQL error should map to Err");
+    assert!(err.to_string().contains("invalid coin type"));
+}
+
+#[tokio::test]
+async fn sui_non_success_status_is_surfaced() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(429).set_body_string("rate limited"))
+        .mount(&server)
+        .await;
+
+    let client = SuiClient::new(server.uri());
+    let err = client
+        .query_events("0x9", "events", None, 50)
+        .await
+        .expect_err("non-2xx should be Err, never an empty page");
+    assert!(err.to_string().contains("429"));
 }
 
 #[tokio::test]
 async fn sui_query_events_parses_page() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {
-                "data": [{
-                    "id": { "txDigest": "DIGEST1", "eventSeq": "0" },
-                    "packageId": "0x9",
-                    "transactionModule": "events",
-                    "sender": "0xsender",
-                    "type": "0x9::events::AccountCreated",
-                    "parsedJson": { "xid": "42" },
-                    "bcs": null,
-                    "timestampMs": "1700000000000"
-                }],
-                "nextCursor": { "txDigest": "DIGEST1", "eventSeq": "0" },
-                "hasNextPage": false
-            }
-        })))
+        // The event-type filter must carry the package::module prefix.
+        .and(wiremock::matchers::body_string_contains("0x9::events"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(graphql_events_page("CURSOR1", false)))
         .mount(&server)
         .await;
 
@@ -98,7 +146,93 @@ async fn sui_query_events_parses_page() {
     assert_eq!(page.data.len(), 1);
     assert!(!page.has_next_page);
     assert_eq!(page.data[0].event_type, "0x9::events::AccountCreated");
-    assert_eq!(page.next_cursor.unwrap().to_cursor(), "DIGEST1:0");
+    assert_eq!(page.data[0].id.tx_digest, "DIGEST1");
+    assert_eq!(page.data[0].id.event_seq, "0");
+    // ISO-8601 timestamp converted to epoch milliseconds at the client boundary.
+    assert_eq!(page.data[0].timestamp_ms.as_deref(), Some("1700000000000"));
+    assert_eq!(page.data[0].checkpoint, Some(42));
+    assert_eq!(page.next_cursor.as_deref(), Some("CURSOR1"));
+}
+
+#[tokio::test]
+async fn sui_query_events_clamps_page_size() {
+    let server = MockServer::start().await;
+    // Asking for 1000 must reach the service as the 50-event maximum.
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::body_string_contains("\"first\":50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(graphql_events_page("CURSOR1", true)))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = SuiClient::new(server.uri());
+    client
+        .query_events("0x9", "events", None, 1000)
+        .await
+        .expect("clamped query should succeed");
+}
+
+#[tokio::test]
+async fn sui_rejected_cursor_is_typed() {
+    let server = MockServer::start().await;
+    // Live capture: an unparseable `after` cursor yields this errors entry.
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": null,
+            "errors": [{ "message": "Failed to parse \"String\": Invalid JSON" }]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SuiClient::new(server.uri());
+    let err = client
+        .query_events("0x9", "events", Some("EXPIRED"), 50)
+        .await
+        .expect_err("rejected cursor should be Err");
+    assert!(
+        err.chain()
+            .any(|c| c.is::<dugong_core::clients::sui_client::CursorRejected>()),
+        "error should downcast to CursorRejected, got: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn sui_transaction_checkpoint_lookup() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "transaction": { "effects": { "checkpoint": { "sequenceNumber": 359762100u64 } } }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SuiClient::new(server.uri());
+    let cp = client
+        .get_transaction_checkpoint("DIGEST1")
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(cp, Some(359762100));
+}
+
+#[tokio::test]
+async fn sui_unknown_transaction_is_none() {
+    let server = MockServer::start().await;
+    // Live capture: unknown digest -> data.transaction = null (no errors entry).
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({ "data": { "transaction": null } })),
+        )
+        .mount(&server)
+        .await;
+
+    let client = SuiClient::new(server.uri());
+    let cp = client
+        .get_transaction_checkpoint("11111111111111111111111111111111")
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(cp, None);
 }
 
 // ============================ EnokiClient ============================
@@ -431,4 +565,52 @@ async fn oauth2_refresh_server_error_is_transient() {
         matches!(err, RefreshError::Transient(_)),
         "5xx must map to Transient, got {err:?}"
     );
+}
+
+// ==================== OAuth 1.0a bot posting ====================
+
+/// End-to-end reply posting through the OAuth 1.0a path: with all four keys
+/// configured, `POST /2/tweets` must carry a signed `OAuth ...` header (never
+/// a Bearer token) and need no DB-stored token at all.
+#[tokio::test]
+async fn twitter_reply_posts_with_oauth1_signature_when_keys_configured() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/2/tweets"))
+        .and(wiremock::matchers::header_regex(
+            "authorization",
+            concat!(
+                r#"^OAuth oauth_consumer_key="test-consumer-key", "#,
+                r#"oauth_nonce="[0-9a-f]{32}", "#,
+                r#"oauth_signature_method="HMAC-SHA1", "#,
+                r#"oauth_timestamp="\d+", "#,
+                r#"oauth_token="test-access-token", "#,
+                r#"oauth_version="1\.0", "#,
+                r#"oauth_signature="[A-Za-z0-9%]+"$"#,
+            ),
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "data": { "id": "1900000000000000123" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut config = test_config();
+    config.twitter_api_base = server.uri();
+    config.twitter_api_key = Some("test-consumer-key".to_string());
+    config.twitter_api_secret = Some("test-consumer-secret".to_string());
+    config.twitter_access_token = Some("test-access-token".to_string());
+    config.twitter_access_token_secret = Some("test-token-secret".to_string());
+
+    // The OAuth 1.0a path never touches the DB; a lazy pool never connects.
+    let pool = sqlx::PgPool::connect_lazy("postgres://unused:unused@localhost:1/unused")
+        .expect("lazy pool");
+    let client = TwitterClient::new_with_bot(&config, pool);
+
+    let reply_id = client
+        .reply_error("123", "boom")
+        .await
+        .expect("reply should post via the OAuth 1.0a-signed official API");
+    assert_eq!(reply_id, "1900000000000000123");
 }

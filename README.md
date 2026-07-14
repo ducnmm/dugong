@@ -11,7 +11,7 @@ Dugong monorepo. Rust services live in a single Cargo workspace rooted at
 - `apps/api` — `dugong-api` HTTP service: webhooks, routes, processor worker.
 - `apps/indexer` — `dugong-indexer` background service: mirrors Sui events
   into Postgres.
-- `apps/tools` — one-off CLIs (`dugong-login`, `dugong-test-tweet`).
+- `apps/tools` — one-off CLIs (`dugong-bot-authorize`).
 - `apps/worker` — `dugong-worker` poller: scans X for mentions and posts to
   the API webhook.
 - `apps/nautilus-server` — Nautilus enclave-facing service.
@@ -31,8 +31,7 @@ cargo run -p dugong-worker
 cargo run -p nautilus-server
 
 # run a tool
-cargo run -p dugong-tools --bin dugong-login
-cargo run -p dugong-tools --bin dugong-test-tweet
+cargo run -p dugong-tools --bin dugong-bot-authorize
 ```
 
 See [docs/local-dev-guide.md](docs/local-dev-guide.md) for the full local development

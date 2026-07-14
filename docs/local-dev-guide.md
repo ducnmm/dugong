@@ -59,11 +59,13 @@ cp apps/web/.env.example     apps/web/.env
 
 Key values you must supply in `apps/api/.env`:
 
-- `TWITTERAPI_IO_API_KEY` — tweet/user lookup and reply posting
-- `TWITTERAPI_IO_LOGIN_COOKIES`, `TWITTERAPI_IO_PROXY` — required by the API
-  processor for posting reply tweets (the indexer does not need these)
+- `TWITTERAPI_IO_API_KEY` — tweet/user lookup (reads)
+- `TWITTER_API_KEY`/`TWITTER_API_SECRET` + `TWITTER_ACCESS_TOKEN`/
+  `TWITTER_ACCESS_TOKEN_SECRET` — OAuth 1.0a keys for posting replies via the
+  official X API (app "Keys and tokens" page; the indexer does not need these)
 - `TWITTER_OAUTH2_CLIENT_ID`, `TWITTER_OAUTH2_CLIENT_SECRET` — X OAuth2 from
-  https://developer.twitter.com
+  https://developer.twitter.com (user login; also the alternative bot-posting
+  path via `dugong-bot-authorize`)
 - `DUGONG_PACKAGE_ID`, `DUGONG_REGISTRY_ID`, `MARKET_REGISTRY_ID`,
   `ENCLAVE_CONFIG_ID`, `ENCLAVE_ID` — from the deployed Move contracts
   (`ENCLAVE_ID` is the `Enclave` shared object from `register_enclave`, **not**
@@ -134,9 +136,9 @@ cargo run -p dugong-api
 
 Health check: `curl http://localhost:43001/`
 
-The API + processor binary requires reply credentials
-(`TWITTERAPI_IO_LOGIN_COOKIES` + `TWITTERAPI_IO_PROXY`); it refuses to start
-otherwise so replies never get silently dropped.
+The API + processor binary requires reply credentials (either the OAuth 1.0a
+key set, or `TWITTER_BOT_USER_ID` + a stored OAuth 2.0 token); it refuses to
+start otherwise so replies never get silently dropped.
 
 ## 5. Run the indexer
 
@@ -149,12 +151,32 @@ cargo run -p dugong-indexer
 # mirrors Sui events into the indexer_state + dugong_accounts tables
 ```
 
-The API and indexer share the same `apps/api/.env` (same Postgres + Sui
-RPC), so the cursor stays consistent. The indexer binary loads that file
-automatically relative to the workspace, so the command above works from any
-directory — you don't need to `cd apps/api` first. Real environment variables
-still take precedence, which is how it picks up Railway-injected config in
-production.
+The indexer loads its **own** `apps/indexer/.env` (resolved relative to the
+crate, so the command above works from any directory). Keep its
+`DUGONG_PACKAGE_ID` / `DUGONG_EVENT_PACKAGE_ID` / `SUI_GRAPHQL_URL` in sync
+with `apps/api/.env` when the package is republished — a stale file here means
+the current package's events silently never get indexed. Real environment
+variables still take precedence, which is how it picks up Railway-injected
+config in production.
+
+**Endpoint choice matters for the indexer**: it reads events via Sui's
+GraphQL RPC (`SUI_GRAPHQL_URL`; JSON-RPC was retired for reads). The default
+`https://graphql.testnet.sui.io/graphql` is fine for a warm indexer that only
+tails new events, but it is rate-limited and retains a bounded history
+window. Two consequences:
+
+- **Backfill from genesis** (fresh database) or resuming from a very old
+  cursor needs a full-history GraphQL provider endpoint — the public endpoint
+  will not have the early events, and the indexer fails loudly with a
+  `cannot re-anchor` error rather than silently skipping history.
+- If the indexer was down long enough for its stored cursor to fall out of
+  the endpoint's retention window, it automatically re-anchors from the last
+  processed event's transaction — which again must still be within the
+  endpoint's history.
+
+The API server is fine on the public endpoint — it only looks up coin
+metadata. (`SUI_RPC_URL` still exists but is only used for transaction
+building via the sui-sdk.)
 
 ## 6. Run the worker (poller)
 
@@ -183,11 +205,8 @@ addresses in `apps/web/.env` to match `apps/api/.env`.
 The one-off CLIs live in the `dugong-tools` crate:
 
 ```bash
-# Mint a TwitterAPI.io login cookie for the bot account
-cargo run -p dugong-tools --bin dugong-login
-
-# Smoke-test posting a tweet + self-reply via the bot account
-cargo run -p dugong-tools --bin dugong-test-tweet
+# Authorize the bot for OAuth 2.0 posting (not needed with OAuth 1.0a keys)
+cargo run -p dugong-tools --bin dugong-bot-authorize
 ```
 
 Both read from `apps/api/.env` (run them from the repo root so the workspace

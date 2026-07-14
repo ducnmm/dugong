@@ -37,7 +37,6 @@ Shared modules used by this crate (lifted into `dugong-core`):
 - `dugong_core::db` — Postgres pool, models, embedded migrations
 - `dugong_core::clients` — Redis, Sui, Twitter, Enclave, Enoki, Sui-tx builder
 - `dugong_core::constants` — Redis key helpers, event ids, enclave consts
-- `dugong_core::twitter_session` — login cookie validation
 
 ## Quick start
 
@@ -68,10 +67,11 @@ cargo run -p dugong-api
 # embedded migrations run on startup; server listens on http://localhost:43001
 ```
 
-The API refuses to start without `TWITTERAPI_IO_LOGIN_COOKIES` +
-`TWITTERAPI_IO_PROXY`, because the processor posts a reply to every tweet
-it handles. If you only need the read-side, run `dugong-indexer` instead
-(see below).
+The API refuses to start without `TWITTER_BOT_USER_ID` (and
+`TOKEN_ENCRYPTION_KEY`), because the processor posts a reply to every tweet
+it handles via the official X API, authenticating as the bot account. Seed
+the bot's token once with `dugong-bot-authorize` (see below). If you only
+need the read-side, run `dugong-indexer` instead.
 
 ### Running alongside the indexer
 
@@ -90,9 +90,15 @@ indexer cursor and the API's webhook state stay consistent.
 The one-off scripts moved to the `dugong-tools` crate:
 
 ```bash
-cargo run -p dugong-tools --bin dugong-login        # mint TwitterAPI.io login cookie
-cargo run -p dugong-tools --bin dugong-test-tweet   # smoke-test posting + self-reply
+cargo run -p dugong-tools --bin dugong-bot-authorize  # authorize the bot for official-API posting (run once; OAuth 2.0 path only)
 ```
+
+`dugong-bot-authorize` runs the OAuth 2.0 + PKCE flow with `tweet.write`
+scope and stores the bot's encrypted refresh token in `twitter_oauth_tokens`;
+the processor then posts (and auto-refreshes) from there. It is NOT needed
+when the OAuth 1.0a keys (`TWITTER_API_KEY`/`TWITTER_API_SECRET` +
+`TWITTER_ACCESS_TOKEN`/`TWITTER_ACCESS_TOKEN_SECRET`) are configured — those
+sign posts directly.
 
 ## API endpoints
 
@@ -184,10 +190,13 @@ See `.env.example` for everything. Key variables:
 - `DUGONG_PACKAGE_ID` — Deployed Move package id
 - `DUGONG_REGISTRY_ID` — `DugongRegistry` shared object id
 - `ENCLAVE_CONFIG_ID` — Enclave config object id (signature verification)
-- `TWITTERAPI_IO_LOGIN_COOKIES`, `TWITTERAPI_IO_PROXY` — TwitterAPI.io
-  credentials for reply tweets
-- `TWITTER_BOT_TOTP_SECRET` — X 2FA base32 seed used by `dugong-login`;
-  guest login cookies cannot post replies
+- `TWITTERAPI_IO_API_KEY` — TwitterAPI.io key for READS (mention polling,
+  user lookup, campaign search)
+- `TWITTER_BOT_USER_ID` — the bot account's numeric X id; reply posting
+  authenticates as this account via the official X API using its stored
+  OAuth token (seed once with `dugong-bot-authorize`)
+- `TOKEN_ENCRYPTION_KEY` — 32-byte key (base64/hex) that encrypts the bot's
+  (and users') stored OAuth refresh tokens at rest
 - `INDEXER_POLL_INTERVAL_MS`, `INDEXER_BATCH_SIZE` — read by
   `dugong-indexer` only
 
