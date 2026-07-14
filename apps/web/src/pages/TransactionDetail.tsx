@@ -11,6 +11,7 @@ import {
   Route,
 } from 'lucide-react';
 import { TokenIcon } from '../components/TokenIcon';
+import { BackButton } from '../components/BackButton';
 import { useAuth } from '../contexts/useAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
@@ -280,6 +281,9 @@ export const TransactionDetail: React.FC = () => {
   return (
     <main className="neo-page flex h-full min-h-0 items-center justify-center overflow-y-auto p-4 text-black">
       <section className="neo-card-strong flex w-[min(800px,calc(100vw-2rem))] max-h-[min(800px,calc(100vh-2rem))] flex-col overflow-y-auto rounded-lg bg-white p-5 sm:p-6">
+        <div className="mb-4 flex shrink-0">
+          <BackButton fallback="/" />
+        </div>
         {isLoading ? (
           <div className="flex flex-1 items-center justify-center">
             <Loader2 className="h-12 w-12 animate-spin text-black" />
