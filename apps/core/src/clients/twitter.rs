@@ -86,6 +86,22 @@ fn campaign_insufficient_balance_message(
     )
 }
 
+fn transfer_insufficient_balance_message(handle: &str, amount_display: &str) -> String {
+    format!(
+        "@{} — your @DugongWallet account doesn't have enough balance to send {}.\n\n\
+        Reduce the amount or deposit more funds and try again.",
+        handle, amount_display
+    )
+}
+
+fn bet_insufficient_balance_message(handle: &str, amount_display: &str) -> String {
+    format!(
+        "@{} — your @DugongWallet account doesn't have enough balance to place a {} prediction.\n\n\
+        Reduce the amount or deposit more funds and try again.",
+        handle, amount_display
+    )
+}
+
 /// A candidate winner discovered for a reward campaign (a reply author or hashtag tweeter).
 #[derive(Debug, Clone)]
 pub struct RewardCampaignCandidate {
@@ -855,6 +871,22 @@ impl TwitterClient {
             .await
     }
 
+    /// Reply when the sender cannot fund a transfer.
+    pub async fn reply_transfer_insufficient_balance(
+        &self,
+        tweet_id: &str,
+        handle: &str,
+        amount_display: &str,
+    ) -> Result<String> {
+        let message = transfer_insufficient_balance_message(handle, amount_display);
+        info!(
+            tweet_id = %tweet_id,
+            handle = %handle,
+            "Replying with transfer insufficient balance message"
+        );
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
     /// Reply to a tweet with account creation success message
     pub async fn reply_account_created(
         &self,
@@ -1040,6 +1072,22 @@ impl TwitterClient {
         );
 
         info!(tweet_id = %tweet_id, handle = %handle, "Replying with bet placed message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
+    /// Reply when the user cannot fund a market prediction.
+    pub async fn reply_bet_insufficient_balance(
+        &self,
+        tweet_id: &str,
+        handle: &str,
+        amount_display: &str,
+    ) -> Result<String> {
+        let message = bet_insufficient_balance_message(handle, amount_display);
+        info!(
+            tweet_id = %tweet_id,
+            handle = %handle,
+            "Replying with bet insufficient balance message"
+        );
         self.reply_to_tweet(tweet_id, &message).await
     }
 
@@ -1725,6 +1773,28 @@ mod tests {
             "@Z3ro_0102 — your @DugongWallet account doesn't have enough balance for this reward campaign.\n\n\
             This campaign needs 15 DUG total (5 DUG each × 3 winners).\n\n\
             Reduce the reward or winner count, or deposit more funds and try again."
+        );
+    }
+
+    #[test]
+    fn transfer_insufficient_balance_message_explains_required_amount() {
+        let message = transfer_insufficient_balance_message("sender", "5 DUG");
+
+        assert_eq!(
+            message,
+            "@sender — your @DugongWallet account doesn't have enough balance to send 5 DUG.\n\n\
+            Reduce the amount or deposit more funds and try again."
+        );
+    }
+
+    #[test]
+    fn bet_insufficient_balance_message_explains_required_stake() {
+        let message = bet_insufficient_balance_message("predictor", "2.5 USDC");
+
+        assert_eq!(
+            message,
+            "@predictor — your @DugongWallet account doesn't have enough balance to place a 2.5 USDC prediction.\n\n\
+            Reduce the amount or deposit more funds and try again."
         );
     }
 

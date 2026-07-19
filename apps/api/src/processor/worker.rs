@@ -422,6 +422,8 @@ impl ProcessorWorker {
         .await
         .context("Failed to initialize Sui transaction builder")?;
 
+        let amount_display = format_amount_display(data.amount, &data.coin_type);
+
         // Submit transaction with enclave signature
         let digest = match tx_builder
             .submit_transfer(
@@ -440,7 +442,18 @@ impl ProcessorWorker {
                 WebhookEvent::set_failed(&self.state.db, event_id, &e.to_string())
                     .await
                     .context("Failed to set event to failed")?;
-                if let Err(reply_err) = self.twitter.reply_error(tweet_id, &e.to_string()).await {
+                let reply_result = if is_insufficient_balance_error(&e) {
+                    self.twitter
+                        .reply_transfer_insufficient_balance(
+                            tweet_id,
+                            &data.from_handle,
+                            &amount_display,
+                        )
+                        .await
+                } else {
+                    self.twitter.reply_error(tweet_id, &e.to_string()).await
+                };
+                if let Err(reply_err) = reply_result {
                     warn!(error = %reply_err, "Failed to reply with transfer error");
                 }
                 return Err(e).context("Failed to submit transfer transaction");
@@ -655,6 +668,8 @@ impl ProcessorWorker {
         .await
         .context("Failed to initialize Sui transaction builder")?;
 
+        let amount_display = format_amount_display(data.amount, &data.coin_type);
+
         let digest = match tx_builder
             .submit_place_bet(
                 &market.sui_object_id,
@@ -673,7 +688,18 @@ impl ProcessorWorker {
                 WebhookEvent::set_failed(&self.state.db, event_id, &e.to_string())
                     .await
                     .context("Failed to set event to failed")?;
-                if let Err(re) = self.twitter.reply_error(tweet_id, &e.to_string()).await {
+                let reply_result = if is_insufficient_balance_error(&e) {
+                    self.twitter
+                        .reply_bet_insufficient_balance(
+                            tweet_id,
+                            &data.better_handle,
+                            &amount_display,
+                        )
+                        .await
+                } else {
+                    self.twitter.reply_error(tweet_id, &e.to_string()).await
+                };
+                if let Err(re) = reply_result {
                     warn!(error = %re, "Failed to reply with place_bet error");
                 }
                 return Err(e).context("Failed to submit place_bet transaction");
@@ -683,17 +709,6 @@ impl ProcessorWorker {
         info!(tx_digest = %digest, "place_bet transaction submitted");
 
         // Record bet in DB
-        let decimals: u32 = match data.coin_type.to_uppercase().as_str() {
-            c if c.contains("usdc") => 6,
-            _ => 9,
-        };
-        // Round to 2 decimals for display, then trim trailing zeros.
-        let amount_num = format!("{:.2}", data.amount as f64 / 10_u64.pow(decimals) as f64)
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string();
-        let amount_display = format!("{} {}", amount_num, coin_symbol(&data.coin_type));
-
         if let Err(e) = MarketBet::upsert(
             &self.state.db,
             &data.market_tweet_id,
@@ -1707,7 +1722,7 @@ fn is_insufficient_balance_error(err: &anyhow::Error) -> bool {
 /// Human-readable token amount, e.g. (5_000_000_000, "...::sui::SUI") -> "5 SUI".
 fn format_amount_display(amount: u64, coin_type: &str) -> String {
     let decimals: u32 = match coin_type.to_uppercase().as_str() {
-        c if c.contains("usdc") => 6,
+        c if c.contains("USDC") => 6,
         _ => 9,
     };
     let symbol = coin_symbol(coin_type);
@@ -1840,5 +1855,21 @@ mod tests {
             "MoveAbort(MoveLocation { function_name: Some(\"create_campaign\") }, 3) in command 0"
         );
         assert!(!is_insufficient_balance_error(&unrelated_abort));
+    }
+
+    #[test]
+    fn test_amount_display_uses_coin_decimals_and_symbol() {
+        assert_eq!(
+            format_amount_display(5_000_000_000, "0x123::dug::DUG"),
+            "5 DUG"
+        );
+        assert_eq!(
+            format_amount_display(2_500_000, "0x123::usdc::USDC"),
+            "2.5 USDC"
+        );
+        assert_eq!(
+            format_amount_display(10_000_000, "0x2::sui::SUI"),
+            "0.01 SUI"
+        );
     }
 }
