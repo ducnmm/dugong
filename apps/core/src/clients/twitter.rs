@@ -72,6 +72,20 @@ fn configured_web_url() -> String {
     "http://127.0.0.1:43173".to_string()
 }
 
+fn campaign_insufficient_balance_message(
+    handle: &str,
+    reward_display: &str,
+    max_winners: u64,
+    total_budget_display: &str,
+) -> String {
+    format!(
+        "@{} — your @DugongWallet account doesn't have enough balance for this reward campaign.\n\n\
+        This campaign needs {} total ({} each × {} winners).\n\n\
+        Reduce the reward or winner count, or deposit more funds and try again.",
+        handle, total_budget_display, reward_display, max_winners
+    )
+}
+
 /// A candidate winner discovered for a reward campaign (a reply author or hashtag tweeter).
 #[derive(Debug, Clone)]
 pub struct RewardCampaignCandidate {
@@ -1126,6 +1140,25 @@ impl TwitterClient {
         self.reply_to_tweet(tweet_id, &message).await
     }
 
+    /// Reply when the creator cannot fund the campaign's full reward budget.
+    pub async fn reply_campaign_insufficient_balance(
+        &self,
+        tweet_id: &str,
+        handle: &str,
+        reward_display: &str,
+        max_winners: u64,
+        total_budget_display: &str,
+    ) -> Result<String> {
+        let message = campaign_insufficient_balance_message(
+            handle,
+            reward_display,
+            max_winners,
+            total_budget_display,
+        );
+        info!(tweet_id = %tweet_id, handle = %handle, "Replying with campaign insufficient balance message");
+        self.reply_to_tweet(tweet_id, &message).await
+    }
+
     /// Reply with reward campaign resolution summary
     pub async fn reply_campaign_resolved(
         &self,
@@ -1682,6 +1715,18 @@ mod tests {
     use super::*;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn campaign_insufficient_balance_message_explains_required_budget() {
+        let message = campaign_insufficient_balance_message("Z3ro_0102", "5 DUG", 3, "15 DUG");
+
+        assert_eq!(
+            message,
+            "@Z3ro_0102 — your @DugongWallet account doesn't have enough balance for this reward campaign.\n\n\
+            This campaign needs 15 DUG total (5 DUG each × 3 winners).\n\n\
+            Reduce the reward or winner count, or deposit more funds and try again."
+        );
+    }
 
     #[tokio::test]
     async fn create_reply_tweet_posts_and_parses_id() {
