@@ -990,6 +990,10 @@ impl ProcessorWorker {
         .await
         .context("Failed to initialize Sui transaction builder")?;
 
+        let reward_display = format_amount_display(data.reward_amount, &data.coin_type);
+        let total_budget = data.reward_amount.saturating_mul(data.max_winners);
+        let total_budget_display = format_amount_display(total_budget, &data.coin_type);
+
         let digest = match tx_builder
             .submit_create_reward_campaign(
                 &creator_account.sui_object_id,
@@ -1009,7 +1013,20 @@ impl ProcessorWorker {
                 WebhookEvent::set_failed(&self.state.db, event_id, &e.to_string())
                     .await
                     .context("Failed to set event to failed")?;
-                if let Err(re) = self.twitter.reply_error(tweet_id, &e.to_string()).await {
+                let reply_result = if is_insufficient_balance_error(&e) {
+                    self.twitter
+                        .reply_campaign_insufficient_balance(
+                            tweet_id,
+                            &data.creator_handle,
+                            &reward_display,
+                            data.max_winners,
+                            &total_budget_display,
+                        )
+                        .await
+                } else {
+                    self.twitter.reply_error(tweet_id, &e.to_string()).await
+                };
+                if let Err(re) = reply_result {
                     warn!(error = %re, "Failed to reply with error for create_campaign");
                 }
                 return Err(e).context("Failed to submit create_campaign transaction");
@@ -1022,7 +1039,6 @@ impl ProcessorWorker {
             .await
             .context("Failed to set event to replying")?;
 
-        let reward_display = format_amount_display(data.reward_amount, &data.coin_type);
         if let Err(e) = self
             .twitter
             .reply_campaign_created(tweet_id, &reward_display, data.max_winners, &digest)
@@ -1666,6 +1682,28 @@ fn is_xid_already_exists_error(err: &anyhow::Error) -> bool {
         && (message.contains("}, 0) in command") || message.contains(", 0) in command"))
 }
 
+fn is_insufficient_balance_error(err: &anyhow::Error) -> bool {
+    let message = format!("{:#}", err);
+    let lower = message.to_lowercase();
+    if lower.contains("insufficient balance") {
+        return true;
+    }
+
+    if !message.contains("MoveAbort") {
+        return false;
+    }
+
+    let compact: String = message
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect();
+
+    message.contains("account_debit_balance")
+        || compact.contains(",5)")
+        || compact.contains("\"abortCode\":5")
+        || compact.contains("\"abort_code\":5")
+}
+
 /// Human-readable token amount, e.g. (5_000_000_000, "...::sui::SUI") -> "5 SUI".
 fn format_amount_display(amount: u64, coin_type: &str) -> String {
     let decimals: u32 = match coin_type.to_uppercase().as_str() {
@@ -1782,5 +1820,25 @@ mod tests {
         assert!(!is_unsupported_tweet_command_error(
             "Failed to submit transfer transaction"
         ));
+    }
+
+    #[test]
+    fn test_insufficient_balance_error_matcher() {
+        let move_abort = anyhow!(
+            "Enoki API error: MoveAbort(MoveLocation {{ function_name: Some(\"account_debit_balance\") }}, 5) in command 0"
+        );
+        assert!(is_insufficient_balance_error(&move_abort));
+
+        let structured_abort = anyhow!(
+            "{}",
+            r#"Enoki API error: {"error":"MoveAbort","abortCode":5}"#
+        );
+        assert!(is_insufficient_balance_error(&structured_abort));
+
+        let unrelated_abort = anyhow!(
+            "{}",
+            "MoveAbort(MoveLocation { function_name: Some(\"create_campaign\") }, 3) in command 0"
+        );
+        assert!(!is_insufficient_balance_error(&unrelated_abort));
     }
 }
