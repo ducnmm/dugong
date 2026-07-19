@@ -8,6 +8,14 @@ const config = {
   allowedDevOrigins: ["127.0.0.1"],
   images: {
     unoptimized: true
+  },
+  async rewrites() {
+    return [
+      {
+        source: "/slides/dugong",
+        destination: "/slides/dugong.html"
+      }
+    ];
   }
 };
 

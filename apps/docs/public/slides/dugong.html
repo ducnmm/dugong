@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dugong — Crypto in one tweet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;700;800;900&family=Unbounded:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --ink:#0a0a0a; --black:#000; --paper:#fff; --muted:#4b5563;
+    --cyan:#a6faff; --cyan2:#79f7ff; --lime:#b8ff9f; --lime2:#c6fab4;
+    --yellow:#fff59f; --yellow2:#fff066; --violet:#a8a6ff; --red:#ff9f9f; --orange:#ffc29f;
+    --ocean:#21a7df;
+    --shadow-sm: 3px 4px 0 var(--black);
+    --shadow-lg: 10px 12px 0 var(--black);
+    --head:"Big Shoulders Display","Unbounded",system-ui,sans-serif;
+    --body:"Unbounded",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{ font-family:var(--body); color:var(--ink); overflow:hidden; background:var(--ocean); -webkit-font-smoothing:antialiased; }
+
+  /* Real project background */
+  .bg{
+    position:fixed; inset:0; z-index:0;
+    background:var(--ocean) url("./assets/dugong-home-background-new.png") center bottom / cover no-repeat;
+  }
+
+  /* Deck */
+  .deck{position:fixed;inset:0;z-index:1;display:flex;align-items:center;justify-content:center;padding:clamp(12px,3vw,40px)}
+  .slide{
+    position:absolute; width:min(1180px,94vw); height:min(680px,88vh);
+    background:var(--paper); border:4px solid var(--black); border-radius:24px;
+    box-shadow:var(--shadow-lg);
+    padding:clamp(28px,4.6vw,72px);
+    display:none; flex-direction:column; justify-content:center; gap:22px;
+  }
+  .slide.active{display:flex; animation:pop .4s ease both}
+  @keyframes pop{from{opacity:0;transform:translateY(14px) scale(.99)}to{opacity:1;transform:none}}
+
+  /* Typography */
+  .chip{display:inline-block;padding:7px 16px;border:2px solid var(--black);border-radius:999px;
+    box-shadow:var(--shadow-sm);font-weight:800;font-size:clamp(11px,1.1vw,14px);text-transform:uppercase;letter-spacing:.06em}
+  .chip.cyan{background:var(--cyan)} .chip.lime{background:var(--lime)} .chip.yellow{background:var(--yellow)}
+  .chip.violet{background:var(--violet)} .chip.red{background:var(--red)} .chip.orange{background:var(--orange)}
+  h1{font-family:var(--head);font-weight:900;line-height:.9;font-size:clamp(48px,8.4vw,128px);letter-spacing:-.01em}
+  h2{font-family:var(--head);font-weight:900;line-height:.94;font-size:clamp(36px,5.6vw,76px)}
+  h3{font-family:var(--head);font-weight:800;font-size:clamp(20px,2.4vw,32px)}
+  p,li{font-size:clamp(15px,1.6vw,22px);line-height:1.45;font-weight:500}
+  .lead{font-size:clamp(18px,2.1vw,30px);font-weight:600;color:#1a1a1a}
+  .muted{color:var(--muted)}
+  .hl{background:var(--yellow);padding:0 .25em;border-radius:4px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+  .hl.nowrap{white-space:nowrap}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:600}
+
+  /* Layout */
+  .row{display:flex;gap:clamp(14px,2vw,28px);flex-wrap:wrap}
+  .cols-2{display:grid;grid-template-columns:1fr 1fr;gap:clamp(20px,2.6vw,38px);align-items:center}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(14px,1.8vw,22px)}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:clamp(14px,1.8vw,22px)}
+  .card{background:var(--paper);border:3px solid var(--black);border-radius:14px;box-shadow:var(--shadow-sm);
+    padding:clamp(18px,2.2vw,28px);display:flex;flex-direction:column;gap:8px;justify-content:center}
+  .card.cyan{background:var(--cyan)} .card.lime{background:var(--lime)} .card.yellow{background:var(--yellow)}
+  .card.violet{background:var(--violet)} .card.red{background:var(--red)} .card.orange{background:var(--orange)} .card.paper{background:#fff}
+  .card .big{font-family:var(--head);font-weight:900;font-size:clamp(30px,4vw,56px);line-height:1}
+  ul.clean{list-style:none;display:flex;flex-direction:column;gap:16px}
+  ul.clean li{display:flex;gap:14px;align-items:center;font-weight:600}
+  ul.clean li::before{content:"";flex:0 0 auto;width:16px;height:16px;background:var(--cyan);border:2px solid var(--black);border-radius:5px}
+  ul.red li::before{background:var(--red)} ul.lime li::before{background:var(--lime)}
+
+  /* tweet mock */
+  .tweet{background:#fff;border:3px solid var(--black);border-radius:16px;box-shadow:var(--shadow-sm);padding:18px 20px;display:flex;flex-direction:column;gap:10px}
+  .tweet .head{display:flex;align-items:center;gap:10px}
+  .tweet .av{width:42px;height:42px;border-radius:50%;border:2px solid var(--black);background:var(--violet);display:flex;align-items:center;justify-content:center;font-weight:900;font-family:var(--head)}
+  .tweet .name{font-weight:800;font-size:15px;line-height:1}
+  .tweet .handle{color:var(--muted);font-size:13px;font-weight:600}
+  .tweet .body{font-size:clamp(15px,1.6vw,21px);font-weight:700}
+  .tweet .reply{border-top:2px dashed #cbd5e1;padding-top:10px;font-size:14px;font-weight:600}
+  .at{color:#0c7bb3;font-weight:800}
+
+  .step .n{flex:0 0 auto;width:38px;height:38px;border-radius:50%;border:3px solid var(--black);background:var(--yellow);
+    display:flex;align-items:center;justify-content:center;font-family:var(--head);font-weight:900;box-shadow:var(--shadow-sm)}
+  .step{display:flex;align-items:center;gap:12px;font-family:var(--head);font-weight:800;font-size:clamp(17px,1.9vw,24px)}
+
+  /* architecture map */
+  .slide.architecture-only{padding:clamp(22px,3.2vw,48px)}
+  .system-map{position:relative;width:100%;height:100%;min-height:0}
+  .map-lines{position:absolute;inset:0;width:100%;height:100%;z-index:3;overflow:visible;pointer-events:none}
+  .map-lines .flow{fill:none;stroke:var(--black);stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrowhead)}
+  .map-lines .setup{stroke:#0c7bb3;stroke-dasharray:8 7;marker-end:url(#arrowhead-blue)}
+  .map-lines .verify{stroke:#6658c9;stroke-dasharray:8 7;marker-end:url(#arrowhead-purple)}
+  .map-lines .edge-number{fill:var(--yellow);stroke:var(--black);stroke-width:2.5}
+  .map-lines .edge-number.setup-n{fill:var(--cyan)}
+  .map-lines .edge-number.verify-n{fill:var(--violet)}
+  .map-lines .edge-n{font-family:var(--head);font-size:17px;font-weight:900;text-anchor:middle;dominant-baseline:central}
+  .sys-node{position:absolute;z-index:2;border:3px solid var(--black);border-radius:14px;box-shadow:var(--shadow-sm);padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+  .sys-node .kicker{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;opacity:.65}
+  .sys-node h3{font-size:clamp(19px,2vw,27px);line-height:1}
+  .sys-node p{font-size:clamp(11px,1vw,14px);line-height:1.35;font-weight:650}
+  .node-admin{left:2%;top:4%;width:20%;background:var(--cyan)}
+  .node-code{left:2%;top:29%;width:20%;background:var(--orange)}
+  .node-user{left:2%;top:68%;width:20%;background:var(--violet)}
+  .node-pcr{left:26%;top:3%;width:18%;background:#fff;padding:10px 12px}
+  .node-pcr .kicker{font-size:9px}
+  .node-pcr h3{font-size:clamp(15px,1.5vw,21px)}
+  .node-pcr p{font-size:clamp(10px,.85vw,12px);line-height:1.25}
+  .node-enclave{left:34%;top:24%;width:27%;background:var(--yellow)}
+  .node-api{left:34%;top:57%;width:27%;background:#fff}
+  .sui-zone{position:absolute;z-index:2;left:72%;top:4%;width:26%;height:auto;border:4px solid var(--black);border-radius:18px;box-shadow:var(--shadow-sm);background:#fffdf4;padding:14px;display:flex;flex-direction:column;gap:12px}
+  .sui-zone>h3{font-size:clamp(20px,2.2vw,30px);line-height:1;text-align:center}
+  .chain-block{border:3px solid var(--black);border-radius:12px;padding:14px 13px;display:flex;flex-direction:column;gap:6px}
+  .chain-block.registry{background:var(--lime)} .chain-block.contract{background:var(--cyan)}
+  .chain-block .kicker{font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;opacity:.65}
+  .chain-block h3{font-size:clamp(17px,1.7vw,23px);line-height:1}
+  .chain-block p{font-size:clamp(10px,.9vw,13px);line-height:1.3;font-weight:650}
+  .registry-link{z-index:3;align-self:center;margin:0;background:var(--yellow);border:2px solid var(--black);border-radius:999px;padding:3px 10px;font-size:9px;font-weight:800;line-height:1;white-space:nowrap;box-shadow:1px 2px 0 var(--black)}
+
+  /* chrome */
+  .counter{position:fixed;top:18px;right:22px;z-index:3;background:#fff;border:3px solid var(--black);border-radius:999px;
+    box-shadow:var(--shadow-sm);padding:6px 14px;font-weight:800;font-size:14px}
+  .dots{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:3;display:flex;gap:8px}
+  .dots button{width:13px;height:13px;border-radius:50%;border:2px solid var(--black);background:#fff;box-shadow:1px 2px 0 var(--black);cursor:pointer;padding:0}
+  .dots button.on{background:var(--yellow)}
+  .nav{position:fixed;bottom:14px;right:22px;z-index:3;display:flex;gap:8px}
+  .nav button{font-family:var(--head);font-weight:900;font-size:18px;width:46px;height:46px;border:3px solid var(--black);border-radius:50%;
+    background:var(--cyan);box-shadow:var(--shadow-sm);cursor:pointer;transition:transform .12s,box-shadow .12s}
+  .nav button:hover{transform:translate(-1px,-1px);box-shadow:4px 5px 0 var(--black);background:var(--cyan2)}
+  .hint{position:fixed;bottom:16px;left:22px;z-index:3;color:#fff;font-size:12px;font-weight:700;opacity:.9;text-shadow:1px 1px 0 rgba(0,0,0,.35)}
+
+  @media (max-width:720px){ .cols-2,.grid-3{grid-template-columns:1fr} }
+
+  @media print{
+    @page{size:1280px 720px;margin:0}
+    body{overflow:visible}
+    .bg{position:absolute;height:100%}
+    .counter,.dots,.nav,.hint{display:none!important}
+    .deck{position:static;display:block;padding:0}
+    .slide{position:relative;display:flex!important;width:1280px;height:720px;page-break-after:always;border-radius:0;box-shadow:none;border-width:0;margin:0}
+  }
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="counter"><span id="cur">1</span> / <span id="total">10</span></div>
+
+<div class="deck" id="deck">
+
+  <!-- 1. TITLE -->
+  <section class="slide">
+    <span class="chip cyan">Sui · Built on X</span>
+    <h1 style="margin-top:16px">Crypto in<br>one <span style="color:#0c7bb3">tweet</span>.</h1>
+    <p class="lead" style="max-width:620px;margin-top:20px">Your X account <em>is</em> a Sui wallet.</p>
+    <div class="row" style="margin-top:24px">
+      <span class="chip yellow">No app</span>
+      <span class="chip lime">No seed phrase</span>
+      <span class="chip violet">Gas sponsored</span>
+    </div>
+  </section>
+
+  <!-- 2. PROBLEM -->
+  <section class="slide">
+    <span class="chip red">Problem</span>
+    <h2>Crypto onboarding is <span class="hl nowrap">still broken</span>.</h2>
+    <ul class="clean red" style="margin-top:8px">
+      <li>Install a wallet app</li>
+      <li>Back up 12 seed words</li>
+      <li>Buy coins just to pay gas</li>
+      <li>Paste a long <span class="mono">0x…</span> address</li>
+    </ul>
+    <p class="lead" style="margin-top:6px">Billions on social <span class="hl">never make it in.</span></p>
+  </section>
+
+  <!-- 3. SOLUTION -->
+  <section class="slide">
+    <span class="chip lime">Solution</span>
+    <div class="cols-2">
+      <div>
+        <h2>Your X account<br>= a <span style="color:#0c7bb3">Sui wallet</span>.</h2>
+        <p class="lead" style="margin-top:16px">Just do the one thing you already do — <span class="hl">tweet</span>.</p>
+      </div>
+      <div class="grid-2">
+        <div class="card cyan" style="align-items:center;text-align:center"><h3>No app</h3></div>
+        <div class="card lime" style="align-items:center;text-align:center"><h3>No seed phrase</h3></div>
+        <div class="card yellow" style="align-items:center;text-align:center"><h3>No gas</h3></div>
+        <div class="card violet" style="align-items:center;text-align:center"><h3>Instant</h3></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. MAGIC MOMENT -->
+  <section class="slide">
+    <span class="chip yellow">The magic moment</span>
+    <div class="cols-2">
+      <div>
+        <h2>Send money<br>in one tweet.</h2>
+        <ul class="clean lime" style="margin-top:18px">
+          <li>Tweet, post — done</li>
+          <li>On-chain on Sui</li>
+          <li>New recipient? Wallet auto-created</li>
+        </ul>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="tweet">
+          <div class="head"><div class="av">M</div><div><div class="name">Minh</div><div class="handle">@minh</div></div></div>
+          <div class="body"><span class="at">@DugongWallet</span> send 10 DUG to <span class="at">@lan</span></div>
+          <div class="reply">↳ <span class="at">@DugongWallet</span>: Sent <b>10 DUG</b> · <span class="muted">Confirmed on Sui</span></div>
+        </div>
+        <div class="card cyan"><div class="big">+10 DUG</div><div class="muted" style="font-weight:700">@lan received — wallet auto-created</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. FEATURES -->
+  <section class="slide">
+    <span class="chip violet">More than payments</span>
+    <h2>A full wallet, <span class="hl">inside X</span>.</h2>
+    <div class="grid-3" style="margin-top:8px">
+      <div class="card cyan"><h3>Send coins</h3><p class="mono">send 10 DUG to @lan</p><p class="muted">DUG · SUI · WAL · USDC</p></div>
+      <div class="card yellow"><h3>Prediction markets</h3><p class="mono">create market: …</p><p class="muted">Winners paid automatically</p></div>
+      <div class="card lime"><h3>Reward campaigns</h3><p class="mono">reward top 3 replies</p><p class="muted">Pay your community</p></div>
+    </div>
+    <div class="card paper" style="margin-top:4px"><h3>Dashboard</h3><p class="muted" style="font-weight:600">Log in with X — balances, history, every action verifiable on Sui.</p></div>
+  </section>
+
+  <!-- 6. HOW IT WORKS / TRUST -->
+  <section class="slide">
+    <span class="chip orange">Under the hood</span>
+    <h2>Secure & verifiable <span class="hl">on Sui</span>.</h2>
+    <div class="row" style="margin:12px 0 6px;align-items:stretch">
+      <div class="card cyan" style="flex:1;min-width:160px"><div class="step"><span class="n">1</span>Tweet</div><p class="muted">Your command, in plain language.</p></div>
+      <div class="card yellow" style="flex:1;min-width:160px"><div class="step"><span class="n">2</span>Enclave</div><p class="muted">Signed in a secure TEE, attested on Sui.</p></div>
+      <div class="card lime" style="flex:1;min-width:160px"><div class="step"><span class="n">3</span>Contract</div><p class="muted">Only enclave-signed calls pass. Funds in escrow.</p></div>
+      <div class="card violet" style="flex:1;min-width:160px"><div class="step"><span class="n">4</span>Done</div><p class="muted">Dashboard updates. Gas paid by Enoki.</p></div>
+    </div>
+    <p class="lead" style="margin-top:8px"><span class="hl">Even we can't forge</span> your transactions.</p>
+  </section>
+
+  <!-- 7. ARCHITECTURE MAP -->
+  <section class="slide architecture-only">
+    <div class="system-map">
+      <svg class="map-lines" viewBox="0 0 1000 500" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <marker id="arrowhead" markerWidth="14" markerHeight="12" refX="12" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L14,6 L0,12 Z" fill="#000" />
+          </marker>
+          <marker id="arrowhead-blue" markerWidth="14" markerHeight="12" refX="12" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L14,6 L0,12 Z" fill="#0c7bb3" />
+          </marker>
+          <marker id="arrowhead-purple" markerWidth="14" markerHeight="12" refX="12" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L14,6 L0,12 Z" fill="#6658c9" />
+          </marker>
+        </defs>
+
+        <!-- Developer setup: publish, register PCRs, deploy, register attestation/key. -->
+        <path class="flow setup" d="M120 105 L120 145" />
+
+        <path class="flow setup" d="M220 60 L260 47" />
+        <path class="flow setup" d="M440 47 L690 47 L690 100 L735 100" />
+        <circle class="edge-number setup-n" cx="690" cy="47" r="11" /><text class="edge-n" x="690" y="48">2</text>
+
+        <path class="flow setup" d="M220 100 L300 100 L300 165 L340 165" />
+        <circle class="edge-number setup-n" cx="300" cy="135" r="11" /><text class="edge-n" x="300" y="136">3</text>
+
+        <path class="flow setup" d="M610 155 L675 155 L675 180 L735 180" />
+        <circle class="edge-number setup-n" cx="675" cy="167" r="11" /><text class="edge-n" x="675" y="168">4</text>
+
+        <!-- Runtime: request, enclave response, on-chain verification, receipt. -->
+        <path class="flow" d="M220 370 L290 370 L290 340 L340 340" />
+        <circle class="edge-number" cx="290" cy="355" r="11" /><text class="edge-n" x="290" y="356">5</text>
+
+        <path class="flow" d="M470 285 L470 225" />
+        <circle class="edge-number" cx="470" cy="255" r="11" /><text class="edge-n" x="470" y="256">6</text>
+
+        <path class="flow" d="M610 205 C650 205 650 340 610 340" />
+        <circle class="edge-number" cx="642" cy="272" r="11" /><text class="edge-n" x="642" y="273">7</text>
+
+        <path class="flow" d="M610 360 L680 360 L680 300 L735 300" />
+        <circle class="edge-number" cx="680" cy="330" r="11" /><text class="edge-n" x="680" y="331">8</text>
+
+        <path class="flow" d="M735 330 L700 330 L700 480 L280 480 L280 450 L220 450" />
+        <circle class="edge-number" cx="520" cy="480" r="11" /><text class="edge-n" x="520" y="481">9</text>
+
+        <!-- Optional independent verification: rebuild GitHub source and compare PCRs. -->
+        <path class="flow verify" d="M220 410 L250 410 L250 190 L220 190" />
+        <circle class="edge-number verify-n" cx="250" cy="300" r="10" /><text class="edge-n" x="250" y="301">✓</text>
+      </svg>
+
+      <div class="sys-node node-admin">
+        <span class="kicker">1 · Developer setup</span>
+        <h3>DApp Admin</h3>
+        <p>Build · deploy · register</p>
+      </div>
+      <div class="sys-node node-pcr">
+        <span class="kicker">2 · On-chain config</span>
+        <h3>Expected PCRs</h3>
+        <p>PCR0 · PCR1 · PCR2</p>
+      </div>
+      <div class="sys-node node-code">
+        <span class="kicker">1 · Reproducible build</span>
+        <h3>GitHub / Source</h3>
+        <p>Anyone can rebuild the enclave code and derive the same PCRs.</p>
+      </div>
+      <div class="sys-node node-api">
+        <span class="kicker">Relay layer</span>
+        <h3>Dugong Backend</h3>
+        <p>Webhook · rate limit · deduplicate · relay</p>
+      </div>
+      <div class="sys-node node-enclave">
+        <span class="kicker">AWS Nitro TEE</span>
+        <h3>Nautilus Enclave</h3>
+        <p>Verify tweet · parse intent · return signed response</p>
+      </div>
+      <div class="sys-node node-user">
+        <span class="kicker">Runtime client</span>
+        <h3>User / X</h3>
+        <p>Tweet command · optional PCR check · confirmed result</p>
+      </div>
+
+      <div class="sui-zone">
+        <h3>Sui Blockchain</h3>
+        <div class="chain-block registry">
+          <span class="kicker">Setup verification</span>
+          <h3>Enclave Registry</h3>
+          <p>Expected PCRs · verify attestation · store enclave public key</p>
+        </div>
+        <span class="registry-link">registered key ↓</span>
+        <div class="chain-block contract">
+          <span class="kicker">Runtime verification</span>
+          <h3>Dugong Move</h3>
+          <p>Verify signed response · execute transfer / escrow logic</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. WHY X -->
+  <section class="slide">
+    <span class="chip cyan">Why X</span>
+    <div class="cols-2">
+      <div>
+        <h2>Distribution for <span style="color:#0c7bb3">hundreds of millions</span>.</h2>
+        <p class="lead" style="margin-top:16px">Wallets are hard because they pull users away.<br>Dugong <span class="hl">brings the wallet to them</span>.</p>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="card yellow" style="flex-direction:row;align-items:center;gap:18px"><span class="big">0</span><h3>setup steps</h3></div>
+        <div class="card cyan" style="flex-direction:row;align-items:center;gap:18px"><span class="big">1</span><h3>tweet per action</h3></div>
+        <div class="card lime" style="flex-direction:row;align-items:center;gap:18px"><span class="big">∞</span><h3>built-in virality</h3></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9. TECH -->
+  <section class="slide">
+    <span class="chip lime">Tech</span>
+    <h2>Built on <span class="hl">Sui</span>.</h2>
+    <div class="grid-2" style="margin-top:8px">
+      <div class="card cyan"><h3>Sui Move</h3><p>Accounts, transfers, markets & rewards.</p></div>
+      <div class="card yellow"><h3>Nautilus Enclave</h3><p>Signs in a TEE, attested on-chain.</p></div>
+      <div class="card lime"><h3>Enoki</h3><p>Sponsored gas — no SUI needed.</p></div>
+      <div class="card violet"><h3>Rust + React</h3><p>Rust API & indexer, React dashboard.</p></div>
+    </div>
+  </section>
+
+  <!-- 10. CTA -->
+  <section class="slide" style="align-items:center;text-align:center">
+    <span class="chip yellow">Try it today</span>
+    <h1 style="margin:10px 0">Your next tweet,<br>your first <span style="color:#0c7bb3">transaction</span>.</h1>
+    <div class="tweet" style="max-width:500px;width:100%;text-align:left;margin-top:8px">
+      <div class="head"><div class="av">Y</div><div><div class="name">You</div><div class="handle">@you</div></div></div>
+      <div class="body"><span class="at">@DugongWallet</span> create account</div>
+    </div>
+  </section>
+
+</div>
+
+<div class="dots" id="dots"></div>
+<div class="hint">← → / Space to navigate · F fullscreen · P print PDF</div>
+<div class="nav">
+  <button id="prev" aria-label="Previous">←</button>
+  <button id="next" aria-label="Next">→</button>
+</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const dots=document.getElementById('dots');
+  const cur=document.getElementById('cur'), total=document.getElementById('total');
+  total.textContent=slides.length;
+  let i=0;
+  slides.forEach((_,n)=>{const d=document.createElement('button');d.onclick=()=>go(n);dots.appendChild(d);});
+  const dotEls=[...dots.children];
+  function go(n){i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    dotEls.forEach((d,k)=>d.classList.toggle('on',k===i));
+    cur.textContent=i+1;}
+  function next(){go(i+1)} function prev(){go(i-1)}
+  document.getElementById('next').onclick=next;
+  document.getElementById('prev').onclick=prev;
+  addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();next();}
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();prev();}
+    else if(e.key==='Home'){go(0)} else if(e.key==='End'){go(slides.length-1)}
+    else if(e.key==='f'||e.key==='F'){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();}
+    else if(e.key==='p'||e.key==='P'){window.print();}
+  });
+  let x0=null;
+  addEventListener('touchstart',e=>x0=e.touches[0].clientX,{passive:true});
+  addEventListener('touchend',e=>{if(x0===null)return;const dx=e.changedTouches[0].clientX-x0;
+    if(Math.abs(dx)>50){dx<0?next():prev();}x0=null;},{passive:true});
+  go(0);
+</script>
+</body>
+</html>
