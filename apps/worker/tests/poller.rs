@@ -1,8 +1,11 @@
 //! Tests for the pure tweet→webhook conversion used by the poller.
 
 use dugong_worker::backend_client::{TweetCreateEvent, WebhookUser};
-use dugong_worker::poller::{select_events_for_poll, split_events_for_poll, tweets_to_events};
+use dugong_worker::poller::{
+    select_events_for_poll, split_events_for_poll, take_events_from_queue, tweets_to_events,
+};
 use dugong_worker::twitter_client::{TweetData, TwitterUser};
+use std::collections::VecDeque;
 
 fn tweet(id: &str, author_id: &str, text: &str) -> TweetData {
     TweetData {
@@ -60,19 +63,36 @@ fn event(id: &str) -> TweetCreateEvent {
 }
 
 #[test]
-fn select_events_for_poll_keeps_only_oldest_tweet() {
-    let selected = select_events_for_poll(vec![event("300"), event("100"), event("200")]);
+fn select_events_for_poll_keeps_configured_oldest_tweets() {
+    let selected = select_events_for_poll(vec![event("300"), event("100"), event("200")], 2);
 
-    assert_eq!(selected.len(), 1);
+    assert_eq!(selected.len(), 2);
     assert_eq!(selected[0].id_str, "100");
+    assert_eq!(selected[1].id_str, "200");
 }
 
 #[test]
 fn split_events_for_poll_queues_remaining_tweets_in_order() {
-    let (selected, queued) = split_events_for_poll(vec![event("300"), event("100"), event("200")]);
+    let (selected, queued) =
+        split_events_for_poll(vec![event("300"), event("100"), event("200")], 2);
 
-    assert_eq!(selected.len(), 1);
+    assert_eq!(selected.len(), 2);
     assert_eq!(selected[0].id_str, "100");
+    assert_eq!(selected[1].id_str, "200");
     let queued_ids: Vec<_> = queued.into_iter().map(|event| event.id_str).collect();
-    assert_eq!(queued_ids, vec!["200", "300"]);
+    assert_eq!(queued_ids, vec!["300"]);
+}
+
+#[test]
+fn take_events_from_queue_drains_configured_batch_in_order() {
+    let mut queue = VecDeque::from(vec![event("100"), event("200"), event("300")]);
+
+    let selected = take_events_from_queue(&mut queue, 2);
+
+    let selected_ids: Vec<_> = selected.into_iter().map(|event| event.id_str).collect();
+    assert_eq!(selected_ids, vec!["100", "200"]);
+    assert_eq!(
+        queue.front().map(|event| event.id_str.as_str()),
+        Some("300")
+    );
 }
