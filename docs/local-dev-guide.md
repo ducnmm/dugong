@@ -187,7 +187,8 @@ cargo run -p dugong-worker
 ```
 
 Configured via `apps/worker/.env` (`BACKEND_URL`, `POLL_INTERVAL_SECONDS`,
-`TWITTER_MENTION`).
+`MAX_TWEETS_PER_POLL`, `TWITTER_MENTION`). `MAX_TWEETS_PER_POLL` defaults to
+`1` and controls how many matching tweets are sent to the backend per poll.
 
 ## 7. Run the web app
 

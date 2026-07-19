@@ -196,6 +196,7 @@ railway variables --service worker \
   --set 'TWITTERAPI_IO_API_KEY=...' \
   --set 'BACKEND_URL=http://api.railway.internal:${{api.PORT}}' \
   --set 'POLL_INTERVAL_SECONDS=60' \
+  --set 'MAX_TWEETS_PER_POLL=1' \
   --set 'TWITTER_MENTION=@DugongWallet'
 ```
 

@@ -7,8 +7,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-const MAX_TWEETS_PER_POLL: usize = 1;
-
 /// Convert searched tweets into webhook `TweetCreateEvent`s, pairing each
 /// tweet with its author from `users`. Tweets whose author is missing from
 /// `users` are dropped (the backend needs the screen name).
@@ -32,23 +30,35 @@ pub fn tweets_to_events(data: &[TweetData], users: &[TwitterUser]) -> Vec<TweetC
 /// Pick the bounded batch to send for a single poll. We process the oldest
 /// tweet first so a backlog drains across later polls instead of being skipped
 /// by advancing `last_tweet_id` to the newest result immediately.
-pub fn select_events_for_poll(mut events: Vec<TweetCreateEvent>) -> Vec<TweetCreateEvent> {
+pub fn select_events_for_poll(
+    mut events: Vec<TweetCreateEvent>,
+    max_tweets_per_poll: usize,
+) -> Vec<TweetCreateEvent> {
     sort_events_for_poll(&mut events);
-    events.truncate(MAX_TWEETS_PER_POLL);
+    events.truncate(max_tweets_per_poll);
     events
 }
 
 pub fn split_events_for_poll(
     mut events: Vec<TweetCreateEvent>,
+    max_tweets_per_poll: usize,
 ) -> (Vec<TweetCreateEvent>, VecDeque<TweetCreateEvent>) {
     sort_events_for_poll(&mut events);
-    let queued = if events.len() > MAX_TWEETS_PER_POLL {
-        events.split_off(MAX_TWEETS_PER_POLL)
+    let queued = if events.len() > max_tweets_per_poll {
+        events.split_off(max_tweets_per_poll)
     } else {
         Vec::new()
     };
 
     (events, queued.into_iter().collect())
+}
+
+pub fn take_events_from_queue(
+    queue: &mut VecDeque<TweetCreateEvent>,
+    max_tweets_per_poll: usize,
+) -> Vec<TweetCreateEvent> {
+    let batch_size = max_tweets_per_poll.min(queue.len());
+    queue.drain(..batch_size).collect()
 }
 
 fn sort_events_for_poll(events: &mut [TweetCreateEvent]) {
@@ -91,6 +101,7 @@ impl PollerService {
         info!("Mention: {}", self.config.twitter_mention);
         info!("Backend: {}", self.config.backend_url);
         info!("Poll Interval: {}s", self.config.poll_interval_seconds);
+        info!("Max Tweets per Poll: {}", self.config.max_tweets_per_poll);
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         // Check backend health
@@ -113,9 +124,16 @@ impl PollerService {
     }
 
     async fn poll_and_send(&self) -> Result<()> {
-        if let Some(event) = self.pending_events.lock().await.pop_front() {
-            info!("Processing 1 queued tweet from previous poll");
-            let processed_tweet_id = self.send_events_to_backend(vec![event]).await?;
+        let queued_events = {
+            let mut pending_events = self.pending_events.lock().await;
+            take_events_from_queue(&mut pending_events, self.config.max_tweets_per_poll)
+        };
+        if !queued_events.is_empty() {
+            info!(
+                "Processing {} queued tweet(s) from previous poll",
+                queued_events.len()
+            );
+            let processed_tweet_id = self.send_events_to_backend(queued_events).await?;
 
             if let Some(newest_id) = processed_tweet_id {
                 let mut last_id = self.last_tweet_id.lock().await;
@@ -176,11 +194,13 @@ impl PollerService {
             .map(|inc| inc.users.clone())
             .unwrap_or_default();
 
-        // Convert to webhook payload and cap this poll to one tweet. Any
-        // additional matches stay in memory and are drained one-per-poll
+        // Convert to webhook payload and cap this poll to the configured batch
+        // size. Additional matches stay in memory and are drained in batches
         // without making another TwitterAPI.io call.
-        let (events, queued_events) =
-            split_events_for_poll(tweets_to_events(&response.data, &users));
+        let (events, queued_events) = split_events_for_poll(
+            tweets_to_events(&response.data, &users),
+            self.config.max_tweets_per_poll,
+        );
         if !queued_events.is_empty() {
             let queued_count = queued_events.len();
             self.pending_events.lock().await.extend(queued_events);
@@ -188,8 +208,8 @@ impl PollerService {
         }
         let processed_tweet_id = self.send_events_to_backend(events).await?;
 
-        // Update only to the tweet actually sent so remaining results are
-        // picked up one-per-poll. If every result was unusable, fall back to
+        // Update only to the newest tweet actually sent so remaining results
+        // are picked up in later polls. If every result was unusable, fall back to
         // newest_id to avoid looping forever on tweets without author data.
         if let Some(newest_id) = processed_tweet_id.or(fallback_newest_id) {
             let mut last_id = self.last_tweet_id.lock().await;
